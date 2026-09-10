@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ghpr for GitHub
 // @namespace    https://github.com/xiaocang/ghpr-view
-// @version      2.0.13
+// @version      2.0.14
 // @description  Run local ghpr Skills and render their results on GitHub pull requests.
 // @match        https://github.com/*/*/pull/*
 // @match        https://github.com/*/*/actions/runs/*
@@ -2799,7 +2799,7 @@
   const CLIENT = {
     id: "dev.ghpr.official-userscript",
     name: "ghpr for GitHub",
-    version: "2.0.13",
+    version: "2.0.14",
     requested_scopes: [
       "pr:read",
       "ci:read",
@@ -2881,7 +2881,11 @@
     return null;
   }
 
-  function createGMAdapter(source = global.GM || {}) {
+  // `global.GM` finds Tampermonkey/Violentmonkey, which attach GM to the real
+  // global object. Userscript sandboxes that instead pass GM as a closure
+  // parameter (no global property) still resolve the bare identifier via
+  // lexical scope, so try that first; `typeof` never throws when GM is absent.
+  function createGMAdapter(source = (typeof GM !== "undefined" ? GM : global.GM) || {}) {
     const legacy = global;
     const getValue = source.getValue || legacy.GM_getValue;
     const setValue = source.setValue || legacy.GM_setValue;
