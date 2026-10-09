@@ -95,8 +95,24 @@ Available `prs` sections are `authored`, `review`, `mentioned`, `direct-mentions
 
 1. Open **Settings → Browser Integration** and confirm that the loopback Browser Bridge is running.
 2. Click **Install Userscript** and install `ghpr for GitHub` in Tampermonkey.
-3. Open a GitHub PR or an Actions job. With **Use GitHub-native surfaces** enabled, `ghpr` renders a Review Summary in Conversation, an independent verdict and CI Insight for each Checks job, the same CI Insight on the matching Actions job, and line-level findings in Files changed. The former Header menu and standalone card remain available only through the rollback toggle.
+3. Open a GitHub PR or an Actions job. With **Use GitHub-native surfaces** enabled, `ghpr` renders agent Reviewers and expandable review details in Conversation's right sidebar, CI Annotations in the main timeline, an independent verdict and CI Insight for each Checks job, the same CI Insight on the matching Actions job, and line-level findings in Files changed. The former Header menu and standalone card remain available only through the rollback toggle.
 4. If the userscript is not paired, choose **Connect ghpr** from the Tampermonkey userscript menu, then review the requested scopes in the native ghpr window. Read-only scopes are selected by default; running Skills, cancelling runs, dismissing findings, writing local ghpr tags, and reading artifacts require explicit approval. Local ghpr tags are stored only by ghpr and never change GitHub labels.
+
+In Conversation, request reviews from the agent rows rather than a second Review PR card. Review details contains finding navigation, copying, and reviewed-revision links; Annotations contains failed-check navigation and CI actions. Other PR Skills are available in the sidebar's **Run Skill** menu, and active review logs appear below Reviewers. Connect and Retry recovery controls remain available when the local app is disconnected or unavailable.
+
+The Checks page always shows a CI summary and failed-check navigation, even before any explanation exists. **Find failed checks** expands native check suites without running a Skill; links from **Failed checks** start that discovery automatically. The summary distinguishes reported failures from jobs currently available for navigation.
+
+For cmux's built-in browser, run the installer from this checkout instead of using Tampermonkey:
+
+```bash
+./install-userscript.sh
+# Optionally reload one existing browser surface after installation:
+./install-userscript.sh --surface surface:12
+```
+
+Requires a running cmux app with userscript RPC support, plus `cmux`, `node`, and `jq` on `PATH`.
+The script rebuilds `browser/ghpr.user.js` and installs it with the stable ID `ghpr-for-github`, replacing any previous installation under that ID.
+Without `--surface`, open pages are left untouched; reload or navigate a GitHub tab to activate the update.
 
 The bridge listens only on `127.0.0.1` within discovery ports `48120...48129`. Browser clients use individual revocable bearer capabilities—never cookies—and cannot obtain the GitHub token, local workspace paths, agent credentials, raw repository access, or shell execution. Third-party userscripts register declarative UI contributions through the bridge; the official userscript remains the only GitHub-page UI host.
 

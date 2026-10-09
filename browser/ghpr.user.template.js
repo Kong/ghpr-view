@@ -464,11 +464,6 @@
         "[data-testid='checks-summary']",
         "#partial-pull-merging"
       ],
-      "checks.summary.actions": [
-        "[data-testid='checks-summary']",
-        "#checks_tab .Box-header",
-        ".checks-listing"
-      ],
       "checks.run.trailing": [
         "[data-testid='check-run-row']",
         ".js-check-run",
@@ -783,6 +778,7 @@
       this.checksInsightHost = null;
       this.selectedChecksJobKey = null;
       this.pendingChecksExpansionV2 = false;
+      this.checksDiscoveryV2 = null;
       this.filesFindingPanelMount = null;
       this.selectedFilesFindingID = null;
       this.selectedFileFindingID = null;
@@ -791,6 +787,13 @@
       this.reviewLogExpandedV2 = false;
       this.reviewStepExpandedV2 = new Map();
       this.pendingSubjectRuns = new Set();
+      this.reviewSummaryStateV2 = {
+        pageKey: null,
+        annotationsOpen: true,
+        expandedAnnotationKeys: new Set(),
+        selectedRunID: null,
+        reviewOpen: false
+      };
       this.pendingExplainCIV2 = false;
       this.operationCardSurfaceV2 = null;
       this.operationCardCollapsedV2 = false;
@@ -1409,30 +1412,34 @@
           this.renderOperationCardV2(SR, { connected, unavailable });
         }
       };
-      let host = this.document.getElementById(OPERATION_CARD_ID);
-      if (!host) {
-        host = createElement(this.document, "div", {
-          id: OPERATION_CARD_ID,
-          attributes: { [MANAGED_ATTRIBUTE]: "" }
-        });
-      }
-      host.className = [
-        "ghpr-operation-card-host",
-        mount.inSidebar
-          ? "discussion-sidebar-item ghpr-operation-card-sidebar"
-          : "ghpr-operation-card-floating",
-        filesChangedCard ? "ghpr-operation-card-files" : "",
-        cardFrame.collapsed ? "ghpr-operation-card-collapsed" : ""
-      ].filter(Boolean).join(" ");
-      if (mount.before) {
-        if (host.parentElement !== mount.host || host.nextElementSibling !== mount.before) {
-          mount.host.insertBefore(host, mount.before);
+      const operationHost = () => {
+        let host = this.document.getElementById(OPERATION_CARD_ID);
+        if (!host) {
+          host = createElement(this.document, "div", {
+            id: OPERATION_CARD_ID,
+            attributes: { [MANAGED_ATTRIBUTE]: "" }
+          });
         }
-      } else if (host.parentElement !== mount.host || host.nextElementSibling) {
-        mount.host.append(host);
-      }
+        host.className = [
+          "ghpr-operation-card-host",
+          mount.inSidebar
+            ? "discussion-sidebar-item ghpr-operation-card-sidebar"
+            : "ghpr-operation-card-floating",
+          filesChangedCard ? "ghpr-operation-card-files" : "",
+          cardFrame.collapsed ? "ghpr-operation-card-collapsed" : ""
+        ].filter(Boolean).join(" ");
+        if (mount.before) {
+          if (host.parentElement !== mount.host || host.nextElementSibling !== mount.before) {
+            mount.host.insertBefore(host, mount.before);
+          }
+        } else if (host.parentElement !== mount.host || host.nextElementSibling) {
+          mount.host.append(host);
+        }
+        return host;
+      };
 
       if (unavailable) {
+        const host = operationHost();
         host.replaceChildren(SR.renderOperationCard(this.document, {
           ...cardFrame,
           state: "attention",
@@ -1448,6 +1455,7 @@
       }
 
       if (!connected) {
+        const host = operationHost();
         host.replaceChildren(SR.renderOperationCard(this.document, {
           ...cardFrame,
           state: "attention",
@@ -1514,9 +1522,6 @@
         Number(this.snapshot?.pull_request?.check_failure_count || 0);
       const checksFailing = failedCheckCount > 0;
       const ciExplanationReasons = this.ciExplanationReasonsV2();
-      const fileCount = new Set(
-        findings.map((finding) => finding.file || finding.original_file).filter(Boolean)
-      ).size;
       const repository = this.page.repository;
       const prNumber = this.page.pr_number;
       const revisionRef = filesChangedRevisionRef(this.window.location);
@@ -1567,6 +1572,29 @@
         });
       }
 
+      const skillActions = this.hasScope("skill:run")
+        ? (this.snapshot?.skills || [])
+            .filter((skill) =>
+              skill.is_runnable &&
+              skill.id !== "pr.review" &&
+              (skill.targets || []).some((target) =>
+                target === "pull_request_revision" || target === "pull_request"
+              )
+            )
+            .map((skill) => ({
+              id: `run-skill-${skill.id}`,
+              label: skill.display_name || skill.id,
+              onSelect: () => this.startPullRequestSkillV2(skill.id)
+            }))
+        : [];
+      const progressLog = activeReview ? this.reviewProgressLogModelV2(activeReview) : undefined;
+      if (isConversationSurface(this.window.location)) {
+        this.document.getElementById(OPERATION_CARD_ID)?.remove();
+        return { actions, skillActions, progressLog, progressLabel: agentBackend ? `Coding agent · ${agentBackend}` : undefined };
+      }
+      const fileCount = new Set(
+        findings.map((finding) => finding.file || finding.original_file).filter(Boolean)
+      ).size;
       const summary = revisionRef
         ? `Findings from the reviewed revision ${revisionRef.slice(0, 7)}. The latest revision may have changed these lines.`
         : activeReview
@@ -1598,21 +1626,7 @@
         });
       }
       if (checksFailing) signals.push({ label: "Checks failing", tone: "danger" });
-      const skillActions = this.hasScope("skill:run")
-        ? (this.snapshot?.skills || [])
-            .filter((skill) =>
-              skill.is_runnable &&
-              skill.id !== "pr.review" &&
-              (skill.targets || []).some((target) =>
-                target === "pull_request_revision" || target === "pull_request"
-              )
-            )
-            .map((skill) => ({
-              id: `run-skill-${skill.id}`,
-              label: skill.display_name || skill.id,
-              onSelect: () => this.startPullRequestSkillV2(skill.id)
-            }))
-        : [];
+      const host = operationHost();
 
       host.replaceChildren(SR.renderOperationCard(this.document, {
         state: activeReview
@@ -1628,7 +1642,7 @@
             : "Ready",
         summary,
         signals,
-        progressLog: activeReview ? this.reviewProgressLogModelV2(activeReview) : undefined,
+        progressLog,
         updateAction: this.updateAvailable() && this.bridge.baseURL
           ? {
               id: "update-userscript",
@@ -1825,7 +1839,7 @@
       const SR = global.GhprSurfaceRenderers;
       if (!SR) return;
       SR.installSurfaceStyles(this.document);
-      this.renderOperationCardV2(SR);
+      const conversationActions = this.renderOperationCardV2(SR);
       if (!this.surfaceRegistry) this.surfaceRegistry = new SR.SurfaceRegistry({ document: this.document });
       if (!this.drawerHost) this.drawerHost = new SR.DrawerHost({ document: this.document });
       if (!this.modalHost) this.modalHost = new SR.ModalHost({ document: this.document });
@@ -1845,7 +1859,7 @@
         return content;
       };
 
-      this.renderConversationReviewSummaryV2(SR, mount);
+      this.renderConversationReviewSummaryV2(SR, mount, conversationActions);
       this.document.querySelector("[data-ghpr-files-review-menu]")?.remove();
       this.renderFilesTreeBadgesV2();
       // The diff-line pass resolves ?ghpr_finding= navigation, which may select
@@ -2110,118 +2124,163 @@
       }).catch(() => {});
     }
 
-    renderConversationReviewSummaryV2(SR, mount) {
+    reviewRunsForSummaryV2() {
+      return [...(this.snapshot?.runs || [])]
+        .filter((run) => run.skill_id === "pr.review")
+        .sort((left, right) => {
+          const leftTime = String(left.completed_at || left.started_at || left.created_at || "");
+          const rightTime = String(right.completed_at || right.started_at || right.created_at || "");
+          return rightTime.localeCompare(leftTime) || String(right.id).localeCompare(String(left.id));
+        });
+    }
+
+    reviewFindingRecordsForRunV2(run) {
+      if (!run) return [];
+      const visible = new Map(this.findingsForSurfaceV2().map((finding) => [finding.id, finding]));
+      return (run.result?.code_review?.findings || []).map((payload) => {
+        const anchor = visible.get(payload.id);
+        if (!anchor) return null;
+        return {
+          ...anchor,
+          title: payload.title || anchor.title,
+          body: payload.body || payload.summary || anchor.body,
+          summary: payload.summary || payload.body || anchor.summary,
+          details_text: payload.details || anchor.details_text,
+          details: payload.details || anchor.details,
+          severity: payload.severity || anchor.severity,
+          confidence: payload.confidence ?? anchor.confidence,
+          category: payload.category || anchor.category,
+          quoted_code: payload.quoted_code || anchor.quoted_code,
+          snippet: payload.snippet || anchor.snippet
+        };
+      }).filter(Boolean);
+    }
+
+    reviewSummaryModelForRunV2(run) {
+      if (!run) return null;
+      const findings = this.reviewFindingRecordsForRunV2(run)
+        .map((finding, index) => this.buildReviewFindingModelV2(finding, {
+          expanded: index === 0,
+          openInFiles: true
+        }));
+      const head = run.result?.code_review?.reviewed_head_sha || run.result?.code_review?.head_sha || "";
+      const current = this.snapshot?.current_revision_subject?.head_sha || "";
+      return {
+        meta: `${labelForSkillAgent(run.agent || run.result?.code_review?.engine || "Imported review")} · ${head.slice(0, 7)}${head && current && head.toLowerCase() === current.toLowerCase() ? " · current" : " · outdated"} · ${findings.length} findings`,
+        overview: run.result?.code_review?.overview_markdown || "",
+        findings
+      };
+    }
+
+    renderConversationReviewSummaryV2(SR, mount, conversationActions = {}) {
       if (!isConversationSurface(this.window.location)) return;
-      const anchors = semanticTargets(this.document, "pr.conversation.after-checks");
-      const health = anchors.length === 1 ? "healthy" : anchors.length === 0 ? "missing" : "ambiguous";
+      const sidebar = this.document.querySelectorAll("#partial-discussion-sidebar");
+      const health = sidebar.length === 1 ? "healthy" : sidebar.length === 0 ? "missing" : "ambiguous";
       this.reportSurfaceHealthV2(
         SR.SURFACE_IDS.conversationReviewSummary,
         health,
-        health === "healthy" ? "Conversation timeline anchor found." : `Expected one Conversation timeline anchor; found ${anchors.length}.`
+        health === "healthy" ? "Conversation sidebar found." : `Expected one Conversation sidebar; found ${sidebar.length}.`
       );
-      if (anchors.length !== 1) return;
-      const anchor = anchors[0];
-      const review = this.latestCodeReview();
-      const findings = this.findingsForSurfaceV2();
-      const failedCheckCount =
-        Number(this.snapshot?.pull_request?.check_failure_count || 0);
-      const explainRuns = [...(this.snapshot?.runs || [])]
-        .filter((run) => run.skill_id === "ci.failure.explain")
-        .sort((left, right) =>
-          String(right.completed_at || right.started_at || right.created_at || "")
-            .localeCompare(String(left.completed_at || left.started_at || left.created_at || ""))
-        );
-      const activeExplainRun = explainRuns.find((run) =>
-        run.status === "queued" || run.status === "running"
-      );
-      const latestExplainRun = explainRuns[0] || null;
-      const explainingCI = this.pendingExplainCIV2 || Boolean(activeExplainRun);
-      const explainLabel = explainingCI
-        ? "Explaining…"
-        : latestExplainRun?.status === "completed"
-          ? "Explain again"
-          : ["failed", "cancelled"].includes(latestExplainRun?.status)
-            ? "Retry explain"
-            : "Explain CI Failure";
-      const activeReview = (this.snapshot.runs || []).find((run) =>
-        run.skill_id === "pr.review" &&
-        (run.status === "queued" || run.status === "running")
-      );
-      const reviewedHeadSHA = review?.head_sha || "";
-      const reviewedShortSHA = reviewedHeadSHA.slice(0, 7);
-      const currentHeadSHA = this.snapshot?.current_revision_subject?.head_sha || "";
-      const isLatest = Boolean(
-        reviewedHeadSHA &&
-        currentHeadSHA &&
-        reviewedHeadSHA.toLowerCase() === currentHeadSHA.toLowerCase()
-      );
-      const revisionText = activeReview
-        ? "Reviewing the exact latest revision…"
-        : review
-          ? `Reviewed revision ${reviewedShortSHA}${isLatest ? " (latest)" : ""}`
-          : "Ready to review the exact latest revision";
-      const findingModels = findings.map((finding, index) =>
-        this.buildReviewFindingModelV2(finding, {
-          expanded: index === 0,
-          openInFiles: true
-        })
-      );
+      const pageKey = this.page?.key || "";
+      if (this.reviewSummaryStateV2.pageKey !== pageKey) {
+        this.reviewSummaryStateV2 = { pageKey, annotationsOpen: true, expandedAnnotationKeys: new Set(), selectedRunID: null, reviewOpen: false };
+      }
+      const failedCheckCount = Number(this.snapshot?.pull_request?.check_failure_count || 0);
+      const reasons = this.ciExplanationReasonsV2();
+      const explainRuns = [...(this.snapshot?.runs || [])].filter((run) => run.skill_id === "ci.failure.explain")
+        .sort((a, b) => String(b.completed_at || b.started_at || b.created_at || "").localeCompare(String(a.completed_at || a.started_at || a.created_at || "")));
+      const activeExplain = explainRuns.find((run) => ["queued", "running"].includes(run.status));
+      const explainLabel = this.pendingExplainCIV2 || activeExplain ? "Explaining…" : explainRuns[0]?.status === "completed" ? "Explain again" : ["failed", "cancelled"].includes(explainRuns[0]?.status) ? "Retry explain" : "Explain CI Failure";
+      const activeReview = this.reviewRunsForSummaryV2().find((run) => ["queued", "running"].includes(run.status));
+      const reviewRuns = this.reviewRunsForSummaryV2();
+      const currentHead = this.snapshot?.current_revision_subject?.head_sha || "";
+      const currentCompleted = reviewRuns.find((run) => run.status === "completed" && (run.result?.code_review?.reviewed_head_sha || run.result?.code_review?.head_sha || "").toLowerCase() === currentHead.toLowerCase());
+      const rememberedCompleted = reviewRuns.find((run) => run.id === this.reviewSummaryStateV2.selectedRunID && run.status === "completed" && run.result?.code_review);
+      const selectedRun = rememberedCompleted || currentCompleted || reviewRuns.find((run) => run.status === "completed" && run.result?.code_review) || null;
+      this.reviewSummaryStateV2.selectedRunID = selectedRun?.id || null;
+      const skill = (this.snapshot?.skills || []).find((item) => item.id === "pr.review");
+      const runtimes = skill && skill.is_runnable !== false ? this.runtimeOptionsV2(skill) : [];
+      const reviewerRows = runtimes.map((runtime) => {
+        const matching = reviewRuns.filter((run) => {
+          const engine = run.agent || run.result?.code_review?.engine;
+          return engine === runtime.id || labelForSkillAgent(engine) === runtime.label;
+        });
+        const latestAttempt = matching[0];
+        const completed = matching.filter((run) => run.status === "completed" && run.result?.code_review);
+        const currentResult = completed.find((run) => {
+          const head = run.result.code_review.reviewed_head_sha || run.result.code_review.head_sha || "";
+          return head && currentHead && head.toLowerCase() === currentHead.toLowerCase();
+        });
+        const selectedResult = currentResult || completed[0] || null;
+        const head = selectedResult?.result?.code_review?.reviewed_head_sha || selectedResult?.result?.code_review?.head_sha || "";
+        const current = head && currentHead && head.toLowerCase() === currentHead.toLowerCase();
+        const isRunning = latestAttempt && ["queued", "running"].includes(latestAttempt.status);
+        const statusLabel = isRunning ? (latestAttempt.status === "queued" ? "Queued" : "Reviewing…") : latestAttempt?.status === "failed" ? "Failed" : latestAttempt?.status === "cancelled" ? "Cancelled" : selectedResult ? `${selectedResult.result.code_review.findings?.length || 0} findings${current ? "" : " · Outdated"}` : "Not reviewed";
+        return {
+          id: runtime.id, label: runtime.label,
+          avatarURL: runtime.id === "codex" ? "https://github.com/openai.png?size=64" : runtime.id === "claude_code" ? "https://github.com/anthropics.png?size=64" : "https://github.com/oh-my-pi.png?size=64",
+          avatar: runtime.id === "codex" ? "CX" : runtime.id === "claude_code" ? "C" : "O",
+          modelLabel: runtime.selectedModel || "Runtime default", effortLabel: runtime.selectedReasoningEffort || "Runtime default", statusLabel,
+          resultLabel: selectedResult ? `${selectedResult.result.code_review.findings?.length || 0} findings` : "",
+          requestLabel: latestAttempt?.status === "failed" || latestAttempt?.status === "cancelled" ? "Retry" : current ? "Re-request" : "Request",
+          requestDisabled: !this.hasScope("skill:run") || Boolean(activeReview) || !this.snapshot?.current_revision_subject,
+          disabledReason: !this.hasScope("skill:run") ? "Run permission is required." : activeReview ? "A review is already running." : undefined,
+          onRequest: () => this.startPRReviewV2(runtime.id),
+          onConfigure: () => this.startPRReviewV2(runtime.id),
+          onSelectResult: () => { this.reviewSummaryStateV2.selectedRunID = selectedResult?.id || null; this.reviewSummaryStateV2.reviewOpen = true; this.render(); }
+        };
+      });
+      const selectedReview = this.reviewSummaryModelForRunV2(selectedRun);
+      const selectedFindings = this.reviewFindingRecordsForRunV2(selectedRun);
       const summaryModel = {
-        reviewedShortSHA,
-        isLatest,
-        revisionText,
-        findingCount: findings.length,
-        fileCount: new Set(findings.map((finding) => finding.file)).size,
-        findings: findingModels
+        reviewers: reviewerRows, selectedReview, reviewOpen: this.reviewSummaryStateV2.reviewOpen,
+        reviewActions: (conversationActions?.actions || []).filter((action) => action.id !== "view-failed-checks" && (action.id !== "view-findings" || !selectedFindings.length)),
+        skillActions: (conversationActions?.skillActions || []).filter((action) => action.id !== "run-skill-ci.failure.explain"),
+        progressLog: conversationActions?.progressLog,
+        progressLabel: conversationActions?.progressLabel,
+        onToggleReview: () => { this.reviewSummaryStateV2.reviewOpen = !this.reviewSummaryStateV2.reviewOpen; this.render(); },
+        onCopyAll: selectedFindings.length ? () => this.copyTextV2(SR.reviewSummaryCopyText({
+          reviewedShortSHA: (selectedRun?.result?.code_review?.reviewed_head_sha || "").slice(0, 7),
+          findingCount: selectedFindings.length, fileCount: new Set(selectedFindings.map((finding) => finding.file)).size,
+          findings: selectedFindings.map((finding, index) => this.buildReviewFindingModelV2(finding, { expanded: index === 0, openInFiles: true }))
+        })) : undefined,
+        onOpenInFiles: selectedFindings[0] ? () => this.navigateToFindingV2(selectedFindings[0]) : undefined
       };
-      mount(
-        SR.SURFACE_IDS.conversationReviewSummary,
-        anchor.parentNode,
-        {
-          ...summaryModel,
-          onCopyAll: findings.length
-            ? () => this.copyTextV2(SR.reviewSummaryCopyText(summaryModel))
-            : undefined,
-          onUpdate: this.updateAvailable() && this.bridge.baseURL
-            ? () => this.gm.openInTab(`${this.bridge.baseURL}/install/ghpr.user.js`)
-            : undefined,
-          updateLabel: "Update ghpr userscript",
-          onOpenInFiles: findings.length
-            ? () => this.navigateToFindingV2(findings[0])
-            : undefined,
-          onReview: this.hasScope("skill:run") && !activeReview
-            ? () => this.startPRReviewV2()
-            : undefined,
-          reviewLabel: review ? "Review latest" : "Review PR",
-          reviewDisabled: Boolean(activeReview),
-          // Failed-check actions belong to the check result, above the review
-          // summary instead of in the ghpr operation card.
-          checksActions: failedCheckCount > 0
-            ? {
-                summary: `${failedCheckCount} failed ${failedCheckCount === 1 ? "check" : "checks"}`,
-                hint: this.ciExplanationHintV2(),
-                actions: [
-                  this.hasScope("skill:run")
-                    ? {
-                        id: "explain-ci-failure",
-                        label: explainLabel,
-                        disabled: explainingCI,
-                        onSelect: () => this.explainCIFailureV2(SR)
-                      }
-                    : null,
-                  {
-                    id: "rerun-failed-ci",
-                    label: `Re-run ${failedCheckCount} failed ${failedCheckCount === 1 ? "job" : "jobs"}`,
-                    className: "ghpr-review-summary-rerun",
-                    onSelect: () => this.rerunFailedChecksV2(SR)
-                  }
-                ].filter(Boolean)
-              }
-            : undefined
-        },
-        "review_summary",
-        { instanceKey: "default", anchor, position: "after" }
-      );
+      const checksActions = failedCheckCount > 0 ? {
+        failedCount: failedCheckCount,
+        annotations: reasons.map((item) => ({
+          key: item.key, label: item.label || "CI failure explanation", reason: item.reason, evidence: item.evidence,
+          suggestedAction: item.run.result?.payload?.suggested_action,
+          expanded: this.reviewSummaryStateV2.expandedAnnotationKeys.has(item.key),
+          onToggle: () => { const keys = this.reviewSummaryStateV2.expandedAnnotationKeys; keys.has(item.key) ? keys.delete(item.key) : keys.add(item.key); this.render(); },
+          onViewFullResult: () => this.openRunDrawerV2(item.run)
+        })),
+        open: this.reviewSummaryStateV2.annotationsOpen,
+        onToggle: () => { this.reviewSummaryStateV2.annotationsOpen = !this.reviewSummaryStateV2.annotationsOpen; this.render(); },
+        actions: [
+          ...(conversationActions?.actions || []).filter((action) => action.id === "view-failed-checks"),
+          this.hasScope("skill:run") ? { id: "explain-ci-failure", label: explainLabel, disabled: Boolean(activeExplain) || this.pendingExplainCIV2, onSelect: () => this.explainCIFailureV2(SR) } : null,
+          { id: "rerun-failed-ci", label: `Re-run ${failedCheckCount} failed ${failedCheckCount === 1 ? "job" : "jobs"}`, className: "ghpr-review-summary-rerun", onSelect: () => this.rerunFailedChecksV2(SR) }
+        ].filter(Boolean)
+      } : undefined;
+      if (sidebar.length === 1) {
+        const nativeReviewers = sidebar[0].querySelector(":scope > .sidebar-reviewers, :scope > [data-testid='reviewers-section'], :scope > [data-testid='sidebar-reviewers']");
+        mount(SR.SURFACE_IDS.conversationReviewSummary, sidebar[0], {
+          ...summaryModel, onUpdate: this.updateAvailable() && this.bridge.baseURL ? () => this.gm.openInTab(`${this.bridge.baseURL}/install/ghpr.user.js`) : undefined,
+          updateLabel: "Update ghpr userscript", onConfigureReview: () => this.startPRReviewV2()
+        }, "review_summary", { instanceKey: "default", anchor: nativeReviewers || sidebar[0].firstElementChild, position: nativeReviewers ? "after" : "before" });
+      }
+      if (checksActions) {
+        const anchors = semanticTargets(this.document, "pr.conversation.after-checks");
+        const annotationHealth = anchors.length === 1 ? "healthy" : anchors.length === 0 ? "missing" : "ambiguous";
+        this.reportSurfaceHealthV2(SR.SURFACE_IDS.conversationAnnotations, annotationHealth,
+          annotationHealth === "healthy" ? "Conversation timeline anchor found." : `Expected one Conversation timeline anchor; found ${anchors.length}.`);
+        if (anchors.length === 1) {
+          mount(SR.SURFACE_IDS.conversationAnnotations, anchors[0].parentNode, {
+            checksActions, annotationsOnly: true
+          }, "review_summary", { instanceKey: "default", anchor: anchors[0], position: "after" });
+        }
+      }
     }
 
 
@@ -2812,7 +2871,7 @@
       ].join("\n");
     }
 
-    startPRReviewV2() {
+    startPRReviewV2(agentID = null) {
       const SR = global.GhprSurfaceRenderers;
       const subject = this.snapshot?.current_revision_subject;
       if (!SR || !this.modalHost || subject?.type !== "pull_request_revision") {
@@ -2820,37 +2879,29 @@
         return;
       }
       const reviewSkill = (this.snapshot?.skills || []).find((skill) => skill.id === "pr.review");
-      const latestReviewRun = [...(this.snapshot?.runs || [])]
-        .filter((run) => run.skill_id === "pr.review" && run.agent)
-        .sort((left, right) =>
-          String(right.completed_at || right.started_at || right.created_at || "")
-            .localeCompare(String(left.completed_at || left.started_at || left.created_at || ""))
-        )[0];
-      const runtimes = this.runtimeOptionsV2(reviewSkill);
-      const selectedRuntime = runtimes.some((runtime) => runtime.id === latestReviewRun?.agent)
-        ? latestReviewRun.agent
-        : reviewSkill?.default_agent || runtimes[0]?.id;
+      const runtimes = reviewSkill?.is_runnable === false ? [] : this.runtimeOptionsV2(reviewSkill);
+      if (agentID && !runtimes.some((runtime) => runtime.id === agentID)) {
+        this.renderTransientError("The selected review agent is no longer available.");
+        return;
+      }
+      const latestReviewRun = this.reviewRunsForSummaryV2().find((run) => run.agent);
+      const selectedRuntime = agentID || (runtimes.some((runtime) => runtime.id === latestReviewRun?.agent)
+        ? latestReviewRun.agent : reviewSkill?.default_agent || runtimes[0]?.id);
+      if (!selectedRuntime || !runtimes.length) {
+        this.renderTransientError("No review agents are available.");
+        return;
+      }
       const content = SR.renderSurface(this.document, "review_launch_dialog", {
-        repository: subject.repository,
-        number: subject.pr_number,
-        baseSHA: subject.base_sha,
-        headSHA: subject.head_sha,
-        runtimes,
-        selectedRuntime,
+        repository: subject.repository, number: subject.pr_number, baseSHA: subject.base_sha, headSHA: subject.head_sha,
+        runtimes, selectedRuntime,
         onStart: async (selection) => {
           const started = await this.runPRReviewV2(selection);
-          if (started) {
-            this.modalHost?.close();
-          }
+          if (started) this.modalHost?.close();
           return started;
         },
-        onCopyImportPrompt: () =>
-          this.copyTextV2(this.reviewImportPromptV2(subject))
+        onCopyImportPrompt: () => this.copyTextV2(this.reviewImportPromptV2(subject))
       });
-      this.modalHost.open(content, {
-        triggerEl: this.document.activeElement,
-        ariaLabel: "Review pull request"
-      });
+      this.modalHost.open(content, { triggerEl: this.document.activeElement, ariaLabel: "Review pull request" });
     }
 
     async runPRReviewV2(runtimeSelection) {
@@ -3065,14 +3116,88 @@
     }
 
 
+    checksRootV2() {
+      return this.document.querySelector("#checks_tab, .checks-listing, #partial-pull-checks") ||
+        (this.document.querySelectorAll("main").length === 1 ? this.document.querySelector("main") : null);
+    }
+
+    checksDiscoveryStateV2() {
+      const key = `${this.page?.key || ""}:${this.snapshot?.current_revision_subject?.head_sha || ""}`;
+      if (this.checksDiscoveryV2?.key !== key) {
+        this.checksDiscoveryV2 = { key, requested: false, attempted: new Set() };
+      }
+      return this.checksDiscoveryV2;
+    }
+
+    nativeChecksTextV2(node) {
+      const walker = this.document.createTreeWalker(node, this.window.NodeFilter.SHOW_TEXT);
+      const parts = [];
+      while (walker.nextNode()) {
+        if (!walker.currentNode.parentElement?.closest("[data-ghpr-surface], [data-ghpr-managed]")) {
+          parts.push(walker.currentNode.textContent);
+        }
+      }
+      return parts.join(" ").trim();
+    }
+
+    failedChecksJobsV2(root) {
+      const rows = new Set(semanticTargets(this.document, "checks.run.trailing"));
+      for (const link of root.querySelectorAll("a[href*='check_run_id=']")) {
+        if (!link.closest("[data-ghpr-surface], [data-ghpr-managed]")) {
+          rows.add(link.closest(".js-check-run, .CheckRun, [data-testid='check-run-row'], li") || link);
+        }
+      }
+      const jobs = new Map();
+      let nativeRowCount = 0;
+      for (const row of rows) {
+        if (!root.contains(row) || row.closest("[data-ghpr-surface], [data-ghpr-managed]")) continue;
+        nativeRowCount += 1;
+        const nativeText = this.nativeChecksTextV2(row);
+        const failureIcon = [...row.querySelectorAll(".octicon-x, .octicon-x-circle, [data-conclusion='failure'], [data-status='failure']")]
+          .some((node) => !node.closest("[data-ghpr-surface], [data-ghpr-managed]"));
+        if (!failureIcon && !/\b(failed|failure|timed out)\b/i.test(`${row.getAttribute("aria-label") || ""} ${nativeText}`)) continue;
+        const link = row.matches("a[href]") ? row : row.querySelector("a[href*='/actions/runs/'], a[href*='check_run_id=']");
+        if (!link) continue;
+        const parsed = parseWorkflowJobHref(link.getAttribute("href"));
+        const label = row.getAttribute("data-check-name") || link.getAttribute("aria-label") ||
+          this.nativeChecksTextV2(row.querySelector(".text-bold, .text-semibold, span") || link) || nativeText;
+        if (parsed) {
+          const subject = {
+            type: "workflow_job", repository: parsed.repository,
+            workflow_run_id: Number(parsed.runId), workflow_job_id: Number(parsed.jobId)
+          };
+          const subjectKey = this.subjectKeyForWorkflowJob(subject);
+          jobs.set(subjectKey, { row, subject, subjectKey, label });
+        } else {
+          const url = new URL(link.getAttribute("href"), this.window.location.href);
+          const checkRunID = url.searchParams.get("check_run_id");
+          if (url.origin !== "https://github.com" || url.pathname !== `/${this.page.repository}/pull/${this.page.pr_number}/checks` || !/^\d+$/.test(checkRunID || "")) continue;
+          const subjectKey = `github:check-run:${checkRunID}`;
+          jobs.set(subjectKey, { row, subject: null, subjectKey, label, nativeLink: link, checkRunID });
+        }
+      }
+      return { jobs: [...jobs.values()], nativeRowCount };
+    }
+
     selectChecksJobV2(SR, jobs, index, { scroll = true, updateURL = true } = {}) {
       const selected = jobs[index];
       if (!selected) return;
       this.selectedChecksJobKey = selected.subjectKey;
+      if (scroll) {
+        for (let parent = selected.row.parentElement; parent; parent = parent.parentElement) {
+          if (parent.matches("details:not([open])")) parent.querySelector(":scope > summary")?.click();
+        }
+      }
       if (updateURL) {
         const url = new URL(this.window.location.href);
         url.searchParams.set("ghpr_check", selected.subjectKey);
         this.window.history.replaceState({}, "", url);
+      }
+      if (!selected.subject) {
+        this.checksInsightHost?.close();
+        if (updateURL) selected.nativeLink.click();
+        if (scroll) selected.row.scrollIntoView?.({ block: "center" });
+        return;
       }
       const model = this.checksInsightModelV2(selected.subject, selected.row);
       model.navigation = {
@@ -3095,59 +3220,55 @@
         instanceKey: "panel"
       });
       if (scroll) selected.row.scrollIntoView?.({ block: "center" });
+      if (updateURL) this.renderSurfaceV2();
     }
 
     expandRequestedFailedSuiteV2(explanationReasons) {
-      if (this.pendingChecksExpansionV2) return;
-      if (!new URLSearchParams(this.window.location.search).has("ghpr_check")) return;
-      const labels = explanationReasons
-        .map((item) => item.label?.trim().toLowerCase())
-        .filter(Boolean);
-      if (!labels.length) return;
-      const root = this.document.querySelector("#checks_tab") || this.document;
-      const toggles = [...root.querySelectorAll(
-        "button[aria-expanded='false'], [role='button'][aria-expanded='false']"
-      )];
-      const toggle = toggles.find((candidate) => {
-        const text = (candidate.textContent || "").trim().toLowerCase();
-        return text && labels.some((label) => text.includes(label) || label.includes(text));
+      const state = this.checksDiscoveryStateV2();
+      if (this.pendingChecksExpansionV2 || (!state.requested && !new URLSearchParams(this.window.location.search).has("ghpr_check"))) return;
+      const root = this.checksRootV2();
+      if (!root) return;
+      const labels = explanationReasons.map((item) => item.label?.trim().toLowerCase()).filter(Boolean);
+      const candidates = [...root.querySelectorAll("details:not([open]) > summary, button[aria-expanded='false'], [role='button'][aria-expanded='false']")];
+      const toggle = candidates.find((candidate) => {
+        if (candidate.closest("[data-ghpr-surface], [data-ghpr-managed]")) return false;
+        const text = this.nativeChecksTextV2(candidate).toLowerCase();
+        const suite = candidate.closest(".js-check-suite, [data-check-suite-id]");
+        const controlID = candidate.getAttribute("aria-controls");
+        const controlled = controlID ? this.document.getElementById(controlID) : null;
+        const isSuite = suite || candidate.matches(".js-check-suite-toggle") ||
+          (candidate.tagName === "SUMMARY" && /\bon:\s*(pull_request|push|workflow_dispatch|schedule|merge_group)/.test(text)) ||
+          (controlled && root.contains(controlled) && controlled.querySelector(".js-check-run, [data-testid='check-run-row'], a[href*='check_run_id=']")) ||
+          labels.some((label) => text && (text.includes(label) || label.includes(text)));
+        const key = controlID || suite?.getAttribute("data-check-suite-id") || candidate.id || text;
+        if (!isSuite || !key || state.attempted.has(key)) return false;
+        state.attempted.add(key);
+        return true;
       });
       if (!toggle) return;
       this.pendingChecksExpansionV2 = true;
       toggle.click();
       this.window.setTimeout(() => {
         this.pendingChecksExpansionV2 = false;
-        if (!this.stopped) this.renderSurfaceV2();
+        if (!this.stopped && isChecksSurface(this.window.location) && this.checksDiscoveryV2 === state) this.renderSurfaceV2();
       }, 250);
     }
 
     renderChecksSurfacesV2(SR, mount) {
       if (!isChecksSurface(this.window.location)) return;
-      const rows = semanticTargets(this.document, "checks.run.trailing");
+      const root = this.checksRootV2();
+      if (!root) {
+        this.reportSurfaceHealthV2(SR.SURFACE_IDS.checksSummary, "missing", "No unique native Checks page container was found.");
+        this.reportSurfaceHealthV2(SR.SURFACE_IDS.checksJobTrailing, "missing", "No native Checks page container was found.");
+        return;
+      }
+      const { jobs: failedJobs, nativeRowCount } = this.failedChecksJobsV2(root);
       this.reportSurfaceHealthV2(
         SR.SURFACE_IDS.checksJobTrailing,
-        rows.length ? "healthy" : "missing",
-        rows.length ? "Checks rows found." : "No native Checks rows were found."
+        nativeRowCount ? "healthy" : "missing",
+        nativeRowCount ? "Native Checks rows found." : "No native Checks rows were found; suites may still be collapsed or loading."
       );
-      const failedJobs = [];
-      for (const row of rows) {
-        if (!/\b(failed|failure)\b/i.test(row.textContent || "")) continue;
-        const link = row.querySelector("a[href*='/actions/runs/']");
-        const parsed = link ? parseWorkflowJobHref(link.getAttribute("href")) : null;
-        if (!parsed) continue;
-        const subject = {
-          type: "workflow_job",
-          repository: parsed.repository,
-          workflow_run_id: Number(parsed.runId),
-          workflow_job_id: Number(parsed.jobId)
-        };
-        failedJobs.push({
-          row,
-          subject,
-          subjectKey: this.subjectKeyForWorkflowJob(subject)
-        });
-      }
-      const currentJobKeys = new Set(failedJobs.map(({ subject }) =>
+      const currentJobKeys = new Set(failedJobs.filter((job) => job.subject).map(({ subject }) =>
         `${String(subject.repository).toLowerCase()}:${subject.workflow_run_id}:${subject.workflow_job_id}`
       ));
       const matchedReasons = failedJobs.length
@@ -3156,27 +3277,7 @@
       const explanationReasons = matchedReasons.length
         ? matchedReasons
         : this.ciExplanationReasonsV2();
-      const summaryAnchor = semanticTargets(this.document, "checks.summary.actions")[0];
-      if (summaryAnchor && explanationReasons.length) {
-        const prepend = summaryAnchor.matches(".checks-listing");
-        mount(
-          SR.SURFACE_IDS.checksSummary,
-          prepend ? summaryAnchor : summaryAnchor.parentNode,
-          {
-            title: "Latest ghpr CI explanation",
-            reasons: explanationReasons
-          },
-          "ci_summary",
-          {
-            instanceKey: "summary",
-            anchor: prepend ? null : summaryAnchor,
-            position: prepend ? "prepend" : "after"
-          }
-        );
-      }
-      if (!failedJobs.length) this.expandRequestedFailedSuiteV2(explanationReasons);
-
-
+      this.expandRequestedFailedSuiteV2(explanationReasons);
       const requestedCheck = new URLSearchParams(this.window.location.search).get("ghpr_check");
       if (requestedCheck && failedJobs.length) {
         const requestedIndex = requestedCheck === "first"
@@ -3185,9 +3286,48 @@
         if (requestedIndex >= 0) this.selectedChecksJobKey = failedJobs[requestedIndex].subjectKey;
       }
 
-      let selectedRowStillPresent = false;
+      const nativeCheckID = new URLSearchParams(this.window.location.search).get("check_run_id");
+      if (!requestedCheck && nativeCheckID) {
+        this.selectedChecksJobKey = failedJobs.find((job) => job.checkRunID === nativeCheckID)?.subjectKey || this.selectedChecksJobKey;
+      }
+      const selectedIndex = failedJobs.findIndex((job) => job.subjectKey === this.selectedChecksJobKey);
+      const reportedFailures = Number(this.snapshot?.pull_request?.check_failure_count || 0);
+      const failedCount = Math.max(failedJobs.length, reportedFailures);
+      const discovery = this.checksDiscoveryStateV2();
+      const discover = () => {
+        discovery.requested = true;
+        discovery.attempted.clear();
+        const url = new URL(this.window.location.href);
+        url.searchParams.set("ghpr_check", "first");
+        this.window.history.replaceState({}, "", url);
+        this.renderSurfaceV2();
+      };
+      mount(SR.SURFACE_IDS.checksSummary, root, {
+        title: "ghpr CI summary",
+        summary: `${failedCount} failed ${failedCount === 1 ? "check" : "checks"} · ${failedJobs.length} available for navigation`,
+        emptyLabel: this.pendingChecksExpansionV2 ? "Loading checks from collapsed suites…" :
+          !failedJobs.length && failedCount ? "Failed jobs are not loaded yet. Find failed checks to expand their suites." :
+          !failedCount ? "No failed checks found." : undefined,
+        reasons: explanationReasons,
+        explanationLabel: explanationReasons.length ? "Latest ghpr CI explanation" : "No explanations yet.",
+        actions: [{ id: "find-failed-checks", label: "Find failed checks", disabled: this.pendingChecksExpansionV2, onSelect: discover }],
+        jobs: failedJobs.map((job, index) => ({
+          label: job.label, selected: index === selectedIndex,
+          onSelect: () => this.selectChecksJobV2(SR, failedJobs, index)
+        })),
+        navigation: failedJobs.length ? {
+          position: selectedIndex + 1, total: failedJobs.length, noun: "failed checks",
+          ariaLabel: "Failed checks navigation",
+          previousID: "previous-failed-check", nextID: "next-failed-check",
+          onPrevious: selectedIndex > 0 ? () => this.selectChecksJobV2(SR, failedJobs, selectedIndex - 1) : undefined,
+          onNext: selectedIndex + 1 < failedJobs.length ? () => this.selectChecksJobV2(SR, failedJobs, selectedIndex + 1) : undefined
+        } : undefined
+      }, "ci_summary", { instanceKey: "summary", position: "prepend" });
+      this.reportSurfaceHealthV2(SR.SURFACE_IDS.checksSummary, "healthy", "Checks summary and navigation mounted.");
+      let selectedRowStillPresent = failedJobs.some((job) => !job.subject && job.subjectKey === this.selectedChecksJobKey);
       for (const [index, job] of failedJobs.entries()) {
         const { row, subject, subjectKey } = job;
+        if (!subject) continue;
         const explainRun = this.latestRunForSubjectV2("ci.failure.explain", subject);
         const classifyRun = this.latestRunForSubjectV2("ci.failure.classify_flaky", subject);
         const activeRun = [explainRun, classifyRun].find((run) => run && (run.status === "queued" || run.status === "running"));
@@ -3232,6 +3372,9 @@
             updateURL: false
           });
         }
+      }
+      if (requestedCheck === "first" && failedJobs[0]?.nativeLink) {
+        this.selectChecksJobV2(SR, failedJobs, 0);
       }
       if (!selectedRowStillPresent && this.checksInsightHost?.isOpen) {
         this.checksInsightHost.close();

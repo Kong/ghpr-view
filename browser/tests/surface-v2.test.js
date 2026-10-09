@@ -435,6 +435,253 @@ test("v2: Checks title expands the matching suite and shows its reason beside th
   window.close();
 });
 
+test("v2: Checks row health stays independent from summary health and failure count", async () => {
+  const pathname = "/acme/widgets/pull/42/checks";
+  const window = await createWindow("checks.html", pathname);
+  const root = window.document.querySelector("#checks_tab");
+  const passingRow = root.querySelector("[data-check-name='build']");
+  for (const row of root.querySelectorAll("[data-testid='check-run-row']")) {
+    if (row !== passingRow) row.remove();
+  }
+  const gm = new FakeGM({ snapshot: makeSnapshot(pathname) });
+  const app = createGhprApp({ window, document: window.document, gm });
+  const health = (surface) => gm.requests
+    .filter((request) => new URL(request.url).pathname === "/api/v1/surface-health")
+    .map((request) => JSON.parse(request.data))
+    .filter((report) => report.surface === surface)
+    .at(-1)?.state;
+  const rowsSurface = "github.pr.checks.job.trailing";
+  const summarySurface = "github.pr.checks.summary";
+  try {
+    await app.start();
+    await settle();
+    assert.equal(health(rowsSurface), "healthy", "passing native rows are valid anchors");
+
+    passingRow.remove();
+    app.render();
+    await settle();
+    assert.equal(health(rowsSurface), "missing", "missing rows must report DOM drift or pending loading");
+    assert.equal(health(summarySurface), "healthy", "a mounted summary must not mask missing row anchors");
+
+    root.append(passingRow);
+    app.render();
+    await settle();
+    assert.equal(health(rowsSurface), "healthy", "newly loaded rows must restore row health");
+
+    window.document.querySelector("main").remove();
+    app.render();
+    await settle();
+    assert.equal(health(rowsSurface), "missing", "losing the Checks container also loses row anchors");
+    assert.equal(health(summarySurface), "missing", "losing the Checks container loses the summary anchor");
+  } finally {
+    app.stop();
+    window.close();
+  }
+});
+
+test("v2: Checks summary always mounts with bounded discovery when suites are collapsed and there are no explanations", async () => {
+  const pathname = "/acme/widgets/pull/42/checks";
+  const window = await createWindow("checks.html", pathname);
+  const { document } = window;
+
+  // Simulate a Checks page with no legacy summary anchor: rename the only
+  // native container so `#checks_tab`/`.checks-listing`/`#partial-pull-checks`
+  // no longer match, forcing the fallback to the unique `<main>`.
+  const nativeContainer = document.querySelector("#checks_tab");
+  nativeContainer.removeAttribute("id");
+  for (const row of document.querySelectorAll("[data-testid='check-run-row']")) row.remove();
+
+  const clicks = { unit: 0, lint: 0, managed: 0 };
+  function collapsedRow(name, runId, jobId) {
+    const row = document.createElement("div");
+    row.setAttribute("data-testid", "check-run-row");
+    row.setAttribute("data-check-name", name);
+    row.innerHTML = `<span>${name}</span><strong>Failed</strong>`;
+    const link = document.createElement("a");
+    link.setAttribute("href", `/acme/widgets/actions/runs/${runId}/job/${jobId}`);
+    link.setAttribute("title", "View details");
+    link.textContent = "Details";
+    row.appendChild(link);
+    return row;
+  }
+  function suiteToggle(label, row, tracker) {
+    const toggle = document.createElement("button");
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.className = "js-check-suite-toggle";
+    toggle.textContent = label;
+    toggle.addEventListener("click", () => {
+      tracker.count += 1;
+      toggle.setAttribute("aria-expanded", "true");
+      toggle.after(row);
+    });
+    return toggle;
+  }
+  const unitTracker = { count: 0 };
+  const lintTracker = { count: 0 };
+  const unitRow = collapsedRow("unit-test", 1001, 2001);
+  const lintRow = collapsedRow("lint", 1001, 2002);
+  const unitToggle = suiteToggle("unit-test", unitRow, unitTracker);
+  const lintToggle = suiteToggle("lint", lintRow, lintTracker);
+  nativeContainer.querySelector(".Box-header").after(unitToggle, lintToggle);
+
+  // A ghpr-managed collapsed control inside the root must never be treated
+  // as a discoverable native suite.
+  const managedWrap = document.createElement("div");
+  managedWrap.setAttribute("data-ghpr-managed", "");
+  const managedToggle = document.createElement("button");
+  managedToggle.setAttribute("aria-expanded", "false");
+  managedToggle.textContent = "ghpr-managed-toggle";
+  managedToggle.addEventListener("click", () => { clicks.managed += 1; });
+  managedWrap.appendChild(managedToggle);
+  nativeContainer.appendChild(managedWrap);
+
+  // A collapsed control outside the discovered root must never be clicked.
+  const outsideToggle = document.createElement("button");
+  outsideToggle.setAttribute("aria-expanded", "false");
+  outsideToggle.textContent = "unrelated-outside-toggle";
+  document.body.appendChild(outsideToggle);
+
+  const snapshot = makeSnapshot(pathname, {
+    pull_request: { id: 42, repository: "acme/widgets", number: 42, title: "Fixture PR", ci_status: "FAILURE", check_failure_count: 2 },
+    runs: []
+  });
+  const gm = new FakeGM({ snapshot });
+  const app = createGhprApp({ window, document, gm });
+  await app.start();
+  await settle();
+
+  let summary = document.querySelector("[data-ghpr-surface='github.pr.checks.summary']");
+  assert.ok(summary, "the ghpr CI summary must mount even with no explanations, no legacy anchor, and collapsed suites");
+  assert.equal(summary.querySelector(".ghpr-ci-summary-title")?.textContent, "ghpr CI summary");
+  assert.match(summary.textContent, /2 failed checks/);
+  assert.match(summary.textContent, /Failed jobs are not loaded yet\. Find failed checks to expand their suites\./);
+  assert.match(summary.textContent, /No explanations yet\./);
+  const findButton = summary.querySelector("[data-action-id='find-failed-checks']");
+  assert.ok(findButton, "the Find failed checks action must be present");
+  assert.equal(findButton.disabled, false);
+  assert.equal(summary.querySelector("[aria-label='Failed checks navigation']"), null, "no navigation until at least one failed check is discovered");
+  assert.equal(unitToggle.getAttribute("aria-expanded"), "false");
+  assert.equal(lintToggle.getAttribute("aria-expanded"), "false");
+  assert.equal(managedToggle.getAttribute("aria-expanded"), "false");
+  assert.equal(outsideToggle.getAttribute("aria-expanded"), "false");
+
+  findButton.click();
+  await settle();
+  summary = document.querySelector("[data-ghpr-surface='github.pr.checks.summary']");
+  assert.equal(new URLSearchParams(window.location.search).get("ghpr_check"), "first");
+  assert.match(summary.textContent, /Loading checks from collapsed suites…/);
+  assert.equal(unitToggle.getAttribute("aria-expanded"), "true", "the first collapsed suite must be expanded");
+  assert.equal(lintToggle.getAttribute("aria-expanded"), "false", "discovery expands one suite at a time");
+  assert.equal(unitTracker.count, 1);
+  assert.equal(lintTracker.count, 0);
+  assert.equal(managedToggle.getAttribute("aria-expanded"), "false", "ghpr-managed controls must never be clicked");
+  assert.equal(outsideToggle.getAttribute("aria-expanded"), "false", "controls outside the discovered root must never be clicked");
+  assert.equal(clicks.managed, 0);
+
+  await new Promise((resolve) => window.setTimeout(resolve, 300));
+  await settle();
+  assert.equal(lintToggle.getAttribute("aria-expanded"), "true", "the second collapsed suite must be expanded next");
+  assert.equal(unitTracker.count, 1, "an already-expanded suite must not be re-toggled");
+  assert.equal(lintTracker.count, 1);
+
+  await new Promise((resolve) => window.setTimeout(resolve, 300));
+  await settle();
+  summary = document.querySelector("[data-ghpr-surface='github.pr.checks.summary']");
+  assert.match(summary.textContent, /2 failed checks · 2 available for navigation/);
+  assert.equal(summary.querySelector("p[role='status']"), null, "loading status clears once discovery is bounded and complete");
+  const jobButtons = [...summary.querySelectorAll(".ghpr-ci-summary-jobs button")];
+  assert.deepEqual(jobButtons.map((button) => button.textContent), ["unit-test", "lint"]);
+
+  // Re-requesting discovery after every suite is expanded must not re-click
+  // any control or resurface the loading status.
+  summary.querySelector("[data-action-id='find-failed-checks']").click();
+  await settle();
+  summary = document.querySelector("[data-ghpr-surface='github.pr.checks.summary']");
+  assert.equal(unitTracker.count, 1);
+  assert.equal(lintTracker.count, 1);
+  assert.equal(summary.querySelector("p[role='status']"), null);
+
+  jobButtons[0].click();
+  await settle();
+  let panel = document.querySelector("[data-ghpr-surface='github.pr.checks.job.insight']");
+  assert.ok(panel, "selecting a discovered job opens the CI Insight panel");
+  assert.equal(unitRow.nextElementSibling, panel);
+  assert.match(panel.querySelector(".ghpr-item-navigator-count")?.textContent || "", /1 of 2 failed checks/);
+  assert.equal(panel.querySelector("[data-action-id='previous-failed-check']")?.disabled, true);
+  panel.querySelector("[data-action-id='next-failed-check']").click();
+  panel = document.querySelector("[data-ghpr-surface='github.pr.checks.job.insight']");
+  assert.equal(lintRow.nextElementSibling, panel, "navigation moves to a distinct discovered row");
+  assert.match(panel.querySelector(".ghpr-item-navigator-count")?.textContent || "", /2 of 2 failed checks/);
+  assert.equal(panel.querySelector("[data-action-id='next-failed-check']")?.disabled, true);
+
+  const actionRequests = gm.requests.filter((request) => new URL(request.url).pathname === "/api/v1/actions");
+  assert.equal(actionRequests.length, 0, "discovery and navigation must never invoke external GitHub/agent actions");
+
+  app.stop();
+  window.close();
+});
+
+test("v2: a native check_run_id anchor navigates via the original link instead of a fabricated workflow_job subject", async () => {
+  const pathname = "/acme/widgets/pull/42/checks";
+  const window = await createWindow("checks.html", pathname);
+  const { document } = window;
+  for (const row of document.querySelectorAll("[data-testid='check-run-row']")) row.remove();
+
+  const codeqlRow = document.createElement("div");
+  codeqlRow.setAttribute("data-testid", "check-run-row");
+  codeqlRow.setAttribute("data-check-name", "codeql");
+  codeqlRow.innerHTML = "<span>codeql</span><strong>Failed</strong>";
+  const link = document.createElement("a");
+  link.setAttribute("href", "/acme/widgets/pull/42/checks?check_run_id=555");
+  link.setAttribute("title", "View details");
+  link.textContent = "Details";
+  let linkClicked = false;
+  link.addEventListener("click", (event) => {
+    event.preventDefault();
+    linkClicked = true;
+  });
+  codeqlRow.appendChild(link);
+  document.querySelector("#checks_tab").appendChild(codeqlRow);
+
+  const snapshot = makeSnapshot(pathname, {
+    pull_request: { id: 42, repository: "acme/widgets", number: 42, title: "Fixture PR", ci_status: "FAILURE", check_failure_count: 1 },
+    runs: []
+  });
+  const gm = new FakeGM({ snapshot });
+  const app = createGhprApp({ window, document, gm });
+  await app.start();
+  await settle();
+
+  const summary = document.querySelector("[data-ghpr-surface='github.pr.checks.summary']");
+  assert.ok(summary);
+  const codeqlButton = [...summary.querySelectorAll(".ghpr-ci-summary-jobs button")]
+    .find((button) => button.textContent === "codeql");
+  assert.ok(codeqlButton, "the check_run_id-only row must still surface as a navigable failed check");
+  assert.equal(codeqlRow.querySelector("[data-ghpr-surface='github.pr.checks.job.trailing']"), null,
+    "a row without a resolvable workflow_job subject must never get fabricated Explain/Classify UI");
+
+  codeqlButton.click();
+  await settle();
+
+  assert.equal(linkClicked, true, "selecting a check_run_id-only job must click the original native anchor");
+  assert.equal(document.querySelector("[data-ghpr-surface='github.pr.checks.job.insight']"), null,
+    "a check_run_id route must not open the CI Insight panel meant for exact workflow_job links");
+  assert.equal(new URLSearchParams(window.location.search).get("ghpr_check"), "github:check-run:555");
+
+  const resolveRequests = gm.requests
+    .filter((request) => new URL(request.url).pathname === "/api/v1/subjects/resolve")
+    .map((request) => JSON.parse(request.data));
+  assert.ok(
+    resolveRequests.every((body) => !(body.type === "workflow_job" && String(body.workflow_job_id) === "555")),
+    "the check_run_id must never be resolved as a fabricated workflow_job id"
+  );
+  const actionRequests = gm.requests.filter((request) => new URL(request.url).pathname === "/api/v1/actions");
+  assert.equal(actionRequests.length, 0);
+
+  app.stop();
+  window.close();
+});
+
 test("v2: Actions Job page reuses the same subject-keyed CI Insight without a duplicate run", async () => {
   const pathname = "/acme/widgets/actions/runs/1001/job/2001";
   const window = await createWindow("actions-job.html", pathname);
@@ -595,9 +842,8 @@ test("v2: Review PR confirms runtime and model before starting the exact revisio
   const summary = window.document.querySelector(
     "[data-ghpr-surface='github.pr.conversation.review-summary']"
   );
-  const reviewButton = [...summary.querySelectorAll("button")]
-    .find((button) => button.textContent === "Review PR");
-  assert.ok(reviewButton, "Conversation must expose Review PR before the first review");
+  const reviewButton = summary.querySelector("[aria-label='Configure review']");
+  assert.ok(reviewButton, "Conversation must expose Configure review");
   reviewButton.click();
 
   const dialog = window.document.querySelector(
@@ -703,9 +949,8 @@ test("v2: retrying an already-reviewed latest revision with no findings requires
   const summary = window.document.querySelector(
     "[data-ghpr-surface='github.pr.conversation.review-summary']"
   );
-  const reviewButton = [...summary.querySelectorAll("button")]
-    .find((button) => button.textContent === "Review latest");
-  assert.ok(reviewButton, "a completed review must still expose the retry action");
+  const reviewButton = summary.querySelector("[aria-label='Configure review']");
+  assert.ok(reviewButton, "a completed review must still expose Configure review");
 
   reviewButton.click();
   window.document
@@ -827,9 +1072,8 @@ test("v2: Conversation Review Summary renders inline without a native comment or
 
   const summary = window.document.querySelector("[data-ghpr-surface='github.pr.conversation.review-summary']");
   assert.ok(summary, "Conversation Review Summary surface must mount");
-  assert.match(summary.textContent, /Prefer next\(\) over legacy\(\)/);
-  assert.match(summary.textContent, /ghpr-bot/);
-  assert.match(summary.textContent, /Reviewed revision/);
+  assert.match(summary.textContent, /Reviewers/);
+  assert.match(summary.textContent, /Review details/);
   assert.equal(
     [...summary.querySelectorAll("button")].some((button) => /Dismiss|Open in editor/.test(button.textContent)),
     false,
@@ -842,9 +1086,8 @@ test("v2: Conversation Review Summary renders inline without a native comment or
   assert.equal(new URLSearchParams(window.location.search).get("ghpr_finding"), "finding_1");
   assert.equal(new URLSearchParams(window.location.search).get("path"), "src/index.ts");
   assert.equal(new URLSearchParams(window.location.search).get("line"), "10");
-  const checksTimelineItem = window.document.querySelector("[role='region'][aria-label='Checks']");
-  assert.equal(summary.previousElementSibling, checksTimelineItem, "summary must follow the native Checks timeline item");
-  assert.match(summary.nextElementSibling?.textContent || "", /left a comment/, "later native comments must keep their order");
+  assert.equal(summary.parentElement?.id, "partial-discussion-sidebar", "review belongs in the native sidebar");
+  assert.ok(window.document.querySelector(".sidebar-reviewers"), "native reviewers remain untouched");
 
   const mergeBox = window.document.querySelector("[data-testid='merge-box']");
   assert.ok(mergeBox, "native merge box must remain untouched");
@@ -858,6 +1101,12 @@ test("v2: Review Summary copies a single finding and the whole review", async ()
   const pathname = "/acme/widgets/pull/42";
   const window = await createWindow("conversation.html", pathname);
   const snapshot = makeSnapshot(pathname, {
+    runs: [{
+      skill_id: "pr.review",
+      status: "completed",
+      completed_at: "2026-08-24T00:01:00Z",
+      result: { code_review: { head_sha: "b".repeat(40), overview_markdown: "Two findings.", findings: [{ id: "finding_1" }, { id: "finding_2" }] } }
+    }],
     findings: [
       persistedReviewFinding(),
       persistedReviewFinding({
@@ -876,11 +1125,9 @@ test("v2: Review Summary copies a single finding and the whole review", async ()
 
   const summary = window.document.querySelector("[data-ghpr-surface='github.pr.conversation.review-summary']");
   const copyButtons = [...summary.querySelectorAll("[data-action-id='copy-finding']")];
-  assert.equal(copyButtons.length, 2, "every review result item must expose its own copy control");
-
+  assert.equal(copyButtons.length, 2, "selected review findings are the only copyable findings");
   copyButtons[1].click();
   await settle();
-  assert.equal(gm.clipboard.length, 1);
   assert.match(gm.clipboard[0], /^\[Warning\] Guard the null branch$/m);
   assert.match(gm.clipboard[0], /src\/cache\.ts · L20 · reviewed bbbbbbb/);
   assert.match(gm.clipboard[0], /A null entry reaches the caller unchecked\./);
@@ -904,18 +1151,23 @@ test("v2: Review Summary copies a single finding and the whole review", async ()
   const everything = gm.clipboard[1];
   assert.match(everything, /^ghpr Review Summary$/m);
   assert.match(everything, /^2 findings · 2 files$/m);
-  assert.match(everything, /^1\. \[Warning\] Prefer next\(\) over legacy\(\)$/m);
-  assert.match(everything, /^2\. \[Warning\] Guard the null branch$/m);
+  assert.match(everything, /Guard the null branch/);
 
   app.stop();
   window.close();
 });
 
-test("v2: compact operation card keeps primary PR actions available without restoring the legacy panel", async () => {
+test("v2: Conversation keeps actions in Annotations and the review sidebar without a duplicate operation card", async () => {
   const pathname = "/acme/widgets/pull/42";
   const window = await createWindow("conversation.html", pathname);
   const snapshot = await findingsFixtureSnapshot(pathname);
   snapshot.skills = [{
+    id: "pr.review",
+    display_name: "Review PR",
+    agents: ["codex"],
+    default_agent: "codex",
+    is_runnable: true
+  }, {
     id: "team.review.release-risk",
     version: "1.0.0",
     display_name: "Check release risk",
@@ -1003,61 +1255,57 @@ test("v2: compact operation card keeps primary PR actions available without rest
   await app.start();
   await settle();
 
-  const cardHost = window.document.querySelector("#ghpr-operation-card");
-  assert.ok(cardHost, "the compact operation card must mount");
-  assert.ok(cardHost.classList.contains("ghpr-operation-card-sidebar"));
-  assert.match(cardHost.textContent, /Latest revision reviewed/);
-  assert.match(cardHost.textContent, /1 finding · 1 file/);
-  assert.match(cardHost.textContent, /Coding agent · Codex/);
-  assert.match(cardHost.textContent, /Checks failing/);
-
-  const actions = new Map(
-    [...cardHost.querySelectorAll("[data-action-id]")]
-      .map((action) => [action.dataset.actionId, action])
-  );
-  assert.equal(actions.get("review-pr")?.textContent, "Review latest");
-  assert.equal(actions.get("view-findings")?.textContent, "View findings");
-  assert.equal(actions.get("view-failed-checks")?.textContent, "Failed checks (1)");
-  assert.match(
-    actions.get("view-failed-checks")?.title || "",
-    /• lint: The lint step rejected an invalid import\.\n  • eslint exited with code 1/
-  );
-  assert.doesNotMatch(
-    actions.get("view-failed-checks")?.title || "",
-    /obsolete packaging failure/
-  );
-  assert.equal(actions.has("explain-ci-failure"), false, "failed-check actions belong under the check result");
-  assert.equal(actions.has("rerun-failed-ci"), false, "failed-check actions belong under the check result");
-  assert.equal(actions.has("open-app"), false, "the compact card must not keep an Open ghpr-view action");
-  assert.equal(cardHost.querySelector(".ghpr-operation-skill-menu > summary")?.textContent, "Run Skill");
   assert.equal(
-    actions.get("run-skill-team.review.release-risk")?.textContent,
-    "Check release risk"
+    window.document.querySelector("#ghpr-operation-card"),
+    null,
+    "a healthy Conversation page must not mount a second ghpr card"
+  );
+  assert.equal(
+    window.document.querySelectorAll(
+      "[data-ghpr-surface='github.pr.conversation.review-summary']"
+    ).length,
+    1
+  );
+  assert.equal(
+    window.document.querySelector("[data-action-id='review-pr']"),
+    null,
+    "review requests must use the native-style reviewer controls"
   );
   assert.equal(window.document.querySelector("#ghpr-github-root"), null);
   assert.equal(window.document.querySelector("#ghpr-header-entry"), null);
 
-  assert.equal(
-    gm.requests
-      .filter((request) => new URL(request.url).pathname === "/api/v1/actions")
-      .map((request) => JSON.parse(request.data))
-      .some((body) => body.action?.kind === "open_app"),
-    false
-  );
   const reviewSummary = window.document.querySelector(
     "[data-ghpr-surface='github.pr.conversation.review-summary']"
   );
-  const explain = reviewSummary.querySelector("[data-action-id='explain-ci-failure']");
-  const rerun = reviewSummary.querySelector("[data-action-id='rerun-failed-ci']");
-  assert.equal(explain?.textContent, "Explain again");
-  assert.equal(rerun?.textContent, "Re-run 1 failed job");
-  const checksCopy = reviewSummary.querySelector(".ghpr-review-summary-checks-copy");
-  assert.equal(checksCopy?.getAttribute("tabindex"), "0");
-  assert.match(
-    checksCopy?.dataset.hint || "",
-    /• lint: The lint step rejected an invalid import\.\n  • eslint exited with code 1/
+  assert.ok(reviewSummary.querySelector("[aria-label='Configure review']"));
+  const skillMenu = reviewSummary.querySelector(".ghpr-operation-skill-menu");
+  assert.ok(skillMenu, "custom skills must remain available from the review toolbar");
+  const customSkill = skillMenu.querySelector(
+    "[data-action-id='run-skill-team.review.release-risk']"
   );
-  assert.doesNotMatch(checksCopy?.dataset.hint || "", /obsolete packaging failure/);
+  assert.ok(customSkill);
+  customSkill.click();
+  await settle();
+  const customSkillRequest = gm.requests
+    .filter((request) => new URL(request.url).pathname === "/api/v1/actions")
+    .map((request) => JSON.parse(request.data))
+    .find((body) => body.action?.skill_id === "team.review.release-risk");
+  assert.equal(customSkillRequest?.action?.subject?.type, "pull_request_revision");
+  assert.equal(customSkillRequest?.action?.subject?.head_sha, "a".repeat(40));
+
+  const annotations = window.document.querySelector(
+    "[data-ghpr-surface='github.pr.conversation.annotations']"
+  );
+  assert.match(annotations.textContent, /The lint step rejected an invalid import/);
+  assert.doesNotMatch(annotations.textContent, /obsolete packaging failure/);
+  const viewFailedChecks = annotations.querySelector(
+    "[data-action-id='view-failed-checks']"
+  );
+  assert.ok(viewFailedChecks, "failed checks must be reachable from Annotations");
+  const explain = annotations.querySelector("[data-action-id='explain-ci-failure']");
+  const rerun = annotations.querySelector("[data-action-id='rerun-failed-ci']");
+  assert.ok(explain);
+  assert.ok(rerun);
   explain.click();
   assert.equal(
     gm.requests.some((request) =>
@@ -1070,7 +1318,6 @@ test("v2: compact operation card keeps primary PR actions available without rest
   const explainDialog = window.document.querySelector(
     "[data-ghpr-surface='github.pr.review-launch-dialog']"
   );
-  assert.match(explainDialog.textContent, /Explain failed checks/);
   assert.equal(explainDialog.querySelector("#ghpr-review-runtime").value, "codex");
   assert.equal(explainDialog.querySelector("#ghpr-review-model").value, "gpt-5.6");
   assert.equal(explainDialog.querySelector("#ghpr-review-reasoning").value, "high");
@@ -1090,21 +1337,15 @@ test("v2: compact operation card keeps primary PR actions available without rest
   assert.equal(explainRequest?.action?.model, "gpt-5.6");
   assert.equal(explainRequest?.action?.reasoning_effort, "high");
   assert.equal(explainRequest?.page?.key, snapshot.page.key);
+
   window.document
     .querySelector("[data-action-id='rerun-failed-ci']")
     .click();
   const rerunDialog = window.document.querySelector(
     "[data-ghpr-surface='github.pr.review-launch-dialog']"
   );
-  assert.match(rerunDialog.textContent, /Re-run failed jobs/);
-  assert.equal(
-    rerunDialog.querySelector("[data-action-id='explain-before-rerun']")?.textContent,
-    "Explain CI Failure"
-  );
-  assert.equal(
-    rerunDialog.querySelector("[data-action-id='rerun-anyway']")?.textContent,
-    "Re-run anyway"
-  );
+  assert.ok(rerunDialog.querySelector("[data-action-id='explain-before-rerun']"));
+  assert.ok(rerunDialog.querySelector("[data-action-id='rerun-anyway']"));
   rerunDialog.querySelector("[data-action-id='rerun-anyway']").click();
   await settle();
   assert.equal(
@@ -1115,24 +1356,30 @@ test("v2: compact operation card keeps primary PR actions available without rest
     true
   );
 
-  actions.get("view-failed-checks").click();
+  const reviewDetails = reviewSummary.querySelector(
+    ".ghpr-review-summary-details > button[aria-expanded]"
+  );
+  assert.ok(reviewDetails, "the selected review must expose its navigation actions");
+  reviewDetails.click();
+  const viewFiles = reviewSummary.querySelector("[data-action-id='view-files']");
+  assert.ok(viewFiles, "Review details must navigate to the selected finding");
+
+  viewFailedChecks.click();
+  assert.equal(window.location.pathname, "/acme/widgets/pull/42/checks");
   assert.equal(new URLSearchParams(window.location.search).get("ghpr_check"), "first");
 
-  actions.get("run-skill-team.review.release-risk").click();
-  await settle();
-  const customSkillRequest = gm.requests
-    .filter((request) => new URL(request.url).pathname === "/api/v1/actions")
-    .map((request) => JSON.parse(request.data))
-    .find((body) => body.action?.skill_id === "team.review.release-risk");
-  assert.equal(customSkillRequest?.action?.subject?.type, "pull_request_revision");
-  assert.equal(customSkillRequest?.action?.subject?.head_sha, "a".repeat(40));
-  assert.equal(window.location.pathname, "/acme/widgets/pull/42/checks");
+  viewFiles.click();
+  assert.equal(window.location.pathname, "/acme/widgets/pull/42/changes");
+  assert.equal(
+    new URLSearchParams(window.location.search).get("ghpr_finding"),
+    "finding_1"
+  );
 
   app.stop();
   window.close();
 });
 
-test("v2: the review summary card carries the failed-CI rerun above its own header", async () => {
+test("v2: Annotations keeps failed-CI rerun available without review permission", async () => {
   const pathname = "/acme/widgets/pull/42";
   const window = await createWindow("conversation.html", pathname);
   const snapshot = makeSnapshot(pathname, {
@@ -1148,8 +1395,6 @@ test("v2: the review summary card carries the failed-CI rerun above its own head
   window.confirm = () => {
     throw new Error("The rerun modal must replace browser confirm dialogs.");
   };
-  // The rerun reports GitHub's own check result, so it must not depend on the
-  // Skill-running scope the ghpr review actions need.
   const gm = new FakeGM({
     snapshot,
     clientScopes: CLIENT.requested_scopes.filter((scope) => scope !== "skill:run")
@@ -1158,33 +1403,17 @@ test("v2: the review summary card carries the failed-CI rerun above its own head
   await app.start();
   await settle();
 
-  const card = window.document.querySelector(
-    "[data-ghpr-surface='github.pr.conversation.review-summary']"
+  assert.equal(window.document.querySelector("#ghpr-operation-card"), null);
+  const annotations = window.document.querySelector(
+    "[data-ghpr-surface='github.pr.conversation.annotations']"
   );
-  const checksRow = card.querySelector(".ghpr-review-summary-checks");
-  assert.ok(checksRow, "a failing PR must expose its rerun inside the review card");
-  assert.equal(
-    checksRow,
-    card.firstElementChild,
-    "the rerun row leads the card, above the ghpr identity"
-  );
-  assert.equal(
-    checksRow.nextElementSibling?.className,
-    "ghpr-review-summary-identity",
-    "a divider row separates the rerun from the review summary"
-  );
-  assert.match(checksRow.textContent, /2 failed checks/);
-  const rerun = checksRow.querySelector("[data-action-id='rerun-failed-ci']");
-  assert.equal(rerun.textContent, "Re-run 2 failed jobs");
-  assert.equal(
-    rerun.className,
-    "ghpr-action-button ghpr-review-summary-check-action ghpr-review-summary-rerun",
-    "the rerun uses the compact review-card action treatment"
-  );
+  assert.match(annotations.textContent, /2 failed checks/);
+  const rerun = annotations.querySelector("[data-action-id='rerun-failed-ci']");
+  assert.ok(rerun, "GitHub failed jobs can be rerun without skill:run");
   assert.equal(
     window.document.querySelector("[data-ghpr-surface='github.pr.conversation.checks.actions']"),
     null,
-    "the rerun no longer mounts as its own surface"
+    "failed-check actions belong in Annotations"
   );
 
   rerun.click();
@@ -1211,7 +1440,7 @@ test("v2: the review summary card carries the failed-CI rerun above its own head
   window.close();
 });
 
-test("v2: a passing PR keeps the review summary card free of a rerun row", async () => {
+test("v2: a passing PR exposes no failed-check actions", async () => {
   const pathname = "/acme/widgets/pull/42";
   const window = await createWindow("conversation.html", pathname);
   const gm = new FakeGM({ snapshot: makeSnapshot(pathname) });
@@ -1219,11 +1448,23 @@ test("v2: a passing PR keeps the review summary card free of a rerun row", async
   await app.start();
   await settle();
 
-  const card = window.document.querySelector(
-    "[data-ghpr-surface='github.pr.conversation.review-summary']"
+  assert.ok(
+    window.document.querySelector(
+      "[data-ghpr-surface='github.pr.conversation.review-summary']"
+    )
   );
-  assert.ok(card);
-  assert.equal(card.querySelector(".ghpr-review-summary-checks"), null);
+  assert.equal(
+    window.document.querySelector("[data-action-id='view-failed-checks']"),
+    null
+  );
+  assert.equal(
+    window.document.querySelector("[data-action-id='explain-ci-failure']"),
+    null
+  );
+  assert.equal(
+    window.document.querySelector("[data-action-id='rerun-failed-ci']"),
+    null
+  );
 
   app.stop();
   window.close();
@@ -1250,11 +1491,19 @@ test("v2: failed-check actions require an actual failed check result", async () 
   await app.start();
   await settle();
 
-  const card = window.document.querySelector("#ghpr-operation-card");
-  assert.ok(card);
-  assert.equal(card.querySelector("[data-action-id='view-failed-checks']"), null);
-  assert.equal(card.querySelector("[data-action-id='explain-ci-failure']"), null);
-  assert.equal(card.querySelector("[data-action-id='rerun-failed-ci']"), null);
+  assert.equal(window.document.querySelector("#ghpr-operation-card"), null);
+  assert.equal(
+    window.document.querySelector("[data-action-id='view-failed-checks']"),
+    null
+  );
+  assert.equal(
+    window.document.querySelector("[data-action-id='explain-ci-failure']"),
+    null
+  );
+  assert.equal(
+    window.document.querySelector("[data-action-id='rerun-failed-ci']"),
+    null
+  );
 
   app.stop();
   window.close();
@@ -1285,14 +1534,14 @@ test("v2: failed-check actions reflect backend run and permission state", async 
   await app.start();
   await settle();
 
-  const card = window.document.querySelector("#ghpr-operation-card");
-  const explainAction = () => window.document.querySelector(
-    "[data-ghpr-surface='github.pr.conversation.review-summary'] [data-action-id='explain-ci-failure']"
+  const annotations = () => window.document.querySelector(
+    "[data-ghpr-surface='github.pr.conversation.annotations']"
   );
-  assert.equal(
-    card.querySelector("[data-action-id='view-failed-checks']")?.textContent,
-    "Failed checks (2)"
+  const explainAction = () => annotations()?.querySelector(
+    "[data-action-id='explain-ci-failure']"
   );
+  assert.equal(window.document.querySelector("#ghpr-operation-card"), null);
+  assert.ok(annotations()?.querySelector("[data-action-id='view-failed-checks']"));
   assert.equal(
     explainAction()?.textContent,
     "Explaining…"
@@ -1345,21 +1594,18 @@ test("v2: failed-check actions reflect backend run and permission state", async 
   });
   await restrictedApp.start();
   await settle();
-  const restrictedCard = restrictedWindow.document.querySelector("#ghpr-operation-card");
   const restrictedSummary = restrictedWindow.document.querySelector(
-    "[data-ghpr-surface='github.pr.conversation.review-summary']"
+    "[data-ghpr-surface='github.pr.conversation.annotations']"
   );
+  assert.equal(restrictedWindow.document.querySelector("#ghpr-operation-card"), null);
   assert.equal(restrictedSummary.querySelector("[data-action-id='explain-ci-failure']"), null);
   assert.ok(restrictedSummary.querySelector("[data-action-id='rerun-failed-ci']"));
-  assert.equal(
-    restrictedCard.querySelector("[data-action-id='view-failed-checks']")?.textContent,
-    "Failed checks (2)"
-  );
+  assert.ok(restrictedSummary.querySelector("[data-action-id='view-failed-checks']"));
   restrictedApp.stop();
   restrictedWindow.close();
 });
 
-test("v2: compact operation card exposes review progress without a duplicate run action", async () => {
+test("v2: the review sidebar exposes active progress without a duplicate run action", async () => {
   const pathname = "/acme/widgets/pull/42";
   const window = await createWindow("conversation.html", pathname);
   const snapshot = makeSnapshot(pathname, {
@@ -1370,6 +1616,13 @@ test("v2: compact operation card exposes review progress without a duplicate run
       title: "Fixture PR",
       ci_status: "SUCCESS"
     },
+    skills: [{
+      id: "pr.review",
+      display_name: "Review PR",
+      agents: ["claude_code"],
+      default_agent: "claude_code",
+      is_runnable: true
+    }],
     runs: [{
       id: "run_review_active",
       skill_id: "pr.review",
@@ -1417,16 +1670,17 @@ test("v2: compact operation card exposes review progress without a duplicate run
   await app.start();
   await settle();
 
-  const card = window.document.querySelector("#ghpr-operation-card .ghpr-operation-card");
-  assert.ok(card);
-  assert.equal(card.dataset.state, "running");
-  assert.match(card.textContent, /Reviewing the exact latest revision/);
-  assert.match(card.textContent, /Coding agent · Claude Code/);
-  const review = card.querySelector("[data-action-id='review-pr']");
-  assert.equal(review?.textContent, "Reviewing…");
-  assert.equal(review?.disabled, true);
-  const progress = card.querySelector(".ghpr-operation-progress");
-  assert.ok(progress, "an active review must expose its execution log in the page");
+  assert.equal(window.document.querySelector("#ghpr-operation-card"), null);
+  const summary = window.document.querySelector(
+    "[data-ghpr-surface='github.pr.conversation.review-summary']"
+  );
+  assert.match(summary.textContent, /Coding agent · Claude Code/);
+  assert.equal(summary.querySelector("[data-action-id='review-pr']"), null);
+  const request = summary.querySelector("[data-action-id='request-review-claude_code']");
+  assert.ok(request);
+  assert.equal(request.disabled, true, "an active review must disable duplicate requests");
+  const progress = summary.querySelector(".ghpr-operation-progress");
+  assert.ok(progress, "an active review must expose its execution log in the sidebar");
   assert.equal(progress.open, false, "the review log must default to collapsed");
   assert.deepEqual(
     [...progress.querySelectorAll(".ghpr-operation-progress-line code")].map((line) => line.textContent),
@@ -1451,7 +1705,10 @@ test("v2: compact operation card exposes review progress without a duplicate run
   assert.equal(progress.open, true);
   app.render();
   assert.equal(
-    window.document.querySelector(".ghpr-operation-progress")?.open,
+    window.document
+      .querySelector("[data-ghpr-surface='github.pr.conversation.review-summary']")
+      ?.querySelector(".ghpr-operation-progress")
+      ?.open,
     true,
     "refreshing the active run must preserve the user's expansion choice"
   );
@@ -1518,9 +1775,16 @@ test("v2: a failed page snapshot stays visible and can be retried in place", asy
   card.querySelector("[data-action-id='retry']").click();
   await settle();
 
-  card = window.document.querySelector("#ghpr-operation-card .ghpr-operation-card");
-  assert.match(card.textContent, /Ready to review this revision/);
-  assert.equal(card.querySelector("[data-action-id='retry']"), null);
+  assert.equal(
+    window.document.querySelector("#ghpr-operation-card"),
+    null,
+    "successful recovery must replace the temporary recovery card with the sidebar"
+  );
+  assert.ok(
+    window.document.querySelector(
+      "[data-ghpr-surface='github.pr.conversation.review-summary']"
+    )
+  );
 
   app.stop();
   window.close();
@@ -2023,6 +2287,47 @@ test("v2: the reviewed revision's Files changed page anchors outdated findings i
   await settle();
   assert.equal(window.location.href, "https://github.com/acme/widgets/pull/42/files");
 
+  app.stop();
+  window.close();
+});
+
+test("v2: reviewer rows preserve current completed results after failed attempts", async () => {
+  const pathname = "/acme/widgets/pull/42";
+  const window = await createWindow("conversation.html", pathname);
+  const currentHead = "a".repeat(40);
+  const oldHead = "b".repeat(40);
+  const snapshot = makeSnapshot(pathname, {
+    current_revision_subject: {
+      type: "pull_request_revision", repository: "acme/widgets", pr_number: 42,
+      base_sha: "c".repeat(40), head_sha: currentHead
+    },
+    skills: [{ id: "pr.review", agents: ["codex", "claude_code"], is_runnable: true }],
+    runs: [
+      { id: "failed-codex", skill_id: "pr.review", agent: "codex", status: "failed", completed_at: "2026-08-24T00:03:00Z" },
+      { id: "current-codex", skill_id: "pr.review", agent: "codex", status: "completed", completed_at: "2026-08-24T00:02:00Z", result: { code_review: { reviewed_head_sha: currentHead, findings: [{ id: "finding_1" }], overview_markdown: "Current result." } } },
+      { id: "old-claude", skill_id: "pr.review", agent: "claude_code", status: "completed", completed_at: "2026-08-24T00:01:00Z", result: { code_review: { reviewed_head_sha: oldHead, findings: [{ id: "finding_1", title: "Old title", summary: "Old summary", details: "Old details", quoted_code: "old snippet" }], overview_markdown: "Old result." } } }
+    ],
+    findings: [persistedReviewFinding({ id: "finding_1" })]
+  });
+  const gm = new FakeGM({ snapshot });
+  const app = createGhprApp({ window, document: window.document, gm });
+  await app.start();
+  await settle();
+  const summary = window.document.querySelector("[data-ghpr-surface='github.pr.conversation.review-summary']");
+  const codex = summary.querySelector("[data-action-id='request-review-codex']")?.parentElement;
+  assert.match(codex?.textContent || "", /Failed/);
+  const result = codex?.querySelector("[aria-label='Open Codex review results']");
+  assert.ok(result, "completed Codex history remains selectable after a failed retry");
+  result.click();
+  await settle();
+  let mountedSummary = window.document.querySelector("[data-ghpr-surface='github.pr.conversation.review-summary']");
+  assert.match(mountedSummary.textContent, /Current result/);
+  const claude = mountedSummary.querySelector("[aria-label='Open Claude Code review results']");
+  claude.click();
+  await settle();
+  mountedSummary = window.document.querySelector("[data-ghpr-surface='github.pr.conversation.review-summary']");
+  assert.match(mountedSummary.textContent, /Old result/);
+  assert.match(mountedSummary.textContent, /Old details/);
   app.stop();
   window.close();
 });
