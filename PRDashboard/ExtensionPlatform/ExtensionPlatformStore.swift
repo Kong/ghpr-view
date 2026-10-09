@@ -142,8 +142,11 @@ final class ExtensionPlatformStore: ObservableObject {
             instanceID = created
         }
         prune()
-    }
+        if normalizeImportedReviews() {
+            touch()
+        }
 
+    }
     var pairedClients: [BrowserClient] {
         state.clients.values.sorted {
             if $0.isRevoked != $1.isRevoked {
@@ -552,13 +555,70 @@ final class ExtensionPlatformStore: ObservableObject {
         touch()
     }
 
-    func save(run: SkillRun, findings: [SkillFinding]) {
+    func replaceImportedReview(run: SkillRun, findings: [SkillFinding]) {
+        guard let key = importedReviewKey(for: run) else { return }
+        let oldRuns = state.runs.values.filter { importedReviewKey(for: $0) == key }
+        let oldRunIDs = Set(oldRuns.map(\.id))
+        let ownedFindingIDs = Set(oldRuns.flatMap {
+            $0.result?.codeReview?.findings.map(\.id) ?? []
+        })
+        state.runs = state.runs.filter { !oldRunIDs.contains($0.key) }
+        removeUnreferencedFindings(ownedFindingIDs)
         state.runs[run.id] = run
         if state.findings == nil { state.findings = [:] }
         for finding in findings {
             state.findings?[finding.id] = finding
         }
         touch()
+    }
+
+    private func importedReviewKey(for run: SkillRun) -> String? {
+        guard run.skillID == SkillRuntime.reviewPRSkillID,
+              run.requestedByClientID == "mcp-ghpr",
+              run.status == .completed,
+              run.result?.codeReview != nil,
+              case .pullRequestRevision(let subject) = run.subject else {
+            return nil
+        }
+        return "\(subject.repository.lowercased())#\(subject.prNumber)@\(subject.headSHA.lowercased())"
+    }
+
+    @discardableResult
+    private func normalizeImportedReviews() -> Bool {
+        let groups = Dictionary(
+            grouping: state.runs.values.compactMap { run in
+                importedReviewKey(for: run).map { ($0, run) }
+            },
+            by: \.0
+        )
+        let duplicateGroups = groups.values.filter { $0.count > 1 }
+        let losers = duplicateGroups.flatMap { group in
+            let sorted = group.sorted {
+                let lhsDate = $0.1.completedAt ?? $0.1.createdAt
+                let rhsDate = $1.1.completedAt ?? $1.1.createdAt
+                if lhsDate != rhsDate { return lhsDate > rhsDate }
+                return $0.1.id > $1.1.id
+            }
+            return sorted.dropFirst()
+        }
+        guard !losers.isEmpty else { return false }
+        let loserIDs = Set(losers.map { $0.1.id })
+        let ownedFindingIDs = Set(losers.flatMap {
+            $0.1.result?.codeReview?.findings.map(\.id) ?? []
+        })
+        state.runs = state.runs.filter { !loserIDs.contains($0.key) }
+        removeUnreferencedFindings(ownedFindingIDs)
+        return true
+    }
+
+    private func removeUnreferencedFindings(_ candidateIDs: Set<String>) {
+        guard !candidateIDs.isEmpty else { return }
+        let referenced = Set(state.runs.values.flatMap {
+            $0.result?.codeReview?.findings.map(\.id) ?? []
+        })
+        state.findings = state.findings?.filter {
+            !candidateIDs.contains($0.key) || referenced.contains($0.key)
+        }
     }
 
     func run(id: String) -> SkillRun? {

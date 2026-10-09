@@ -822,7 +822,7 @@ final class SkillRuntime: ObservableObject {
             subject: .pullRequestRevision(subject)
         )
 
-        store.save(run: run, findings: persistedFindings)
+        store.replaceImportedReview(run: run, findings: persistedFindings)
 
         return LocalReviewImportResult(
             runID: runID,

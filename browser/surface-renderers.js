@@ -15,6 +15,7 @@
 
   const SURFACE_IDS = Object.freeze({
     conversationReviewSummary: "github.pr.conversation.review-summary",
+    conversationAnnotations: "github.pr.conversation.annotations",
     checksJobTrailing: "github.pr.checks.job.trailing",
     checksSummary: "github.pr.checks.summary",
     checksJobInsight: "github.pr.checks.job.insight",
@@ -154,6 +155,14 @@
       margin: 0;
       padding-left: 18px;
     }
+    .ghpr-ci-summary-actions, .ghpr-ci-summary-jobs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 8px 0;
+    }
+    .ghpr-ci-summary-jobs .ghpr-action-button { white-space: normal; overflow-wrap: anywhere; text-align: left; }
+    .ghpr-ci-summary-jobs [aria-current="true"] { border-color: var(--fgColor-accent, #0969da); font-weight: 600; }
     @media (prefers-color-scheme: dark) {
       .ghpr-ci-summary {
         background: #2d2a12;
@@ -279,40 +288,159 @@
       margin: 12px 0;
       overflow: visible;
     }
+    #partial-discussion-sidebar .ghpr-review-summary-reviewer {
+      display: grid;
+      grid-template-columns: 16px minmax(0, 1fr) auto;
+      column-gap: 8px;
+      row-gap: 2px;
+    }
+    #partial-discussion-sidebar .ghpr-review-summary-agent-avatar { grid-column: 1; grid-row: 1; align-self: start; margin-top: 2px; }
+    #partial-discussion-sidebar .ghpr-review-summary-reviewer-main,
+    #partial-discussion-sidebar .ghpr-review-summary-reviewer-status,
+    #partial-discussion-sidebar .ghpr-review-summary-result-button { grid-column: 2; text-align: left; }
+    #partial-discussion-sidebar .ghpr-review-summary-reviewer > .ghpr-action-button { grid-column: 3; grid-row: 1 / span 3; }
+    #partial-discussion-sidebar .ghpr-review-summary-toolbar { flex-wrap: wrap; }
+    .ghpr-review-summary-detail-actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0; }
+    .ghpr-review-summary-progress { border-top: 1px solid var(--borderColor-muted, #d8dee4); padding: 10px 12px; }
     .ghpr-review-summary-checks {
-      align-items: center;
       border-bottom: 1px solid var(--borderColor-muted, #d8dee4);
-      display: flex;
-      gap: 8px;
-      justify-content: space-between;
       padding: 8px 12px;
       border-radius: 6px 6px 0 0;
     }
+    .ghpr-review-summary-checks > .ghpr-review-summary-section-head,
+    .ghpr-review-summary-checks > .ghpr-review-summary-annotations-actions,
+    .ghpr-review-summary-checks > .ghpr-review-summary-annotations-content {
+      width: 100%;
+    }
     .ghpr-review-summary-checks-copy { color: var(--fgColor-muted, #656d76); }
-    .ghpr-review-summary-checks-copy[data-hint] {
-      cursor: help;
-      outline-offset: 2px;
+    .ghpr-review-summary-section-head,
+    .ghpr-review-summary-reviewers-head {
+      align-items: center;
+      display: flex;
+      gap: 8px;
+      justify-content: space-between;
+    }
+    .ghpr-review-summary-section-toggle {
+      background: transparent;
+      border: 0;
+      color: var(--fgColor-default, #1f2328);
+      font-weight: 600;
+      padding: 0;
+    }
+    .ghpr-review-summary-annotations-content { padding-top: 8px; }
+    .ghpr-review-summary-annotation {
+      border-top: 1px solid var(--borderColor-muted, #d8dee4);
+      padding: 9px 0;
+    }
+    .ghpr-review-summary-annotation-head {
+      align-items: baseline;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .ghpr-review-summary-error-icon {
+      align-items: center;
+      background: var(--fgColor-danger, #cf222e);
+      border-radius: 50%;
+      color: white;
+      display: inline-flex;
+      font-size: 11px;
+      height: 16px;
+      justify-content: center;
+      width: 16px;
+    }
+    .ghpr-review-summary-annotation-reason { flex-basis: 100%; }
+    .ghpr-review-summary-annotation-evidence {
+      color: var(--fgColor-muted, #656d76);
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      margin: 5px 0;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: pre-wrap;
+    }
+    .ghpr-review-summary-annotation-details {
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
+    }
+    .ghpr-review-summary-annotation-toggle {
+      background: transparent;
+      border: 0;
+      color: var(--fgColor-accent, #0969da);
+      padding: 0;
+    }
+    .ghpr-review-summary-checks,
+    .ghpr-review-summary-reviewers,
+    .ghpr-review-summary-details { padding: 10px 12px; }
+    .ghpr-review-summary-annotations-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+    .ghpr-review-summary-reviewer {
+      align-items: center;
+      border-top: 1px solid var(--borderColor-muted, #d8dee4);
+      display: flex;
+      gap: 8px;
+      min-width: 0;
+      padding: 8px 0;
+    }
+    .ghpr-review-summary-reviewer-main {
+      flex: 1;
+      min-width: 0;
+    }
+    .ghpr-review-summary-agent-avatar {
+      align-items: center;
+      background: var(--bgColor-neutral-emphasis, #57606a);
+      border-radius: 4px;
+      color: white;
+      display: inline-flex;
+      flex: 0 0 16px;
+      font-size: 8px;
+      font-weight: 700;
+      height: 16px;
+      width: 16px;
+      justify-content: center;
+      overflow: hidden;
       position: relative;
     }
-    .ghpr-review-summary-checks-copy[data-hint]::after {
-      background: var(--bgColor-emphasis, #25292e);
-      border-radius: 6px;
-      color: var(--fgColor-onEmphasis, #fff);
-      content: attr(data-hint);
-      display: none;
-      font-size: 12px;
-      left: 0;
-      max-width: min(420px, 80vw);
-      padding: 8px 10px;
+    .ghpr-review-summary-agent-avatar-image {
+      border-radius: inherit;
+      height: 100%;
+      inset: 0;
+      object-fit: cover;
       position: absolute;
-      top: calc(100% + 6px);
-      white-space: pre-line;
-      width: max-content;
-      z-index: 1000;
+      width: 100%;
     }
-    .ghpr-review-summary-checks-copy[data-hint]:hover::after,
-    .ghpr-review-summary-checks-copy[data-hint]:focus-visible::after {
+    .ghpr-review-summary-reviewer-main strong,
+    .ghpr-review-summary-model {
       display: block;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .ghpr-review-summary-model {
+      background: transparent;
+      border: 0;
+      color: var(--fgColor-muted, #656d76);
+      padding: 0;
+      text-align: left;
+    }
+    .ghpr-review-summary-reviewer-status { color: var(--fgColor-muted, #656d76); font-size: 12px; }
+    .ghpr-review-summary-empty { color: var(--fgColor-muted, #656d76); padding: 8px 0; }
+    .ghpr-review-summary-result-button {
+      background: transparent;
+      border: 0;
+      color: var(--fgColor-accent, #0969da);
+      font-size: 12px;
+      padding: 2px;
+      white-space: nowrap;
+    }
+    .ghpr-review-summary-agent-avatar { object-fit: cover; }
+    .ghpr-review-summary-effort {
+      background: transparent;
+      border: 0;
+      color: var(--fgColor-muted, #656d76);
+      font-size: 11px;
+      padding: 0;
     }
     .ghpr-review-summary-checks-actions {
       align-items: center;
@@ -1178,6 +1306,7 @@
         type: "button",
         "data-primary": action.primary ? "true" : undefined,
         "data-action-id": action.id,
+        "aria-label": action.ariaLabel,
         title: action.title,
         disabled: action.disabled ? "" : undefined
       }
@@ -1236,7 +1365,7 @@
   }
 
   function renderItemNavigator(document, model = {}) {
-    const position = Math.max(1, Number(model.position) || 1);
+    const position = model.position === 0 ? 0 : Math.max(1, Number(model.position) || 1);
     const total = Math.max(position, Number(model.total) || position);
     const noun = model.noun || "items";
     return h(document, "nav", {
@@ -1356,6 +1485,15 @@
     return details;
   }
 
+  function renderSkillMenu(document, actions) {
+    return h(document, "details", { className: "ghpr-operation-skill-menu" }, [
+      h(document, "summary", { text: "Run Skill" }),
+      h(document, "div", { className: "ghpr-operation-skill-menu-list" },
+        actions.map((action) => renderActionButton(document, action))
+      )
+    ]);
+  }
+
   // model: { state, statusLabel, summary, signals:[{label,tone}], progressLog,
   //          updateAction, primaryAction, skillActions:[], actions:[],
   //          collapsible, collapsed, onToggle }
@@ -1424,12 +1562,7 @@
       }));
     if (model.skillActions?.length) {
       actions.splice(Math.max(actions.length - 1, model.primaryAction ? 1 : 0), 0,
-        h(document, "details", { className: "ghpr-operation-skill-menu" }, [
-          h(document, "summary", { text: "Run Skill" }),
-          h(document, "div", { className: "ghpr-operation-skill-menu-list" },
-            model.skillActions.map((action) => renderActionButton(document, action))
-          )
-        ])
+        renderSkillMenu(document, model.skillActions)
       );
     }
     if (actions.length) {
@@ -1493,19 +1626,32 @@
   }
 
   // --- ci_summary ----------------------------------------------------------
-  // model: { title, reasons: [{label, reason}] }
+  // model: { title, summary, emptyLabel, reasons, jobs, actions, navigation }
   function renderCISummary(document, model = {}) {
     const reasons = (model.reasons || []).filter((item) => item?.reason);
-    return h(document, "section", { className: "ghpr-surface ghpr-ci-summary" }, [
-      h(document, "p", {
-        className: "ghpr-ci-summary-title",
-        text: model.title || "ghpr CI failure summary"
-      }),
-      h(document, "ul", { className: "ghpr-ci-summary-list" }, reasons.map((item) =>
-        h(document, "li", {
-          text: item.label ? `${item.label}: ${item.reason}` : item.reason
+    return h(document, "section", {
+      className: "ghpr-surface ghpr-ci-summary",
+      attrs: { "aria-label": model.title || "ghpr CI summary" }
+    }, [
+      h(document, "p", { className: "ghpr-ci-summary-title", text: model.title || "ghpr CI summary" }),
+      model.summary ? h(document, "p", { text: model.summary }) : null,
+      model.emptyLabel ? h(document, "p", { attrs: { role: "status" }, text: model.emptyLabel }) : null,
+      h(document, "div", { className: "ghpr-ci-summary-actions" },
+        (model.actions || []).map((action) => renderActionButton(document, action))
+      ),
+      model.navigation ? renderItemNavigator(document, model.navigation) : null,
+      h(document, "div", { className: "ghpr-ci-summary-jobs" }, (model.jobs || []).map((job) =>
+        h(document, "button", {
+          className: "ghpr-action-button",
+          text: job.label,
+          attrs: { type: "button", "aria-current": job.selected ? "true" : undefined },
+          onClick: job.onSelect
         })
-      ))
+      )),
+      model.explanationLabel ? h(document, "p", { text: model.explanationLabel }) : null,
+      reasons.length ? h(document, "ul", { className: "ghpr-ci-summary-list" }, reasons.map((item) =>
+        h(document, "li", { text: item.label ? `${item.label}: ${item.reason}` : item.reason })
+      )) : null
     ]);
   }
 
@@ -2001,17 +2147,22 @@
   //   onOpenInFiles, onUpdate, updateLabel, onCopyAll (copies the summary plus every finding)
   // }
   function renderReviewSummary(document, model = {}) {
-    const identity = h(document, "div", { className: "ghpr-review-summary-identity" }, [
-      h(document, "span", { className: "ghpr-review-summary-avatar", text: "gh", attrs: { "aria-hidden": "true" } }),
-      h(document, "strong", { text: "ghpr-bot" }),
-      h(document, "span", { className: "ghpr-review-summary-bot", text: "bot" }),
-      h(document, "span", { className: "ghpr-review-summary-time", text: "reviewed this revision" })
-    ]);
     const title = h(document, "div", { className: "ghpr-review-summary-title" }, [
-      h(document, "strong", { text: "ghpr Review Summary" }),
+      h(document, "strong", { text: "ghpr" }),
       h(document, "span", { className: "ghpr-beta-pill", text: "Beta" })
     ]);
     const toolbar = [title];
+    const reviewActions = (model.reviewActions || []).map((action) => renderActionButton(document, action));
+    if (model.skillActions?.length) toolbar.push(renderSkillMenu(document, model.skillActions));
+    if (typeof model.onOpenInFiles === "function") {
+      reviewActions.push(renderActionButton(document, { id: "view-files", label: "View in Files changed", onSelect: model.onOpenInFiles }));
+    }
+    if (typeof model.onCopyAll === "function") {
+      reviewActions.push(renderCopyButton(document, {
+        id: "copy-all", label: model.copyAllLabel || "Copy all",
+        ariaLabel: "Copy the review summary and every finding", onCopy: model.onCopyAll
+      }));
+    }
     if (typeof model.onUpdate === "function") {
       toolbar.push(renderActionButton(document, {
         id: "update-userscript",
@@ -2019,87 +2170,173 @@
         onSelect: model.onUpdate
       }));
     }
-    if (typeof model.onOpenInFiles === "function") {
-      toolbar.push(renderActionButton(document, {
-        id: "view-files",
-        label: "View in Files changed",
-        onSelect: model.onOpenInFiles
-      }));
-    }
-    if (typeof model.onCopyAll === "function") {
-      toolbar.push(renderCopyButton(document, {
-        id: "copy-all",
-        label: model.copyAllLabel || "Copy all",
-        className: "ghpr-action-button",
-        ariaLabel: "Copy the review summary and every finding",
-        onCopy: model.onCopyAll
-      }));
-    }
-    if (typeof model.onReview === "function") {
-      toolbar.push(renderActionButton(document, {
-        id: "review-pr",
-        label: model.reviewLabel || "Review PR",
-        disabled: Boolean(model.reviewDisabled),
-        onSelect: model.onReview
-      }));
-    }
-    const revisionText = model.revisionText || (model.isLatest
-      ? `Reviewed revision ${model.reviewedShortSHA || ""} · latest`
-      : `Reviewed revision ${model.reviewedShortSHA || ""}`);
-    const meta = h(document, "div", { className: "ghpr-review-summary-meta" }, [
-      h(document, "span", { text: revisionText }),
-      h(document, "span", {
-        text: `${model.findingCount || 0} findings · ${model.fileCount || 0} files`
-      })
-    ]);
-
-    const findingsList = h(document, "div", { className: "ghpr-review-summary-findings" });
-    const findings = model.findings || [];
-    findings.forEach((finding, index) => {
-      if (index === 0) {
-        findingsList.append(renderReviewFinding(document, { ...finding, expanded: true, summaryMode: true }));
-      } else {
-        findingsList.append(renderReviewFindingPreview(document, finding));
-      }
-    });
-
     const checksActions = model.checksActions;
     const checkButtons = Array.isArray(checksActions?.actions)
-      ? checksActions.actions
-          .filter((action) => typeof action?.onSelect === "function")
-          .map((action) => renderActionButton(document, {
-            ...action,
-            className: [
-              "ghpr-review-summary-check-action",
-              action.className
-            ].filter(Boolean).join(" ")
-          }))
-      : [];
-    const checksRow = checksActions && checkButtons.length
+      ? checksActions.actions.filter((action) => typeof action?.onSelect === "function").map((action) =>
+        renderActionButton(document, {
+          ...action,
+          className: ["ghpr-review-summary-check-action", action.className].filter(Boolean).join(" ")
+        })
+      ) : [];
+    const annotations = Array.isArray(checksActions?.annotations) ? checksActions.annotations : [];
+    const annotationsOpen = checksActions?.open !== false;
+    const annotationContentID = "ghpr-review-summary-annotations";
+    const annotationsToggle = h(document, "button", {
+      className: "ghpr-review-summary-section-toggle",
+      text: `${annotationsOpen ? "⌄" : "›"} Annotations`,
+      attrs: {
+        type: "button",
+        "aria-expanded": annotationsOpen ? "true" : "false",
+        "aria-controls": annotationContentID
+      }
+    });
+    annotationsToggle.addEventListener("click", () => checksActions?.onToggle?.());
+    const annotationBody = h(document, "div", {
+      className: "ghpr-review-summary-annotations-body",
+      attrs: { id: annotationContentID }
+    });
+    if (!annotations.length && checksActions?.emptyLabel) {
+      annotationBody.append(h(document, "div", { className: "ghpr-review-summary-empty", text: checksActions.emptyLabel }));
+    }
+    annotations.forEach((annotation) => {
+      const expanded = Boolean(annotation.expanded);
+      const evidence = Array.isArray(annotation.evidence) ? annotation.evidence : [];
+      const row = h(document, "div", { className: "ghpr-review-summary-annotation" }, [
+        h(document, "div", { className: "ghpr-review-summary-annotation-head" }, [
+          h(document, "span", { className: "ghpr-review-summary-error-icon", text: "!" }),
+          h(document, "strong", { text: annotation.label || "CI failure explanation" }),
+          h(document, "span", { className: "ghpr-review-summary-annotation-reason", text: annotation.reason || "" })
+        ]),
+        evidence.length ? h(document, "div", {
+          className: "ghpr-review-summary-annotation-evidence",
+          text: expanded ? evidence.join("\n") : evidence[0]
+        }) : null
+      ]);
+      const details = h(document, "div", { className: "ghpr-review-summary-annotation-details" });
+      if (expanded) {
+        details.append(h(document, "div", { text: annotation.reason || "" }));
+        if (annotation.suggestedAction) details.append(h(document, "div", { text: `Suggested action: ${annotation.suggestedAction}` }));
+        if (evidence.length > 1) details.append(h(document, "div", { text: evidence.slice(1).join("\n") }));
+        if (typeof annotation.onViewFullResult === "function") {
+          details.append(renderActionButton(document, {
+            id: `view-annotation-${annotation.key}`,
+            label: "View full result",
+            onSelect: annotation.onViewFullResult
+          }));
+        }
+      }
+      const toggle = h(document, "button", {
+        className: "ghpr-review-summary-annotation-toggle",
+        text: expanded ? "Show less" : "Show more",
+        attrs: { type: "button", "aria-expanded": expanded ? "true" : "false" }
+      });
+      toggle.addEventListener("click", () => annotation.onToggle?.());
+      row.append(toggle, details);
+      annotationBody.append(row);
+    });
+    const checksRow = checksActions && (checkButtons.length || annotations.length || checksActions.emptyLabel)
       ? h(document, "div", { className: "ghpr-review-summary-checks" }, [
+        h(document, "div", { className: "ghpr-review-summary-section-head" }, [
+          annotationsToggle,
           h(document, "span", {
             className: "ghpr-review-summary-checks-copy",
-            text: checksActions.summary || "",
-            attrs: {
-              tabindex: checksActions.hint ? "0" : undefined,
-              "data-hint": checksActions.hint || undefined,
-              "aria-label": checksActions.hint
-                ? `${checksActions.summary || ""}. ${checksActions.hint.replace(/\n/g, " ")}`
-                : undefined
-            }
-          }),
-          h(document, "div", {
-            className: "ghpr-review-summary-checks-actions"
-          }, checkButtons)
-        ])
-      : null;
+            text: `${annotations.length} ${annotations.length === 1 ? "annotation" : "annotations"} · ${checksActions.failedCount || 0} failed ${(checksActions.failedCount || 0) === 1 ? "check" : "checks"}`
+          })
+        ]),
+        h(document, "div", { className: "ghpr-review-summary-annotations-actions" }, checkButtons),
+        h(document, "div", { className: "ghpr-review-summary-annotations-content", attrs: { hidden: !annotationsOpen } }, [annotationBody])
+      ]) : null;
 
+    const reviewers = Array.isArray(model.reviewers) ? model.reviewers : [];
+    const reviewerRows = reviewers.length ? reviewers.map((reviewer) => {
+      const avatar = h(document, "span", {
+        className: "ghpr-review-summary-agent-avatar",
+        text: reviewer.avatar || "O",
+        attrs: { "aria-hidden": "true" }
+      });
+      if (reviewer.avatarURL) {
+        const image = h(document, "img", {
+          className: "ghpr-review-summary-agent-avatar-image",
+          attrs: { src: reviewer.avatarURL, alt: `${reviewer.label} official avatar`, loading: "lazy" }
+        });
+        image.addEventListener("error", () => image.remove());
+        avatar.append(image);
+      }
+      const row = h(document, "div", { className: "ghpr-review-summary-reviewer" }, [
+        avatar,
+        h(document, "div", { className: "ghpr-review-summary-reviewer-main" }, [
+          h(document, "strong", { text: reviewer.label }),
+          h(document, "button", {
+            className: "ghpr-review-summary-model",
+            text: reviewer.modelLabel || "Runtime default",
+            attrs: { type: "button", "aria-haspopup": "dialog" }
+          }),
+          h(document, "button", {
+            className: "ghpr-review-summary-effort",
+            text: `Effort: ${reviewer.effortLabel || "Runtime default"}`,
+            attrs: { type: "button", "aria-haspopup": "dialog" }
+          })
+        ]),
+        reviewer.resultLabel ? h(document, "button", {
+          className: "ghpr-review-summary-result-button",
+          text: reviewer.resultLabel,
+          attrs: { type: "button", "aria-label": `Open ${reviewer.label} review results` }
+        }) : null,
+        h(document, "span", { className: "ghpr-review-summary-reviewer-status", text: reviewer.statusLabel || "" }),
+        renderActionButton(document, {
+          id: `request-review-${reviewer.id}`,
+          label: reviewer.requestLabel || "Request",
+          disabled: reviewer.requestDisabled,
+          title: reviewer.disabledReason,
+          onSelect: reviewer.onRequest
+        })
+      ]);
+      const modelButton = row.querySelector(".ghpr-review-summary-model");
+      row.querySelector(".ghpr-review-summary-result-button")?.addEventListener("click", reviewer.onSelectResult);
+      row.querySelector(".ghpr-review-summary-effort")?.addEventListener("click", reviewer.onConfigure);
+      modelButton?.addEventListener("click", reviewer.onConfigure);
+      row.addEventListener("click", (event) => {
+        if (event.target.closest("button")) return;
+        reviewer.onSelectResult?.();
+      });
+      return row;
+    }) : [h(document, "div", { className: "ghpr-review-summary-empty", text: "No review agents available." })];
+    const reviewersSection = h(document, "div", { className: "ghpr-review-summary-reviewers" }, [
+      h(document, "div", { className: "ghpr-review-summary-reviewers-head" }, [
+        h(document, "strong", { text: "Reviewers" }),
+        renderActionButton(document, { id: "configure-review", label: "⚙", ariaLabel: "Configure review", onSelect: model.onConfigureReview })
+      ]),
+      ...reviewerRows
+    ]);
+    const selected = model.selectedReview;
+    const details = selected || reviewActions.length ? h(document, "div", { className: "ghpr-review-summary-details" }, [
+      h(document, "button", {
+        className: "ghpr-review-summary-section-toggle",
+        text: `${model.reviewOpen ? "⌄" : "›"} Review details`,
+        attrs: { type: "button", "aria-expanded": model.reviewOpen ? "true" : "false" }
+      }),
+      h(document, "div", { attrs: { hidden: !model.reviewOpen } }, [
+        h(document, "div", { className: "ghpr-review-summary-detail-actions" }, reviewActions),
+        h(document, "div", { className: "ghpr-review-summary-meta", text: selected?.meta || "" }),
+        h(document, "div", { className: "ghpr-review-summary-overview", text: selected?.overview || "" }),
+        ...(selected?.findings || []).map((finding) => renderReviewFinding(document, { ...finding, summaryMode: true }))
+      ])
+    ]) : null;
+    const reviewToggle = details?.querySelector("button");
+    reviewToggle?.addEventListener("click", () => {
+      const content = details?.children[1];
+      if (content) content.hidden = !content.hidden;
+      model.onToggleReview?.();
+    });
     return h(document, "div", { className: "ghpr-surface ghpr-review-summary" }, [
-      checksRow,
-      identity,
       h(document, "div", { className: "ghpr-review-summary-toolbar" }, toolbar),
-      meta,
-      findingsList
+      checksRow,
+      model.annotationsOnly ? null : reviewersSection,
+      model.progressLog ? h(document, "div", { className: "ghpr-review-summary-progress" }, [
+        h(document, "div", { className: "ghpr-review-summary-meta", text: model.progressLabel || "" }),
+        renderProgressLog(document, model.progressLog)
+      ]) : null,
+      details
     ]);
   }
 

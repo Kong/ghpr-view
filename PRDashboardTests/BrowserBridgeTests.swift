@@ -3343,6 +3343,43 @@ final class BrowserBridgeTests: XCTestCase {
         XCTAssertEqual(store.allFindings.count, findingCountAfterFirst)
     }
 
+    func testImportReviewReplacesDifferentPayloadForSameHead() throws {
+        let store = ExtensionPlatformStore(storageURL: nil)
+        let runtime = SkillRuntime(store: store, installedSkillsRootURL: temporaryDirectory())
+        func payload(engine: String, title: String) -> LocalReviewImportPayload {
+            LocalReviewImportPayload(
+                baseSHA: String(repeating: "b", count: 40),
+                headSHA: String(repeating: "a", count: 40),
+                engine: engine,
+                overviewMarkdown: title,
+                findings: [
+                    LocalReviewImportFinding(
+                        file: "Sources/Worker.swift", startLine: 18, endLine: 18, side: .right,
+                        title: title, summary: "Summary", why: nil, suggestedFix: nil, background: nil,
+                        quotedCode: nil, severity: .error, confidence: 1, category: "correctness"
+                    )
+                ]
+            )
+        }
+        let first = try runtime.importReview(
+            repository: "Owner/Repo", number: 42,
+            payload: payload(engine: "claude-code", title: "First"),
+            now: Date(timeIntervalSince1970: 1_775_000_000)
+        )
+        let second = try runtime.importReview(
+            repository: "owner/repo", number: 42,
+            payload: payload(engine: "codex", title: "Second"),
+            now: Date(timeIntervalSince1970: 1_775_000_100)
+        )
+        XCTAssertFalse(second.alreadyImported)
+        XCTAssertNotEqual(first.runID, second.runID)
+        XCTAssertEqual(store.allRuns.count, 1)
+        XCTAssertEqual(store.allFindings.count, 1)
+        XCTAssertEqual(store.run(id: second.runID)?.result?.codeReview?.engine, "codex")
+        XCTAssertEqual(store.run(id: second.runID)?.result?.codeReview?.overviewMarkdown, "Second")
+        XCTAssertFalse(store.allFindings.contains { $0.title == "First" })
+    }
+
     func testImportReviewRejectsInvalidFindingWithoutPartialWrite() {
         let store = ExtensionPlatformStore(storageURL: nil)
         let runtime = SkillRuntime(store: store, installedSkillsRootURL: temporaryDirectory())

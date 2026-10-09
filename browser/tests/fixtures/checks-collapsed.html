@@ -1,0 +1,95 @@
+<!doctype html>
+<html>
+<head><title>Checks · Fixture PR</title></head>
+<body data-ghpr-native-node="">
+  <div data-testid="issue-header" data-ghpr-native-node="">
+    <div class="gh-header-actions" data-ghpr-native-node=""></div>
+    <div class="gh-header-meta" data-ghpr-native-node="">Open</div>
+    <h1 data-ghpr-native-node="">Make CI history comparison deterministic</h1>
+  </div>
+  <main data-ghpr-native-node="">
+    <section id="checks_tab" data-ghpr-native-node="">
+      <button type="button" class="ci-status-header-toggle" aria-expanded="false" aria-label="Toggle CI status details" data-ghpr-native-node="">CI status</button>
+      <div class="checks-native-listing" data-ghpr-native-node="">
+        <details class="js-check-suite" data-check-suite-id="5001" data-ghpr-native-node="">
+          <summary data-ghpr-native-node="">
+            <span data-ghpr-native-node="">CI / build</span>
+            <span data-ghpr-native-node="">2 failing checks</span>
+          </summary>
+          <template class="check-suite-rows-template">
+            <ul data-ghpr-native-node="">
+              <li data-testid="check-run-row" data-ghpr-native-node="" data-check-name="unit-test">
+                <span data-ghpr-native-node="">unit-test</span>
+                <strong data-ghpr-native-node="">Failed</strong>
+                <a data-ghpr-native-node="" href="/acme/widgets/actions/runs/1001/job/2001" title="View details">Details</a>
+              </li>
+              <li data-testid="check-run-row" data-ghpr-native-node="" data-check-name="lint">
+                <span data-ghpr-native-node="">lint</span>
+                <strong data-ghpr-native-node="">Failed</strong>
+                <a data-ghpr-native-node="" href="/acme/widgets/actions/runs/1001/job/2002" title="View details">Details</a>
+              </li>
+            </ul>
+          </template>
+        </details>
+        <details class="js-check-suite" data-check-suite-id="5002" data-ghpr-native-node="">
+          <summary data-ghpr-native-node="">
+            <span data-ghpr-native-node="">CI / integration</span>
+            <span data-ghpr-native-node="">1 failing check</span>
+          </summary>
+          <template class="check-suite-rows-template">
+            <ul data-ghpr-native-node="">
+              <li data-testid="check-run-row" data-ghpr-native-node="" data-check-name="e2e">
+                <span data-ghpr-native-node="">e2e</span>
+                <strong data-ghpr-native-node="">Failed</strong>
+                <a data-ghpr-native-node="" href="/acme/widgets/pull/42/checks?check_run_id=9003" title="View details">Details</a>
+              </li>
+            </ul>
+          </template>
+        </details>
+        <details class="js-check-suite" data-check-suite-id="5003" data-ghpr-native-node="">
+          <summary data-ghpr-native-node="">
+            <span data-ghpr-native-node="">CI / static-analysis</span>
+            <span data-ghpr-native-node="">All checks passed</span>
+          </summary>
+          <template class="check-suite-rows-template">
+            <ul data-ghpr-native-node="">
+              <li data-testid="check-run-row" data-ghpr-native-node="" data-check-name="build">
+                <span data-ghpr-native-node="">build</span>
+                <strong data-ghpr-native-node="">Success</strong>
+                <a data-ghpr-native-node="" href="/acme/widgets/pull/42/checks?check_run_id=9004" title="View details">Details</a>
+              </li>
+            </ul>
+          </template>
+        </details>
+      </div>
+      <div class="checks-native-details" data-ghpr-native-node="">
+        <p data-ghpr-native-node="">Select a check below to view its details.</p>
+      </div>
+    </section>
+    <div data-testid="merge-box" data-ghpr-native-node="">
+      <button data-ghpr-native-node="">Merge pull request</button>
+    </div>
+    <aside id="partial-discussion-sidebar" data-ghpr-native-node="">
+      <div class="discussion-sidebar-item sidebar-reviewers" data-testid="reviewers-section" data-ghpr-native-node="">
+        <h3 class="discussion-sidebar-heading" data-ghpr-native-node="">Reviewers</h3>
+      </div>
+      <div class="discussion-sidebar-item sidebar-assignee" data-testid="assignees-section" data-ghpr-native-node="">
+        <h3 class="discussion-sidebar-heading" data-ghpr-native-node="">Assignees</h3>
+      </div>
+    </aside>
+  </main>
+  <script>
+    document.querySelectorAll('details.js-check-suite').forEach((details) => {
+      details.addEventListener('toggle', () => {
+        if (!details.open || details.dataset.loaded) return;
+        details.dataset.loaded = 'true';
+        const template = details.querySelector('template.check-suite-rows-template');
+        if (template) {
+          details.appendChild(template.content.cloneNode(true));
+          template.remove();
+        }
+      });
+    });
+  </script>
+</body>
+</html>
