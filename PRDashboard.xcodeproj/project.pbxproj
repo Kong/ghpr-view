@@ -44,9 +44,25 @@
 		A1000074 /* JiraSetupForm.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000074 /* JiraSetupForm.swift */; };
 		A1000090 /* FacetFilterPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000090 /* FacetFilterPanel.swift */; };
 		A1000091 /* Facets.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000091 /* Facets.swift */; };
+		A1000092 /* PRActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000092 /* PRActivity.swift */; };
+		A1000093 /* CommentShortcut.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000093 /* CommentShortcut.swift */; };
+		A1000094 /* PRActivityStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000094 /* PRActivityStore.swift */; };
+		A1000095 /* MonitorAcquisition.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000095 /* MonitorAcquisition.swift */; };
+		A1000096 /* GitHubAPIClient+Monitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000096 /* GitHubAPIClient+Monitor.swift */; };
+		A1000097 /* PRActivityMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000097 /* PRActivityMonitor.swift */; };
+		A1000098 /* SlackNotificationClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000098 /* SlackNotificationClient.swift */; };
+		A1000099 /* PRActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000099 /* PRActivityView.swift */; };
+		A100009A /* CommentShortcutSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200009A /* CommentShortcutSettingsView.swift */; };
+		A100009B /* GitHubAPIClient+CommentContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200009B /* GitHubAPIClient+CommentContext.swift */; };
+		A100009C /* CommentShortcutPreparer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200009C /* CommentShortcutPreparer.swift */; };
 		A1000075 /* JiraSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000075 /* JiraSetupView.swift */; };
 		A1000080 /* CachedAvatarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000080 /* CachedAvatarView.swift */; };
 		B1000008 /* JiraSetupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000008 /* JiraSetupTests.swift */; };
+		B1000009 /* PRActivityModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000009 /* PRActivityModelsTests.swift */; };
+		B100000A /* PRActivityMonitorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B200000A /* PRActivityMonitorTests.swift */; };
+		B100000C /* SlackNotificationClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B200000C /* SlackNotificationClientTests.swift */; };
+		B100000B /* MonitorAcquisitionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B200000B /* MonitorAcquisitionTests.swift */; };
+		B100000D /* CommentShortcutPreparerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B200000D /* CommentShortcutPreparerTests.swift */; };
 		B1000001 /* AppUpdate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000001 /* AppUpdate.swift */; };
 		B1000002 /* UpdateManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000002 /* UpdateManager.swift */; };
 		B1000003 /* UpdateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000003 /* UpdateView.swift */; };
@@ -143,9 +159,25 @@
 		A2000074 /* JiraSetupForm.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JiraSetupForm.swift; sourceTree = "<group>"; };
 		A2000090 /* FacetFilterPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FacetFilterPanel.swift; sourceTree = "<group>"; };
 		A2000091 /* Facets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Facets.swift; sourceTree = "<group>"; };
+		A2000092 /* PRActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PRActivity.swift; sourceTree = "<group>"; };
+		A2000093 /* CommentShortcut.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommentShortcut.swift; sourceTree = "<group>"; };
+		A2000094 /* PRActivityStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PRActivityStore.swift; sourceTree = "<group>"; };
+		A2000095 /* MonitorAcquisition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MonitorAcquisition.swift"; sourceTree = "<group>"; };
+		A2000096 /* GitHubAPIClient+Monitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GitHubAPIClient+Monitor.swift"; sourceTree = "<group>"; };
+		A2000097 /* PRActivityMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PRActivityMonitor.swift"; sourceTree = "<group>"; };
+		A2000098 /* SlackNotificationClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SlackNotificationClient.swift"; sourceTree = "<group>"; };
+		A2000099 /* PRActivityView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PRActivityView.swift"; sourceTree = "<group>"; };
+		A200009A /* CommentShortcutSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CommentShortcutSettingsView.swift"; sourceTree = "<group>"; };
+		A200009B /* GitHubAPIClient+CommentContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GitHubAPIClient+CommentContext.swift"; sourceTree = "<group>"; };
+		A200009C /* CommentShortcutPreparer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CommentShortcutPreparer.swift"; sourceTree = "<group>"; };
 		A2000075 /* JiraSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JiraSetupView.swift; sourceTree = "<group>"; };
 		A2000080 /* CachedAvatarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Views/CachedAvatarView.swift"; sourceTree = "<group>"; };
 		B2000008 /* JiraSetupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JiraSetupTests.swift; sourceTree = "<group>"; };
+		B2000009 /* PRActivityModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PRActivityModelsTests.swift; sourceTree = "<group>"; };
+		B200000A /* PRActivityMonitorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PRActivityMonitorTests.swift; sourceTree = "<group>"; };
+		B200000C /* SlackNotificationClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SlackNotificationClientTests.swift; sourceTree = "<group>"; };
+		B200000B /* MonitorAcquisitionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorAcquisitionTests.swift; sourceTree = "<group>"; };
+		B200000D /* CommentShortcutPreparerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommentShortcutPreparerTests.swift; sourceTree = "<group>"; };
 		A2000060 /* OnboardingManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingManager.swift; sourceTree = "<group>"; };
 		A2000061 /* OnboardingBubble.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingBubble.swift; sourceTree = "<group>"; };
 		A2000062 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
@@ -277,6 +309,12 @@
 				B2000002 /* UpdateManager.swift */,
 				A2000072 /* AppPresentationCoordinator.swift */,
 				A2000073 /* JiraSetupCoordinator.swift */,
+				A2000095 /* MonitorAcquisition.swift */,
+				A2000096 /* GitHubAPIClient+Monitor.swift */,
+				A2000097 /* PRActivityMonitor.swift */,
+				A2000098 /* SlackNotificationClient.swift */,
+				A200009B /* GitHubAPIClient+CommentContext.swift */,
+				A200009C /* CommentShortcutPreparer.swift */,
 			);
 			path = Logic;
 			sourceTree = "<group>";
@@ -285,6 +323,8 @@
 			isa = PBXGroup;
 			children = (
 				A2000091 /* Facets.swift */,
+				A2000092 /* PRActivity.swift */,
+				A2000093 /* CommentShortcut.swift */,
 				A200000C /* PullRequest.swift */,
 				A200000D /* ReviewThread.swift */,
 				A200000E /* Configuration.swift */,
@@ -300,6 +340,7 @@
 				A2000011 /* Keychain.swift */,
 				A2000040 /* PRCache.swift */,
 				A2000041 /* AvatarCache.swift */,
+				A2000094 /* PRActivityStore.swift */,
 			);
 			path = Storage;
 			sourceTree = "<group>";
@@ -323,6 +364,8 @@
 				A2000074 /* JiraSetupForm.swift */,
 				A2000075 /* JiraSetupView.swift */,
 				E2000008 /* BrowserIntegrationView.swift */,
+				A2000099 /* PRActivityView.swift */,
+				A200009A /* CommentShortcutSettingsView.swift */,
 				A5000008 /* Components */,
 			);
 			path = Views;
@@ -378,6 +421,11 @@
 				B2000008 /* JiraSetupTests.swift */,
 				E2100001 /* BrowserBridgeTests.swift */,
 				I2000001 /* GitHubSurfaceTests.swift */,
+				B2000009 /* PRActivityModelsTests.swift */,
+				B200000A /* PRActivityMonitorTests.swift */,
+				B200000C /* SlackNotificationClientTests.swift */,
+				B200000B /* MonitorAcquisitionTests.swift */,
+				B200000D /* CommentShortcutPreparerTests.swift */,
 			);
 			path = PRDashboardTests;
 			sourceTree = "<group>";
@@ -638,6 +686,17 @@
 				A1000080 /* CachedAvatarView.swift in Sources */,
 				A1000090 /* FacetFilterPanel.swift in Sources */,
 				A1000091 /* Facets.swift in Sources */,
+				A1000092 /* PRActivity.swift in Sources */,
+				A1000093 /* CommentShortcut.swift in Sources */,
+				A1000094 /* PRActivityStore.swift in Sources */,
+				A1000095 /* MonitorAcquisition.swift in Sources */,
+				A1000096 /* GitHubAPIClient+Monitor.swift in Sources */,
+				A1000097 /* PRActivityMonitor.swift in Sources */,
+				A1000098 /* SlackNotificationClient.swift in Sources */,
+				A100009B /* GitHubAPIClient+CommentContext.swift in Sources */,
+				A100009C /* CommentShortcutPreparer.swift in Sources */,
+				A1000099 /* PRActivityView.swift in Sources */,
+				A100009A /* CommentShortcutSettingsView.swift in Sources */,
 				A1000003 /* MainView.swift in Sources */,
 				A1000004 /* PRRowView.swift in Sources */,
 				A1000005 /* SettingsView.swift in Sources */,
@@ -699,6 +758,11 @@
 				B1000008 /* JiraSetupTests.swift in Sources */,
 				E1100001 /* BrowserBridgeTests.swift in Sources */,
 				I1000001 /* GitHubSurfaceTests.swift in Sources */,
+				B1000009 /* PRActivityModelsTests.swift in Sources */,
+				B100000A /* PRActivityMonitorTests.swift in Sources */,
+				B100000C /* SlackNotificationClientTests.swift in Sources */,
+				B100000B /* MonitorAcquisitionTests.swift in Sources */,
+				B100000D /* CommentShortcutPreparerTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -108,6 +108,12 @@ final class BrowserBridgeRouter {
     typealias SnapshotProvider = @MainActor () -> LocalSnapshot
     typealias ApplicationIconProvider = @MainActor () -> Data?
     typealias RerunFailedJobsHandler = @MainActor (LocalPRSnapshot) async throws -> Int
+    /// Prepares a comment draft from configured shortcuts. The handler resolves the
+    /// canonical PR/comment context from the app's own account and returns plain text;
+    /// it never writes to GitHub.
+    typealias CommentShortcutHandler = @MainActor (BrowserCommentShortcutRequest) async throws -> CommentShortcutDraft
+    /// Advertises which shortcuts exist. Metadata only; templates stay in the app.
+    typealias CommentShortcutCatalogProvider = @MainActor () -> [CommentShortcutDescriptor]
 
     private struct EmptyResponse: Codable, Equatable {
         let ok: Bool
@@ -194,6 +200,16 @@ final class BrowserBridgeRouter {
         let tags: Set<PRTag>?
         let rerunCount: Int?
         let event: BrowserEvent?
+        var commentShortcut: CommentShortcutDraft? = nil
+    }
+
+    /// Request the app resolves against its own account. Everything the page claims
+    /// except the shortcut id and the target permalink is treated as a hint at most.
+    struct BrowserCommentShortcutRequest: Codable, Equatable {
+        let shortcutID: String
+        let page: GitHubPageContext
+        let commentPermalink: String?
+        let expectedHeadSHA: String?
     }
 
     private struct WorkbenchRequest: Codable {
@@ -241,6 +257,8 @@ final class BrowserBridgeRouter {
 
     private let snapshotProvider: SnapshotProvider
     private let rerunFailedJobs: RerunFailedJobsHandler?
+    private let commentShortcut: CommentShortcutHandler?
+    private let commentShortcutCatalog: CommentShortcutCatalogProvider?
     private let assetProvider: BrowserAssetProvider
     private let applicationIconProvider: ApplicationIconProvider
     private let appVersion: String
@@ -254,6 +272,8 @@ final class BrowserBridgeRouter {
         runtime: SkillRuntime,
         snapshotProvider: @escaping SnapshotProvider,
         rerunFailedJobs: RerunFailedJobsHandler? = nil,
+        commentShortcut: CommentShortcutHandler? = nil,
+        commentShortcutCatalog: CommentShortcutCatalogProvider? = nil,
         assetProvider: BrowserAssetProvider = .bundled(),
         appVersion: String,
         draftsRootURL: URL? = nil,
@@ -267,6 +287,8 @@ final class BrowserBridgeRouter {
         self.runtime = runtime
         self.snapshotProvider = snapshotProvider
         self.rerunFailedJobs = rerunFailedJobs
+        self.commentShortcut = commentShortcut
+        self.commentShortcutCatalog = commentShortcutCatalog
         self.assetProvider = assetProvider
         self.applicationIconProvider = applicationIconProvider
         self.appVersion = appVersion
@@ -343,8 +365,7 @@ final class BrowserBridgeRouter {
                     appVersion: appVersion,
                     officialUserscriptVersion: officialUserscriptVersion,
                     apiVersions: [GHPRContract.bridgeAPIVersion],
-                    pairingRequired: true,
-                    githubSurfaceV2: store.githubSurfaceV2Enabled
+                    pairingRequired: true
                 )
             )
         }
@@ -621,7 +642,7 @@ final class BrowserBridgeRouter {
                     contributions: contributions,
                     findings: pageFindings,
                     currentRevisionSubject: currentRevisionSubject,
-                    githubSurfaceV2: store.githubSurfaceV2Enabled,
+                    commentShortcuts: client.scopes.contains(.prRead) ? (commentShortcutCatalog?() ?? []) : [],
                     surfaceHealth: store.unhealthySurfaces,
                     agentRuntime: client.scopes.contains(.skillList)
                         ? SkillAgent.allCases
@@ -1057,6 +1078,40 @@ final class BrowserBridgeRouter {
                 }
                 let count = try await rerunFailedJobs(pullRequest)
                 return json(ActionResponse(run: nil, url: nil, tags: nil, rerunCount: count, event: nil))
+            case .prepareCommentShortcut:
+                // Preparing a draft only authorizes text insertion in the page. The
+                // user still posts it through GitHub's own composer.
+                guard confirmed else {
+                    return error(
+                        status: 409,
+                        code: "confirmation_required",
+                        message: "Preparing a comment draft requires explicit confirmation."
+                    )
+                }
+                guard client.scopes.contains(.prRead) else {
+                    return scopeDenied(.prRead)
+                }
+                guard let shortcutID = action.shortcutID, let commentShortcut else {
+                    return error(status: 409, code: "unavailable", message: "Comment shortcuts are unavailable.")
+                }
+                let draft = try await commentShortcut(
+                    BrowserCommentShortcutRequest(
+                        shortcutID: shortcutID,
+                        page: page,
+                        commentPermalink: action.commentPermalink,
+                        expectedHeadSHA: action.expectedHeadSHA
+                    )
+                )
+                return json(
+                    ActionResponse(
+                        run: nil,
+                        url: nil,
+                        tags: nil,
+                        rerunCount: nil,
+                        event: nil,
+                        commentShortcut: draft
+                    )
+                )
             case .clientEvent:
                 let event = store.appendEvent(
                     clientID: client.id,
@@ -1118,6 +1173,8 @@ final class BrowserBridgeRouter {
             return .skillRun
         case .rerunFailedJobs:
             return nil
+        case .prepareCommentShortcut:
+            return .prRead
         case .cancelRun:
             return .skillCancel
         case .openDetail:

@@ -1576,12 +1576,12 @@
         }
       }
     },
-    "Required scopes: repo, read:user, workflow": {
+    "Required scopes: repo, read:user, workflow, read:org": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "所需权限：repo、read:user、workflow"
+            "value": "所需权限：repo、read:user、workflow、read:org"
           }
         }
       }

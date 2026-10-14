@@ -77,7 +77,6 @@ struct BrowserBridgeDiscovery: Codable, Equatable {
     let officialUserscriptVersion: String?
     let apiVersions: [Int]
     let pairingRequired: Bool
-    var githubSurfaceV2: Bool = true
 
     enum CodingKeys: String, CodingKey {
         case protocolName = "protocol"
@@ -86,7 +85,6 @@ struct BrowserBridgeDiscovery: Codable, Equatable {
         case officialUserscriptVersion
         case apiVersions
         case pairingRequired
-        case githubSurfaceV2
     }
 }
 
@@ -1033,6 +1031,7 @@ enum BrowserActionKind: String, Codable, CaseIterable {
     case setTag = "set_tag"
     case removeTag = "remove_tag"
     case rerunFailedJobs = "rerun_failed_jobs"
+    case prepareCommentShortcut = "prepare_comment_shortcut"
     case clientEvent = "client_event"
 }
 
@@ -1047,6 +1046,38 @@ struct BrowserAction: Codable, Equatable {
     var agent: SkillAgent? = nil
     var model: String? = nil
     var reasoningEffort: String? = nil
+    /// `prepare_comment_shortcut` payload: which configured shortcut to prepare.
+    var shortcutID: String? = nil
+    /// Permalink of the comment being replied to. Optional: a PR-level comment has none.
+    /// The app never trusts the browser's copy of the comment body, repository or head.
+    var commentPermalink: String? = nil
+    /// Head revision the page was showing. A mismatch aborts the draft instead of
+    /// filling a composer that now belongs to another revision.
+    var expectedHeadSHA: String? = nil
+}
+
+/// Shortcut metadata advertised to the userscript. Only metadata: templates stay in
+/// the app so a page can never inject or alter what will be drafted.
+struct CommentShortcutDescriptor: Codable, Equatable, Identifiable {
+    let id: String
+    let displayName: String
+    let contexts: [CommentShortcutContext]
+    let repositoryScopes: [String]
+}
+
+/// Canonical, app-resolved context for a prepared comment draft.
+struct CommentShortcutDraft: Codable, Equatable {
+    let shortcutID: String
+    let context: CommentShortcutContext
+    let repository: String
+    let prNumber: Int
+    let prURL: String?
+    let headSHA: String?
+    let diffURL: String?
+    let commentURL: String?
+    let commentBody: String?
+    /// Plain text to insert. It is never posted by the app.
+    let draft: String
 }
 
 struct BrowserContribution: Codable, Equatable, Identifiable {
@@ -1112,7 +1143,7 @@ struct PageExtensionSnapshot: Codable, Equatable {
     let contributions: [BrowserContribution]
     var findings: [SkillFinding] = []
     var currentRevisionSubject: GitHubSubject? = nil
-    var githubSurfaceV2: Bool = true
+    var commentShortcuts: [CommentShortcutDescriptor] = []
     var surfaceHealth: [SurfaceHealthReport] = []
     var agentRuntime: [AgentRuntimeSetting] = []
     var agentCatalogs: [AgentCapabilityCatalog] = []

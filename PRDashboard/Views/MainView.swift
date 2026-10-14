@@ -293,6 +293,23 @@ struct MainView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .onboardingAnchor(onboardingManager, step: .filter)
 
+            Button(action: { viewModel.showActivity() }) {
+                HStack(spacing: 3) {
+                    Image(systemName: "tray.full")
+                        .font(.system(size: 16, weight: .medium))
+                    if viewModel.actionableActivityCount > 0 {
+                        Text("\(viewModel.actionableActivityCount)")
+                            .font(.caption2)
+                            .monospacedDigit()
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .frame(height: 28)
+            }
+            .buttonStyle(.borderless)
+            .help("PR activity that needs attention")
+            .accessibilityLabel("Activity")
+
             Button(action: { viewModel.refresh() }) {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 16, weight: .medium))

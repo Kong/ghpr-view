@@ -3056,8 +3056,7 @@
   const STORAGE = {
     port: "ghpr.bridge.port",
     instance: "ghpr.bridge.instance",
-    token: "ghpr.bridge.token",
-    dismissedFindings: "ghpr.dismissed.findings"
+    token: "ghpr.bridge.token"
   };
   const PERMISSION_LABELS = {
     "skill:run": "Run configured Skills",
@@ -3532,7 +3531,7 @@
     if (document.getElementById(STYLE_ID)) return;
     const style = createElement(document, "style", { id: STYLE_ID });
     style.textContent = `
-      #${ROOT_ID}, [${MANAGED_ATTRIBUTE}] {
+      [${MANAGED_ATTRIBUTE}] {
         --ghpr-purple: #6f6baf;
         --ghpr-purple-strong: #54508f;
         --ghpr-peach: #f2cfb3;
@@ -3540,58 +3539,16 @@
         --ghpr-muted: var(--fgColor-muted, #656d76);
         --ghpr-panel: var(--bgColor-default, #ffffff);
         --ghpr-border: var(--borderColor-default, #d0d7de);
+        box-sizing: border-box;
         color: var(--ghpr-ink);
         font: 12px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        text-align: left; white-space: normal;
       }
-      #${ROOT_ID} {
-        background: var(--ghpr-panel); border: 1px solid var(--ghpr-border);
-        border-radius: 8px; box-sizing: border-box; color: var(--ghpr-ink);
-        isolation: isolate; padding: 12px; text-align: left; white-space: normal;
-      }
-      #${ROOT_ID}, #${ROOT_ID} *, #${ROOT_ID} *::before, #${ROOT_ID} *::after {
+      [${MANAGED_ATTRIBUTE}] *,
+      [${MANAGED_ATTRIBUTE}] *::before,
+      [${MANAGED_ATTRIBUTE}] *::after {
         box-sizing: border-box;
       }
-      #${ROOT_ID}.ghpr-in-sidebar {
-        display: block; margin: 0 0 16px; width: 100%;
-      }
-      #${ROOT_ID}.ghpr-floating {
-        box-shadow: 0 8px 24px rgba(31, 35, 40, .2);
-        max-height: min(680px, calc(100vh - 112px));
-        max-height: min(680px, calc(100dvh - 112px));
-        overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain;
-        position: fixed; right: 16px; top: 88px; width: 320px; z-index: 2147483000;
-      }
-      #${ROOT_ID}.ghpr-compact {
-        max-height: none; overflow: hidden; padding: 8px 10px;
-      }
-      #${ROOT_ID}.ghpr-compact .ghpr-panel-body { display: none; }
-      #${ROOT_ID}.ghpr-compact .ghpr-panel-subtitle { display: none; }
-      #${ROOT_ID}.ghpr-floating.ghpr-compact {
-        max-height: none; width: min(220px, calc(100vw - 32px));
-      }
-      .ghpr-panel-head {
-        align-items: center; display: flex; gap: 8px; min-height: 22px; min-width: 0;
-      }
-      .ghpr-panel-mark {
-        align-items: center; background: var(--ghpr-purple); border-radius: 6px; color: white;
-        display: inline-flex; flex: 0 0 auto; font-size: 11px; font-weight: 800;
-        height: 22px; justify-content: center; width: 22px;
-      }
-      #${ROOT_ID}[data-state="running"] .ghpr-panel-mark {
-        animation: ghpr-pulse 1.2s infinite; background: var(--ghpr-peach); color: var(--ghpr-ink);
-      }
-      @keyframes ghpr-pulse { 50% { opacity: .45; transform: scale(.88); } }
-      .ghpr-panel-identity { flex: 1 1 auto; min-width: 0; }
-      .ghpr-panel-title { font-size: 13px; font-weight: 750; letter-spacing: .01em; }
-      .ghpr-panel-subtitle {
-        color: var(--ghpr-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-      }
-      .ghpr-panel-toggle {
-        appearance: none; background: transparent; border: 0; border-radius: 6px;
-        color: var(--ghpr-muted); cursor: pointer; flex: 0 0 auto; font: inherit;
-        height: 28px; padding: 0; width: 28px;
-      }
-      .ghpr-panel-toggle:hover { background: color-mix(in srgb, var(--ghpr-purple) 10%, var(--ghpr-panel)); }
       .ghpr-file-tree-badge {
         align-items: center;
         background: var(--ghpr-purple);
@@ -3618,43 +3575,65 @@
       }
       .ghpr-header-entry {
         align-items: center; display: inline-flex; flex: 0 0 auto;
-        position: relative; vertical-align: middle; z-index: 1;
+        height: auto; max-width: calc(100vw - 16px); min-width: 0;
+        position: relative; vertical-align: middle; width: auto; z-index: 1;
       }
       .ghpr-header-entry:not(.ghpr-header-floating) { margin-inline: 4px; }
       .ghpr-header-entry.ghpr-header-floating {
-        position: fixed; right: 16px; top: 72px; z-index: 2147483000;
+        bottom: auto; height: auto; left: auto; margin: 0;
+        max-width: calc(100vw - 16px); position: fixed; right: 16px; top: 72px;
+        width: auto; z-index: 2147483000;
       }
-      body:has(> .ghpr-header-entry.ghpr-header-floating) > #${ROOT_ID}.ghpr-floating {
-        top: 120px;
+      .ghpr-header-entry.ghpr-header-floating.ghpr-header-floating-narrow {
+        right: 8px; top: 8px;
       }
       .ghpr-header-button {
         appearance: none; background: var(--ghpr-panel); border: 1px solid var(--ghpr-border);
-        border-radius: 6px; color: var(--ghpr-ink); cursor: pointer; font: inherit;
+        border-radius: 6px; color: var(--ghpr-ink); cursor: pointer; flex: 0 0 auto; font: inherit;
         font-weight: 650; height: 32px; line-height: 1.35; padding: 5px 9px;
         white-space: nowrap;
       }
       .ghpr-header-button:hover { background: color-mix(in srgb, var(--ghpr-purple) 10%, var(--ghpr-panel)); }
+      #ghpr-header-entry > .ghpr-header-menu {
+        background: var(--ghpr-panel); border: 1px solid var(--ghpr-border); border-radius: 8px;
+        bottom: auto !important; box-shadow: 0 8px 24px rgba(31, 35, 40, .2); box-sizing: border-box;
+        color: var(--ghpr-ink); height: auto !important; left: auto; max-height: calc(100dvh - 16px) !important;
+        max-width: calc(100vw - 16px) !important; min-width: 0 !important; overflow: auto;
+        padding: 9px; position: fixed !important; right: 8px; top: 44px;
+        width: min(320px, calc(100vw - 16px)) !important; z-index: 2147483000;
+      }
+      #ghpr-header-entry > .ghpr-header-menu[hidden] { display: none !important; }
       .ghpr-header-menu {
         background: var(--ghpr-panel); border: 1px solid var(--ghpr-border); border-radius: 8px;
-        box-shadow: 0 8px 24px rgba(31, 35, 40, .2); color: var(--ghpr-ink);
-        min-width: 270px; padding: 9px; position: absolute; right: 0; top: calc(100% + 6px);
+        box-shadow: 0 8px 24px rgba(31, 35, 40, .2); box-sizing: border-box; color: var(--ghpr-ink);
+        max-height: calc(100dvh - 16px); max-width: calc(100vw - 16px); overflow: auto; padding: 9px;
       }
       .ghpr-header-menu[hidden] { display: none; }
       .ghpr-header-menu-title { font-size: 13px; font-weight: 750; margin-bottom: 6px; }
       .ghpr-header-menu-summary { color: var(--ghpr-muted); margin: 0 0 8px; }
       .ghpr-header-menu .ghpr-section { margin-top: 8px; }
       .ghpr-header-menu .ghpr-panel-action { min-height: 28px; }
-      .ghpr-panel-body { margin-top: 8px; }
+      .ghpr-header-menu summary {
+        cursor: pointer; font-weight: 650; min-height: 30px; padding: 6px 8px;
+      }
+      .ghpr-review-results { border-top: 1px solid var(--ghpr-border); margin: 8px 0 0; padding: 8px 0 0; }
+      .ghpr-review-results-body { display: grid; gap: 8px; margin-top: 4px; min-width: 0; }
+      .ghpr-review-count { color: var(--ghpr-muted); font-size: 11px; }
+      .ghpr-annotations-toggle { align-self: start; }
+      .ghpr-annotations-toggle[aria-pressed="true"] {
+        background: color-mix(in srgb, var(--ghpr-purple) 14%, var(--ghpr-panel));
+        border-color: var(--ghpr-purple);
+      }
       .ghpr-update-notice {
         align-items: center; background: color-mix(in srgb, var(--ghpr-peach) 28%, var(--ghpr-panel));
         border: 1px solid color-mix(in srgb, var(--ghpr-peach) 70%, var(--ghpr-border));
-        border-radius: 7px; display: flex; gap: 8px; justify-content: space-between;
+        border-radius: 7px; display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between;
         margin-bottom: 8px; padding: 8px;
       }
       .ghpr-update-copy { min-width: 0; }
       .ghpr-update-copy strong { display: block; }
       .ghpr-update-copy span { color: var(--ghpr-muted); display: block; font-size: 11px; }
-      #${ROOT_ID} .ghpr-section {
+      .ghpr-section {
         border-top: 1px solid var(--ghpr-border); margin: 8px 0 0; padding: 8px 0 0;
       }
       .ghpr-section-label {
@@ -3669,9 +3648,6 @@
       .ghpr-panel-action {
         border: 0; display: block; min-height: 30px; overflow-wrap: anywhere;
         position: static; text-align: left; white-space: normal; width: 100%;
-      }
-      #${ROOT_ID} summary {
-        cursor: pointer; font-weight: 650; min-height: 30px; padding: 6px 8px;
       }
       .ghpr-panel-action:hover:not(:disabled), .ghpr-button:hover:not(:disabled) {
         background: color-mix(in srgb, var(--ghpr-purple) 10%, var(--ghpr-panel));
@@ -3702,67 +3678,13 @@
       .ghpr-card-head { align-items: center; display: flex; gap: 8px; justify-content: space-between; }
       .ghpr-card-title { font-weight: 750; }
       .ghpr-card-summary { color: var(--ghpr-muted); margin: 7px 0; }
-      .ghpr-review-meta, .ghpr-finding-meta {
-        color: var(--ghpr-muted); font-size: 11px; margin: 5px 0;
-      }
-      .ghpr-finding {
-        border-top: 1px solid var(--ghpr-border); margin-top: 8px; padding-top: 8px;
-      }
-      .ghpr-finding-head { align-items: center; display: flex; gap: 6px; justify-content: space-between; }
-      .ghpr-finding-title { font-weight: 700; min-width: 0; }
-      .ghpr-finding-title code { font-size: 11px; font-weight: 500; }
-      .ghpr-mini-diff {
-        background: color-mix(in srgb, var(--ghpr-ink) 5%, var(--ghpr-panel));
-        border: 1px solid var(--ghpr-border); border-radius: 5px; margin: 6px 0;
-        max-height: 140px; overflow: auto; padding: 6px; white-space: pre-wrap;
-      }
       .ghpr-finding-tools { align-items: center; display: flex; flex-wrap: wrap; gap: 6px; }
-      .ghpr-insight {
-        background: color-mix(in srgb, var(--ghpr-purple) 4%, var(--ghpr-panel));
-        border: 1px solid var(--ghpr-border); border-radius: 7px; margin: 6px 0 0; padding: 9px;
-      }
-      .ghpr-insight h4 { font-size: 11px; margin: 7px 0 3px; }
-      .ghpr-insight h4:first-child { margin-top: 0; }
-      .ghpr-insight p { margin: 3px 0; }
-      .ghpr-insight-list { margin: 3px 0 0 16px; padding: 0; }
-      .ghpr-inline-marker {
-        border: 0; border-radius: 999px; cursor: pointer; font: inherit;
-        margin-left: 6px; padding: 2px 7px;
-      }
-      .ghpr-inline-panel { margin: 6px 0 8px; padding: 8px; }
-      .ghpr-metrics { display: grid; gap: 5px 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 8px 0; }
-      .ghpr-metric strong { display: block; font-size: 13px; }
-      .ghpr-metric span { color: var(--ghpr-muted); font-size: 10px; }
-      .ghpr-check-tools { align-items: center; display: inline-flex; gap: 5px; margin-left: 8px; }
       .ghpr-fallback { max-height: 160px; overflow: auto; }
       .ghpr-error { color: #cf222e; font-size: 11px; margin-top: 5px; }
-      @media (max-width: 1100px) {
-        #${ROOT_ID}.ghpr-floating {
-          bottom: 8px; max-height: min(56vh, 420px); padding: 10px;
-          right: 8px; top: auto; width: min(320px, calc(100vw - 16px));
-        }
-      }
       @media (max-width: 720px) {
-        #${ROOT_ID}.ghpr-floating {
-          left: 8px; max-height: min(68vh, 520px); right: 8px; width: auto;
-        }
-        #${ROOT_ID}.ghpr-floating.ghpr-compact {
-          left: auto; max-height: none; width: min(220px, calc(100vw - 16px));
-        }
-        .ghpr-panel-action, #${ROOT_ID} summary { min-height: 40px; padding: 10px; }
+        .ghpr-panel-action, .ghpr-header-menu summary { min-height: 40px; padding: 10px; }
         .ghpr-action-row { align-items: stretch; flex-direction: column; }
         .ghpr-action-row .ghpr-button { min-height: 40px; width: 100%; }
-        .ghpr-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-        .ghpr-check-tools { flex-wrap: wrap; margin-left: 4px; }
-      }
-      @media (max-width: 420px) {
-        .ghpr-metrics { grid-template-columns: 1fr; }
-      }
-      @media (prefers-reduced-motion: reduce) {
-        #${ROOT_ID}[data-state="running"] .ghpr-panel-mark { animation: none; }
-      }
-      @media (prefers-color-scheme: dark) {
-        #${ROOT_ID}.ghpr-floating { box-shadow: 0 8px 24px rgba(0, 0, 0, .45); }
       }
     `;
     (document.head || document.documentElement).append(style);
@@ -3781,52 +3703,31 @@
       this.refreshing = false;
       this.stopped = false;
       this.navigationKey = null;
-      this.panelSurfaceKey = null;
-      this.panelExpanded = true;
+      this.menuOpen = false;
+      this.reviewResultsOpen = false;
+      this.showCodeAnnotations = false;
+      this.expansionKey = null;
       this.headerMenu = null;
       this.pendingSkillRuns = new Set();
-      this.dismissedFindingIDs = new Set();
       this.surfaceRegistry = null;
       this.drawerHost = null;
       this.modalHost = null;
-      this.checksInsightHost = null;
-      this.selectedChecksJobKey = null;
-      this.pendingChecksExpansionV2 = false;
-      this.checksDiscoveryV2 = null;
       this.filesFindingPanelMount = null;
       this.selectedFilesFindingID = null;
       this.selectedFileFindingID = null;
       this._pendingFileFindingScrollV2 = null;
-      this.reviewLogRunIDV2 = null;
-      this.reviewLogExpandedV2 = false;
-      this.reviewStepExpandedV2 = new Map();
       this.pendingSubjectRuns = new Set();
-      this.reviewSummaryStateV2 = {
-        pageKey: null,
-        annotationsOpen: true,
-        expandedAnnotationKeys: new Set(),
-        selectedRunID: null,
-        reviewOpen: false
-      };
       this.pendingExplainCIV2 = false;
-      this.operationCardSurfaceV2 = null;
-      this.operationCardCollapsedV2 = false;
       this._navigatedFindingIDV2 = null;
       this._findingNavigationTimersV2 = new Map();
-      this.isScrollingV2 = false;
-      this.pendingRefreshAfterScrollV2 = false;
-      this.scrollIdleTimerV2 = null;
       this.navigationTimerV2 = null;
       this.observerRoot = null;
       this.scheduleNavigationRefresh = null;
+      this.loadError = null;
     }
 
     async start() {
       installStyles(this.document);
-      const dismissed = await this.gm.getValue(STORAGE.dismissedFindings, []);
-      this.dismissedFindingIDs = new Set(
-        Array.isArray(dismissed) ? dismissed : []
-      );
       this.gm.registerMenuCommand("Open in ghpr", () => this.openApp());
       this.gm.registerMenuCommand("Connect ghpr", async () => {
         const client = await this.bridge.pair();
@@ -3834,11 +3735,7 @@
       });
       this.gm.registerMenuCommand("Analyze current PR", () => {
         if (this.page?.type !== "pull_request") return;
-        if (this.isSurfaceV2()) {
-          this.startPRReviewV2();
-        } else {
-          this.invokeAction({ kind: "run_skill", skill_id: "ci.failure.classify_flaky" });
-        }
+        this.startPRReviewV2();
       });
       this.observeNavigation();
       await this.refresh();
@@ -3849,7 +3746,10 @@
       this.stopped = true;
       if (this.timer) this.window.clearTimeout(this.timer);
       if (this.navigationTimerV2) this.window.clearTimeout(this.navigationTimerV2);
-      if (this.scrollIdleTimerV2) this.window.clearTimeout(this.scrollIdleTimerV2);
+      if (this.onViewportChange) {
+        this.window.removeEventListener("resize", this.onViewportChange);
+        this.onViewportChange = null;
+      }
       this.observer?.disconnect();
       this.observerRoot = null;
     }
@@ -3862,27 +3762,8 @@
           const key = `${this.window.location.pathname}${this.window.location.search}`;
           if (key !== this.navigationKey) {
             this.refreshSafely();
-          } else if (this.isSurfaceV2() && !this.isScrollingV2) {
-            this.renderSurfaceV2();
-          }
-        }, 150);
-      };
-      const onScroll = () => {
-        if (!this.isSurfaceV2()) return;
-        this.isScrollingV2 = true;
-        if (this.navigationTimerV2) {
-          this.window.clearTimeout(this.navigationTimerV2);
-          this.navigationTimerV2 = null;
-        }
-        if (this.scrollIdleTimerV2) this.window.clearTimeout(this.scrollIdleTimerV2);
-        this.scrollIdleTimerV2 = this.window.setTimeout(() => {
-          this.scrollIdleTimerV2 = null;
-          this.isScrollingV2 = false;
-          if (this.pendingRefreshAfterScrollV2) {
-            this.pendingRefreshAfterScrollV2 = false;
-            this.refreshSafely();
           } else {
-            this.renderSurfaceV2();
+            this.render();
           }
         }, 150);
       };
@@ -3892,7 +3773,11 @@
       this.window.addEventListener("turbo:load", schedule);
       this.window.addEventListener("turbo:render", schedule);
       this.window.addEventListener("ghpr:navigation", schedule);
-      this.window.addEventListener("scroll", onScroll, { passive: true });
+      this.onViewportChange = () => {
+        if (this.stopped) return;
+        this.renderHeaderEntry();
+      };
+      this.window.addEventListener("resize", this.onViewportChange);
     }
 
     isManagedMutationV2(mutation) {
@@ -3913,11 +3798,7 @@
 
     observeActiveSurfaceRoot(schedule = this.scheduleNavigationRefresh) {
       if (!schedule) return;
-      const useNativeSurfaceRoot = this.isSurfaceV2() ||
-        this.bridge.discovery?.github_surface_v2 === true;
-      const root = useNativeSurfaceRoot
-        ? (this.document.querySelector("main") || this.document.body)
-        : this.document.documentElement;
+      const root = this.document.querySelector("main") || this.document.body;
       if (!root || root === this.observerRoot) return;
       this.observer?.disconnect();
       this.observer = new this.window.MutationObserver((mutations) => {
@@ -3931,10 +3812,6 @@
     }
 
     async refresh() {
-      if (this.isSurfaceV2() && this.isScrollingV2) {
-        this.pendingRefreshAfterScrollV2 = true;
-        return;
-      }
       if (this.refreshing || this.stopped) return;
       this.refreshing = true;
       this.navigationKey = `${this.window.location.pathname}${this.window.location.search}`;
@@ -3964,14 +3841,14 @@
           true,
           SNAPSHOT_TIMEOUT_MS
         );
+        this.loadError = null;
         this.render();
       } catch (error) {
         if (error.status === 401) {
           this.renderConnect();
-        } else if (this.bridge.discovery?.github_surface_v2 === true) {
-          this.renderSurfaceUnavailableV2(error.message);
         } else {
-          this.renderTransientError(error.message);
+          this.loadError = error.message;
+          this.render();
         }
       } finally {
         this.refreshing = false;
@@ -3995,20 +3872,6 @@
       });
     }
 
-    // A failed page snapshot must stay visible on the GitHub-native surface.
-    // Without this the userscript renders nothing at all and the failure is
-    // indistinguishable from the userscript never running.
-    renderSurfaceUnavailableV2(message) {
-      const SR = global.GhprSurfaceRenderers;
-      if (!SR) return;
-      SR.installSurfaceStyles(this.document);
-      this.document.getElementById(ROOT_ID)?.remove();
-      this.document.getElementById(HEADER_ENTRY_ID)?.remove();
-      this.renderOperationCardV2(SR, {
-        unavailable: message || "ghpr could not load this pull request."
-      });
-    }
-
     scheduleNextRefresh() {
       if (this.stopped) return;
       if (this.timer) this.window.clearTimeout(this.timer);
@@ -4021,14 +3884,9 @@
       );
     }
 
-    isSurfaceV2() {
-      return !!(this.snapshot && this.snapshot.github_surface_v2);
-    }
-
     cleanupSurfaceV2() {
       this.drawerHost?.close();
       this.modalHost?.close();
-      this.checksInsightHost?.close();
       this.filesFindingPanelMount?.destroy();
       this.filesFindingPanelMount = null;
       this.selectedFilesFindingID = null;
@@ -4044,24 +3902,142 @@
     }
 
     cleanup(clearSnapshot = true) {
-      this.document.getElementById(ROOT_ID)?.remove();
+      this.document.getElementById(HEADER_ENTRY_ID)?.remove();
       for (const node of this.document.querySelectorAll(`[${MANAGED_ATTRIBUTE}]`)) {
         node.remove();
       }
       this.cleanupSurfaceV2();
       if (clearSnapshot) this.snapshot = null;
       this.headerMenu = null;
+      this.menuOpen = false;
     }
+    viewportBox() {
+      return {
+        width: this.window.innerWidth || this.document.documentElement?.clientWidth || 0,
+        height: this.window.innerHeight || this.document.documentElement?.clientHeight || 0
+      };
+    }
+
+    usableRect(rect) {
+      return Boolean(rect) && Number.isFinite(rect.width) && Number.isFinite(rect.height) &&
+        (rect.width > 0 || rect.height > 0 || rect.right > 0 || rect.bottom > 0);
+    }
+
+    // GitHub's narrow page header uses min-width: max-content and moves actions
+    // above the title. A button mounted there sits past the viewport edge.
+    hostOverflowsViewport(host) {
+      const box = this.viewportBox();
+      if (!box.width || typeof host?.getBoundingClientRect !== "function") return false;
+      const rect = host.getBoundingClientRect();
+      if (!this.usableRect(rect)) return false;
+      if (rect.right > box.width + 1 || rect.left < -1) return true;
+      return (host.scrollWidth || 0) > (host.clientWidth || 0) + 8 && rect.width >= box.width - 8;
+    }
+
+    buttonClipped(button) {
+      const box = this.viewportBox();
+      if (!box.width || typeof button?.getBoundingClientRect !== "function") return false;
+      const rect = button.getBoundingClientRect();
+      if (!this.usableRect(rect)) return false;
+      return rect.left < 4 || rect.right > box.width - 4 || rect.width < 20;
+    }
+
+    fixedPositionTrapped(node) {
+      if (typeof this.window.getComputedStyle !== "function") return false;
+      let current = node?.parentElement;
+      while (current && current !== this.document.documentElement && current !== this.document.body) {
+        let style;
+        try {
+          style = this.window.getComputedStyle(current);
+        } catch (_) {
+          return false;
+        }
+        if (!style) return false;
+        const transform = style.transform || "none";
+        const filter = style.filter || "none";
+        const contain = style.contain || "";
+        const willChange = style.willChange || "";
+        if ((transform && transform !== "none") ||
+            (filter && filter !== "none") ||
+            /paint|layout|strict|content/.test(contain) ||
+            /transform|filter|contain/.test(willChange)) {
+          return true;
+        }
+        current = current.parentElement;
+      }
+      return false;
+    }
+
+    clearHeaderMenuPlacement(menu) {
+      if (!menu) return;
+      for (const property of [
+        "position", "left", "right", "top", "bottom", "width", "height",
+        "max-height", "max-width", "overflow", "z-index"
+      ]) {
+        menu.style.removeProperty(property);
+      }
+      const entry = this.document.getElementById(HEADER_ENTRY_ID);
+      if (entry && menu.parentElement !== entry) entry.append(menu);
+    }
+
+    // Host CSS can set both left and right on an absolutely positioned menu,
+    // which stretches it into the blank panel in the screenshot. Pin an
+    // explicit viewport box instead.
+    placeHeaderMenu(menu) {
+      if (!menu) return;
+      if (!this.menuOpen) {
+        this.clearHeaderMenuPlacement(menu);
+        return;
+      }
+      const entry = this.document.getElementById(HEADER_ENTRY_ID);
+      const button = entry?.querySelector(".ghpr-header-button");
+      if (entry && this.fixedPositionTrapped(entry) && menu.parentElement !== this.document.body) {
+        this.document.body.append(menu);
+      }
+      const box = this.viewportBox();
+      const rect = typeof button?.getBoundingClientRect === "function"
+        ? button.getBoundingClientRect()
+        : null;
+      if (!box.width || !box.height || !this.usableRect(rect)) return;
+      const margin = 8;
+      const width = Math.min(320, Math.max(180, box.width - margin * 2));
+      let left = Math.max(margin, Math.min(rect.right - width, box.width - margin - width));
+      let top = rect.bottom + 6;
+      if (top + 160 > box.height - margin) {
+        top = Math.max(margin, rect.top - 6 - Math.min(360, box.height - margin * 2));
+      }
+      const maxHeight = Math.max(120, box.height - top - margin);
+      const set = (name, value) => menu.style.setProperty(name, value, "important");
+      set("position", "fixed");
+      set("left", `${Math.round(left)}px`);
+      set("right", "auto");
+      set("top", `${Math.round(top)}px`);
+      set("bottom", "auto");
+      set("width", `${Math.round(width)}px`);
+      set("height", "auto");
+      set("max-width", `${Math.round(box.width - margin * 2)}px`);
+      set("max-height", `${Math.round(maxHeight)}px`);
+      set("overflow", "auto");
+      set("z-index", "2147483000");
+    }
+
     headerMount() {
+      const box = this.viewportBox();
+      const narrow = box.width > 0 && box.width <= 1011;
       const selectors = [
         "[data-testid='issue-header'] .gh-header-actions",
         "[data-testid='issue-header'] .gh-header-show",
         ".gh-header-actions",
         ".gh-header-show"
       ];
+      // Current GitHub puts PR actions in PH_Actions and, below 1012px, lifts
+      // that row above the title with min-width: max-content. Skip it then.
+      if (!narrow) selectors.push("[data-component='PH_Actions']");
       for (const selector of selectors) {
         const host = this.document.querySelector(selector);
-        if (host) return { host, before: null, floating: false };
+        if (!host || host.closest?.("[hidden]") || host.classList?.contains("d-none")) continue;
+        if (narrow && this.hostOverflowsViewport(host)) continue;
+        return { host, before: null, floating: false, narrow: false };
       }
 
       const profileAnchor = (host) => {
@@ -4074,92 +4050,157 @@
         return avatar?.closest("button, details, a") || avatar;
       };
       const globalActions = this.document.querySelector(
-        ".AppHeader-globalBar-end, [data-testid='app-header-global-bar-end']"
+        ".AppHeader-globalBar-end, [data-testid='app-header-global-bar-end'], " +
+        "[data-testid='top-nav-right']"
       );
-      if (globalActions) {
+      if (globalActions && !(narrow && this.hostOverflowsViewport(globalActions))) {
         return {
           host: globalActions,
           before: profileAnchor(globalActions),
-          floating: false
+          floating: false,
+          narrow: false
         };
       }
 
       const pageHeader = this.document.querySelector("header");
       const profile = pageHeader ? profileAnchor(pageHeader) : null;
-      if (profile?.parentElement) {
-        return { host: profile.parentElement, before: profile, floating: false };
+      if (profile?.parentElement && !(narrow && this.hostOverflowsViewport(profile.parentElement))) {
+        return { host: profile.parentElement, before: profile, floating: false, narrow: false };
       }
-      return { host: this.document.body, before: null, floating: true };
+      return { host: this.document.body, before: null, floating: true, narrow };
     }
 
     renderHeaderEntry() {
-      const mount = this.headerMount();
+      let mount = this.headerMount();
       if (!mount.host) return null;
 
-      const entry = createElement(this.document, "span", {
-        id: HEADER_ENTRY_ID,
-        className: `ghpr-header-entry${mount.floating ? " ghpr-header-floating" : ""}`,
-        attributes: {
-          [MANAGED_ATTRIBUTE]: "",
-          "aria-label": "ghpr GitHub tools"
+      let entry = this.document.getElementById(HEADER_ENTRY_ID);
+      if (!entry) {
+        entry = createElement(this.document, "span", {
+          id: HEADER_ENTRY_ID,
+          className: "ghpr-header-entry",
+          attributes: {
+            [MANAGED_ATTRIBUTE]: "",
+            "aria-label": "ghpr GitHub tools"
+          }
+        });
+        const menu = createElement(this.document, "div", {
+          className: "ghpr-header-menu",
+          attributes: { role: "menu", hidden: "", [MANAGED_ATTRIBUTE]: "" }
+        });
+        const toggle = button(this.document, "ghpr ▾", () => {
+          this.menuOpen = !this.menuOpen;
+          this.syncHeaderMenu(
+            this.headerMenu || entry.querySelector(".ghpr-header-menu"),
+            { rebuild: true }
+          );
+        }, "ghpr-header-button");
+        toggle.setAttribute("aria-haspopup", "menu");
+        toggle.setAttribute("aria-expanded", "false");
+        entry.append(toggle, menu);
+      }
+      const applyMount = (next) => {
+        entry.classList.toggle("ghpr-header-floating", Boolean(next.floating));
+        entry.classList.toggle(
+          "ghpr-header-floating-narrow",
+          Boolean(next.floating && next.narrow)
+        );
+        if (next.before) {
+          if (entry.parentElement !== next.host || entry.nextElementSibling !== next.before) {
+            next.host.insertBefore(entry, next.before);
+          }
+        } else if (entry.parentElement !== next.host) {
+          next.host.append(entry);
         }
-      });
-      const menu = createElement(this.document, "div", {
-        className: "ghpr-header-menu",
-        attributes: {
-          role: "menu",
-          hidden: ""
-        }
-      });
-      const toggle = button(
-        this.document,
-        "ghpr ▾",
-        () => {
-          menu.hidden = !menu.hidden;
-          toggle.setAttribute("aria-expanded", String(!menu.hidden));
-        },
-        "ghpr-header-button"
-      );
-      toggle.setAttribute("aria-haspopup", "menu");
-      toggle.setAttribute("aria-expanded", "false");
+      };
+      applyMount(mount);
+      if (!mount.floating && this.buttonClipped(entry.querySelector(".ghpr-header-button"))) {
+        mount = { host: this.document.body, before: null, floating: true, narrow: true };
+        applyMount(mount);
+      }
+      const menu = this.headerMenu?.isConnected
+        ? this.headerMenu
+        : entry.querySelector(".ghpr-header-menu");
+      this.headerMenu = menu;
+      this.syncHeaderMenu(menu);
+      return menu;
+    }
 
+    // The entry is the only thing this userscript mounts on its own. The menu
+    // body is built while the menu is open and is never rebuilt under the
+    // user's focus, so polling cannot move the view or overwrite a draft.
+    syncHeaderMenu(menu, { rebuild = false } = {}) {
+      if (!menu) return;
+      const entry = this.document.getElementById(HEADER_ENTRY_ID);
+      const toggle = entry?.querySelector(".ghpr-header-button") ||
+        menu.parentElement?.querySelector(".ghpr-header-button");
+      menu.hidden = !this.menuOpen;
+      toggle?.setAttribute("aria-expanded", String(this.menuOpen));
+      if (!this.menuOpen) {
+        this.placeHeaderMenu(menu);
+        return;
+      }
+      const active = this.document.activeElement;
+      if (rebuild || !active || !menu.contains(active)) this.renderHeaderMenu(menu);
+      this.placeHeaderMenu(menu);
+    }
+
+    // Connection state with Connect/Update/Retry, the existing manual actions,
+    // the comment-shortcut entry point, the collapsed Review results section,
+    // and the extension fallback for contributions with no native anchor.
+    renderHeaderMenu(menu) {
+      menu.replaceChildren();
       menu.append(createElement(this.document, "div", {
         className: "ghpr-header-menu-title",
         text: "ghpr"
       }));
+      const updateNotice = this.renderUpdateNotice();
+      if (updateNotice) menu.append(updateNotice);
+      if (this.loadError) {
+        menu.append(createElement(this.document, "p", {
+          className: "ghpr-error",
+          text: this.loadError
+        }));
+      }
+      if (this.actionError) {
+        menu.append(createElement(this.document, "p", {
+          className: "ghpr-error",
+          text: this.actionError
+        }));
+      }
 
       if (!this.snapshot) {
         menu.append(createElement(this.document, "p", {
           className: "ghpr-header-menu-summary",
           text: "Connect this userscript to the local ghpr Browser Bridge."
         }));
-        const connect = button(this.document, "Connect ghpr", async () => {
-          connect.disabled = true;
-          connect.textContent = "Waiting for approval…";
-          try {
-            await this.bridge.pair((message) => {
-              connect.textContent = message;
-            });
-            await this.refresh();
-          } catch (error) {
-            connect.disabled = false;
-            connect.textContent = "Connect ghpr";
-            connect.title = error.message;
-          }
-        }, "ghpr-button ghpr-button-primary");
-        menu.append(connect);
-      } else {
-        const analysis = this.snapshot.analyses[0] || null;
-        menu.append(createElement(this.document, "p", {
-          className: "ghpr-header-menu-summary",
-          text: analysis
-            ? `${labelForVerdict(analysis.verdict)} · ${analysis.confidence} confidence`
-            : "Local PR operations"
-        }));
+        menu.append(this.connectAction());
+        if (this.loadError) {
+          menu.append(button(this.document, "Retry", () => this.refreshSafely(), "ghpr-button"));
+        }
+        return;
+      }
 
+      const analysis = this.snapshot.analyses[0] || null;
+      menu.append(createElement(this.document, "p", {
+        className: "ghpr-header-menu-summary",
+        text: analysis
+          ? `${labelForVerdict(analysis.verdict)} · ${analysis.confidence} confidence`
+          : "Local PR operations"
+      }));
 
-        const actions = this.panelSection("Actions");
-        if (this.page?.type === "pull_request" && this.hasScope("skill:run")) {
+      const activeRun = (this.snapshot.runs || []).find((run) =>
+        run.status === "queued" || run.status === "running"
+      );
+      if (activeRun && this.hasScope("detail:open")) {
+        menu.append(this.menuAction("View live log", () =>
+          this.invokeAction({ kind: "open_detail", run_id: activeRun.id })
+        ));
+      }
+
+      if (this.page?.type === "pull_request") {
+        const actions = this.menuSection("Actions");
+        if (this.hasScope("skill:run")) {
           actions.append(
             this.runAction("Explain CI Failure", {
               kind: "run_skill",
@@ -4172,30 +4213,38 @@
           );
           const skills = this.renderRunnableSkills();
           if (skills) actions.append(skills);
-        } else if (this.page?.type === "pull_request") {
+        } else {
           actions.append(this.permissionPrompt(
             "Run Skills",
             "skill:run",
             "Analysis actions are off for this client."
           ));
         }
+        const failedCheckCount = Number(this.snapshot.pull_request?.check_failure_count || 0);
+        if (failedCheckCount > 0) {
+          actions.append(this.menuAction(
+            `Re-run ${failedCheckCount} failed ${failedCheckCount === 1 ? "job" : "jobs"}`,
+            () => this.rerunFailedChecksV2()
+          ));
+        }
         if (actions.children.length) menu.append(actions);
-        const tags = this.panelSection("Tags");
-        if (this.page?.type === "pull_request" && this.hasScope("tag:write")) {
+
+        const tags = this.menuSection("Tags");
+        if (this.hasScope("tag:write")) {
           for (const [value, label] of [
             ["flaky", "Flaky"],
             ["not_flaky", "Not flaky"],
             ["needs_investigation", "Needs investigation"]
           ]) {
             const selected = this.snapshot.tags.includes(value);
-            tags.append(this.panelAction(`${selected ? "✓ " : ""}${label}`, () =>
+            tags.append(this.menuAction(`${selected ? "✓ " : ""}${label}`, () =>
               this.invokeAction({
                 kind: selected ? "remove_tag" : "set_tag",
                 tag: value
               })
             ));
           }
-        } else if (this.page?.type === "pull_request") {
+        } else {
           tags.append(this.permissionPrompt(
             "Edit local ghpr tags",
             "tag:write",
@@ -4205,140 +4254,30 @@
         if (tags.children.length) menu.append(tags);
 
         if (analysis && this.hasScope("detail:open")) {
-          menu.append(this.panelAction("Open Full Analysis", () =>
+          menu.append(this.menuAction("Open Full Analysis", () =>
             this.invokeAction({ kind: "open_detail", analysis_id: analysis.id })
           ));
         }
-        if (this.hasScope("app:open")) {
-          menu.append(this.panelAction("Open in ghpr-view", () =>
-            this.invokeAction({ kind: "open_app" })
-          ));
-        }
-        menu.append(this.panelAction("Open ghpr panel", () => {
-          const root = this.document.getElementById(ROOT_ID);
-          if (root) {
-            root.classList.remove("ghpr-compact");
-            this.panelExpanded = true;
-            root.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
-          }
-          menu.hidden = true;
-          toggle.setAttribute("aria-expanded", "false");
-        }));
       }
 
-      const fallback = this.panelSection("Extensions");
-      fallback.classList.add("ghpr-fallback");
-      fallback.hidden = true;
-      fallback.setAttribute("data-ghpr-header-fallback", "");
-      menu.append(fallback);
-      entry.append(toggle, menu);
-      mount.host.insertBefore(entry, mount.before || null);
-      this.headerMenu = menu;
-      return menu;
+      if (this.hasScope("app:open")) {
+        menu.append(this.menuAction("Open in ghpr", () =>
+          this.invokeAction({ kind: "open_app" })
+        ));
+      } else {
+        menu.append(this.permissionPrompt(
+          "Open in ghpr",
+          "app:open",
+          "Open ghpr-view permission is required."
+        ));
+      }
+
+      this.renderCommentShortcutSection(menu);
+      this.renderReviewResultsSection(menu);
+      this.renderContributions(menu);
     }
 
-
-    panelMount() {
-      const sidebar = this.document.querySelector("#partial-discussion-sidebar");
-      if (!sidebar) {
-        return { host: this.document.body, inSidebar: false, before: null };
-      }
-      const assignees = sidebar.querySelector(
-        ":scope > .sidebar-assignee, :scope > [data-testid='assignees-section'], :scope > [data-testid='sidebar-assignees']"
-      );
-      const reviewers = sidebar.querySelector(
-        ":scope > .sidebar-reviewers, :scope > [data-testid='reviewers-section'], :scope > [data-testid='sidebar-reviewers']"
-      );
-      return {
-        host: sidebar,
-        inSidebar: true,
-        before: assignees || reviewers?.nextElementSibling || sidebar.firstElementChild
-      };
-    }
-
-    root() {
-      let root = this.document.getElementById(ROOT_ID);
-      const mount = this.panelMount();
-      const surfaceKey = this.window.location.pathname;
-      if (surfaceKey !== this.panelSurfaceKey) {
-        this.panelSurfaceKey = surfaceKey;
-        this.panelExpanded = isConversationSurface(this.window.location);
-      }
-      if (!root) {
-        root = createElement(this.document, "section", {
-          id: ROOT_ID,
-          attributes: { "aria-label": "ghpr local PR tools" }
-        });
-      }
-      root.className = [
-        mount.inSidebar ? "discussion-sidebar-item ghpr-in-sidebar" : "ghpr-floating",
-        this.panelExpanded ? "" : "ghpr-compact"
-      ].filter(Boolean).join(" ");
-      if (mount.before) {
-        if (root.parentElement !== mount.host || root.nextElementSibling !== mount.before) {
-          mount.host.insertBefore(root, mount.before);
-        }
-      } else if (root.parentElement !== mount.host || root.nextElementSibling) {
-        mount.host.append(root);
-      }
-      root.replaceChildren();
-      return root;
-    }
-
-    panelHeader(root, subtitle, stateLabel) {
-      const initiallyCompact = root.classList.contains("ghpr-compact");
-      const toggle = button(this.document, initiallyCompact ? "+" : "−", () => {
-        const compact = root.classList.toggle("ghpr-compact");
-        this.panelExpanded = !compact;
-        toggle.textContent = compact ? "+" : "−";
-        toggle.setAttribute("aria-expanded", String(!compact));
-        toggle.setAttribute(
-          "aria-label",
-          compact ? "Expand ghpr card" : "Collapse ghpr card"
-        );
-      }, "ghpr-panel-toggle");
-      toggle.setAttribute("aria-expanded", String(!initiallyCompact));
-      toggle.setAttribute(
-        "aria-label",
-        initiallyCompact ? "Expand ghpr card" : "Collapse ghpr card"
-      );
-      return createElement(this.document, "div", { className: "ghpr-panel-head" }, [
-        createElement(this.document, "span", {
-          className: "ghpr-panel-mark",
-          text: "g",
-          attributes: { "aria-hidden": "true" }
-        }),
-        createElement(this.document, "div", { className: "ghpr-panel-identity" }, [
-          createElement(this.document, "div", { className: "ghpr-panel-title", text: "ghpr" }),
-          createElement(this.document, "div", { className: "ghpr-panel-subtitle", text: subtitle })
-        ]),
-        createElement(this.document, "span", {
-          className: `ghpr-badge ghpr-tone-${stateLabel === "Update" ? "warning" : "analysis"}`,
-          text: stateLabel
-        }),
-        toggle
-      ]);
-    }
-
-    renderConnect() {
-      this.cleanup();
-      if (this.bridge.discovery && this.bridge.discovery.github_surface_v2 === true) {
-        const SR = global.GhprSurfaceRenderers;
-        if (!SR) return;
-        SR.installSurfaceStyles(this.document);
-        this.renderOperationCardV2(SR, { connected: false });
-        return;
-      }
-      const root = this.root();
-      this.renderHeaderEntry();
-      root.dataset.state = "connect";
-      const body = createElement(this.document, "div", { className: "ghpr-panel-body" });
-      const updateNotice = this.renderUpdateNotice();
-      if (updateNotice) body.append(updateNotice);
-      body.append(createElement(this.document, "p", {
-        className: "ghpr-card-summary",
-        text: "Connect this userscript to the local ghpr Browser Bridge."
-      }));
+    connectAction() {
       const connect = button(this.document, "Connect ghpr", async () => {
         connect.disabled = true;
         connect.textContent = "Waiting for approval…";
@@ -4354,336 +4293,193 @@
         }
       }, "ghpr-button ghpr-button-primary");
       connect.setAttribute("aria-label", "Connect ghpr for GitHub");
-      body.append(connect);
-      root.append(
-        this.panelHeader(
-          root,
-          "Local PR tools",
-          this.updateAvailable() ? "Update" : "Connect"
-        ),
-        body
-      );
+      return connect;
+    }
+
+    // Entry point for the comment shortcuts the configured app exposes as
+    // `snapshot.comment_shortcuts` ([{ id, display_name, template, ... }]).
+    // Another owner implements that data path (the `prepare_comment_shortcut`
+    // BrowserAction provider); until the snapshot carries shortcuts this hook
+    // renders nothing at all, so the menu never grows an empty section. This
+    // hook only ever asks the app to prepare a draft — it never posts a
+    // comment and never writes into a composer by itself.
+    renderCommentShortcutSection(menu, context = this.page) {
+      const shortcuts = Array.isArray(this.snapshot?.comment_shortcuts)
+        ? this.snapshot.comment_shortcuts.filter((shortcut) =>
+            shortcut && (shortcut.enabled !== false) && (shortcut.id || shortcut.display_name)
+          )
+        : [];
+      if (!shortcuts.length) return null;
+      const section = this.menuSection("Comment shortcuts");
+      for (const shortcut of shortcuts) {
+        section.append(this.menuAction(
+          shortcut.display_name || shortcut.id,
+          () => this.invokeAction({
+            kind: "prepare_comment_shortcut",
+            shortcut_id: shortcut.id,
+            page: context
+          })
+        ));
+      }
+      menu.append(section);
+      return section;
+    }
+
+    // Review results stay collapsed until the user asks for them, in this PR
+    // only, and the code annotations the panel can show are opt-in per PR.
+    renderReviewResultsSection(menu) {
+      if (this.page?.type !== "pull_request") return;
+      const section = this.menuSection();
+      const body = createElement(this.document, "div", { className: "ghpr-review-results-body" });
+      const toggle = button(this.document, "", () => {
+        this.reviewResultsOpen = !this.reviewResultsOpen;
+        if (this.reviewResultsOpen) this.fillReviewResults(body);
+        else body.replaceChildren();
+        this.syncReviewResultsToggle(toggle, body);
+      }, "ghpr-panel-action ghpr-review-results-toggle");
+      section.append(toggle, body);
+      if (this.reviewResultsOpen) this.fillReviewResults(body);
+      this.syncReviewResultsToggle(toggle, body);
+      menu.append(section);
+    }
+
+    syncReviewResultsToggle(toggle, body) {
+      const findings = this.findingsForSurfaceV2();
+      const count = findings.length
+        ? ` · ${findings.length} ${findings.length === 1 ? "finding" : "findings"}`
+        : "";
+      toggle.textContent = `${this.reviewResultsOpen ? "⌄" : "›"} Review results${count}`;
+      toggle.setAttribute("aria-expanded", String(this.reviewResultsOpen));
+      body.hidden = !this.reviewResultsOpen;
+    }
+
+    fillReviewResults(body) {
+      const SR = global.GhprSurfaceRenderers;
+      const findings = this.findingsForSurfaceV2();
+      const review = this.latestCodeReview();
+      const reviewedSHA = review?.head_sha ||
+        findings.map((finding) => finding.reviewed_head_sha).find(Boolean) ||
+        "";
+      body.replaceChildren();
+      if (reviewedSHA) {
+        body.append(createElement(this.document, "p", {
+          className: "ghpr-review-count",
+          text: `Reviewed revision ${reviewedSHA.slice(0, 7)}`
+        }));
+      }
+      if (review?.overview_markdown) {
+        body.append(createElement(this.document, "p", {
+          className: "ghpr-review-count",
+          text: review.overview_markdown
+        }));
+      }
+      if (SR && findings.length) {
+        for (const finding of findings) {
+          body.append(SR.renderSurface(
+            this.document,
+            "review_finding",
+            this.buildReviewFindingModelV2(finding, { expanded: true, openInFiles: true })
+          ));
+        }
+      } else if (!review?.overview_markdown) {
+        body.append(createElement(this.document, "p", {
+          className: "ghpr-review-count",
+          text: "No review results yet."
+        }));
+      }
+      if (isFilesChangedSurface(this.window.location)) {
+        body.append(this.annotationsToggle());
+      }
+    }
+
+    annotationsToggle() {
+      const toggle = button(this.document, "", () => {
+        this.showCodeAnnotations = !this.showCodeAnnotations;
+        this.renderFindingAnnotations();
+        this.syncAnnotationsToggle(toggle);
+      }, "ghpr-panel-action ghpr-annotations-toggle");
+      this.syncAnnotationsToggle(toggle);
+      return toggle;
+    }
+
+    syncAnnotationsToggle(toggle) {
+      toggle.textContent = `Code annotations: ${this.showCodeAnnotations ? "on" : "off"}`;
+      toggle.setAttribute("aria-pressed", String(this.showCodeAnnotations));
+      toggle.setAttribute("aria-label", this.showCodeAnnotations
+        ? "Hide ghpr code annotations in this diff"
+        : "Show ghpr code annotations in this diff");
+    }
+
+    // Expand state belongs to the PR the user is looking at: a snapshot
+    // refresh keeps it, and any move to another PR (including GitHub's SPA
+    // navigation) collapses the menu, the results panel and the annotations.
+    syncExpansionState() {
+      const key = this.page ? this.page.key : this.window.location.pathname;
+      if (key === this.expansionKey) return;
+      this.expansionKey = key;
+      this.menuOpen = false;
+      this.reviewResultsOpen = false;
+      this.showCodeAnnotations = false;
+      this.actionError = null;
     }
 
     render() {
-      if (this.isSurfaceV2()) {
-        this.renderSurfaceV2();
-        return;
-      }
-      this.cleanup(false);
-      const root = this.root();
+      this.syncExpansionState();
       this.renderHeaderEntry();
+      const SR = global.GhprSurfaceRenderers;
+      if (!SR) return;
+      SR.installSurfaceStyles(this.document);
+      this.renderFindingAnnotations();
       if (!this.snapshot) return;
-      const currentRun = this.snapshot.runs.find((run) =>
-        run.status === "queued" || run.status === "running"
-      );
-      const analysis = this.snapshot.analyses[0] || null;
-      root.dataset.state = currentRun ? "running" : this.updateAvailable() ? "update" : "idle";
-      const body = this.renderPanel();
-      root.append(
-        this.panelHeader(
-          root,
-          analysis
-            ? `${labelForVerdict(analysis.verdict)} · ${analysis.confidence} confidence`
-            : "Local PR operations",
-          currentRun ? "Running" : this.updateAvailable() ? "Update" : "Ready"
-        ),
-        body
-      );
-      if (isConversationSurface(this.window.location)) this.renderAnalysisCard();
-      this.renderCheckRows();
-      if (this.page?.type === "workflow_run") this.renderWorkflowRunInsight();
-      if (isFilesChangedSurface(this.window.location)) this.renderFilesFindings();
-      this.renderContributions(body);
+      // An explicit ghpr_finding deep link is the one annotation that always
+      // resolves, even while the code annotations toggle is off.
+      if (isFilesChangedSurface(this.window.location)) {
+        this.handleFindingNavigationV2(SR, this.anchoredFindingsForSurfaceV2());
+      }
     }
 
-    // --- GitHub-native Surface Host v2 ------------------------------------
-    // Behind `snapshot.github_surface_v2`. Mounts semantic surfaces inline
-    // via SurfaceMount/InlinePanelHost/DrawerHost (browser/surface-renderers.js)
-    // instead of the global #ghpr-github-root card/header. Per-row Checks,
-    // Actions-job, and per-line Files-changed surfaces need an exact
-    // WorkflowJobSubject/DiffAnchor resolved through the Bridge subject
-    // resolver; that adapter wiring extends the stub hooks below using the
-    // same `this.surfaceRegistry` / `this.checksInsightHost` / `this.drawerHost`
-    // instances set up here (see PLAN.md section 3-8).
-    renderOperationCardV2(SR, { connected = true, unavailable = null } = {}) {
-      if (this.page?.type !== "pull_request") {
-        this.document.getElementById(OPERATION_CARD_ID)?.remove();
-        return;
-      }
-      const mount = this.panelMount();
-      const filesChangedCard = isFilesChangedSurface(this.window.location) && !mount.inSidebar;
-      const operationCardSurface = filesChangedCard ? "files-changed" : "pull-request";
-      if (operationCardSurface !== this.operationCardSurfaceV2) {
-        this.operationCardSurfaceV2 = operationCardSurface;
-        this.operationCardCollapsedV2 = filesChangedCard;
-      }
-      const cardFrame = {
-        collapsible: filesChangedCard,
-        collapsed: filesChangedCard && this.operationCardCollapsedV2,
-        onToggle: (collapsed) => {
-          this.operationCardCollapsedV2 = collapsed;
-          this.renderOperationCardV2(SR, { connected, unavailable });
-        }
-      };
-      const operationHost = () => {
-        let host = this.document.getElementById(OPERATION_CARD_ID);
-        if (!host) {
-          host = createElement(this.document, "div", {
-            id: OPERATION_CARD_ID,
-            attributes: { [MANAGED_ATTRIBUTE]: "" }
-          });
-        }
-        host.className = [
-          "ghpr-operation-card-host",
-          mount.inSidebar
-            ? "discussion-sidebar-item ghpr-operation-card-sidebar"
-            : "ghpr-operation-card-floating",
-          filesChangedCard ? "ghpr-operation-card-files" : "",
-          cardFrame.collapsed ? "ghpr-operation-card-collapsed" : ""
-        ].filter(Boolean).join(" ");
-        if (mount.before) {
-          if (host.parentElement !== mount.host || host.nextElementSibling !== mount.before) {
-            mount.host.insertBefore(host, mount.before);
-          }
-        } else if (host.parentElement !== mount.host || host.nextElementSibling) {
-          mount.host.append(host);
-        }
-        return host;
-      };
-
-      if (unavailable) {
-        const host = operationHost();
-        host.replaceChildren(SR.renderOperationCard(this.document, {
-          ...cardFrame,
-          state: "attention",
-          statusLabel: "Unavailable",
-          summary: unavailable,
-          primaryAction: {
-            id: "retry",
-            label: "Retry",
-            onSelect: () => this.refreshSafely()
-          }
-        }));
-        return;
-      }
-
-      if (!connected) {
-        const host = operationHost();
-        host.replaceChildren(SR.renderOperationCard(this.document, {
-          ...cardFrame,
-          state: "attention",
-          statusLabel: "Not connected",
-          summary: "Connect the local app to review this PR.",
-          primaryAction: {
-            id: "connect",
-            label: "Connect ghpr",
-            onSelect: async () => {
-              const connect = host.querySelector("[data-action-id='connect']");
-              if (connect) {
-                connect.disabled = true;
-                connect.textContent = "Waiting for approval…";
-              }
-              try {
-                await this.bridge.pair();
-                await this.refresh();
-              } catch (error) {
-                if (connect) {
-                  connect.disabled = false;
-                  connect.textContent = "Connect ghpr";
-                  connect.title = error.message;
-                }
-              }
-            }
-          }
-        }));
-        return;
-      }
-
-      const review = this.latestCodeReview();
-      const findings = this.findingsForSurfaceV2();
-      const activeReview = (this.snapshot?.runs || []).find((run) =>
-        run.skill_id === "pr.review" &&
-        (run.status === "queued" || run.status === "running")
-      );
-      const latestReviewRun = [...(this.snapshot?.runs || [])]
-        .filter((run) => run.skill_id === "pr.review")
-        .sort((left, right) =>
-          String(right.completed_at || right.started_at || right.created_at || "")
-            .localeCompare(String(left.completed_at || left.started_at || left.created_at || ""))
-        )[0];
-      const reviewSkill = (this.snapshot?.skills || []).find((skill) => skill.id === "pr.review");
-      const agentBackend = labelForSkillAgent(
-        activeReview?.agent || latestReviewRun?.agent || review?.engine || reviewSkill?.default_agent
-      );
-      if ((activeReview?.id || null) !== this.reviewLogRunIDV2) {
-        this.reviewLogRunIDV2 = activeReview?.id || null;
-        this.reviewLogExpandedV2 = false;
-        this.reviewStepExpandedV2.clear();
-      }
-      const currentHeadSHA = this.snapshot?.current_revision_subject?.head_sha || "";
-      // Retained findings carry the commit they were reviewed against even when
-      // the originating run is no longer part of the snapshot.
-      const reviewedHeadSHA = review?.head_sha ||
-        findings.map((finding) => finding.reviewed_head_sha).find(Boolean) ||
-        "";
-      const reviewIsLatest = Boolean(
-        reviewedHeadSHA &&
-        currentHeadSHA &&
-        reviewedHeadSHA.toLowerCase() === currentHeadSHA.toLowerCase()
-      );
-      const failedCheckCount =
-        Number(this.snapshot?.pull_request?.check_failure_count || 0);
-      const checksFailing = failedCheckCount > 0;
-      const ciExplanationReasons = this.ciExplanationReasonsV2();
-      const repository = this.page.repository;
-      const prNumber = this.page.pr_number;
-      const revisionRef = filesChangedRevisionRef(this.window.location);
-      const outdatedFindings = findings.filter((finding) =>
-        !finding.file || ["outdated", "unavailable"].includes(finding.lifecycle)
-      );
-      const actions = [];
-      if (findings.length) {
-        actions.push({
-          id: "view-findings",
-          label: "View findings",
-          onSelect: () => this.navigateToFindingV2(findings[0])
-        });
-      }
-      if (revisionRef) {
-        actions.push({
-          id: "back-to-latest-revision",
-          label: "Back to latest revision",
-          onSelect: () => {
-            this.window.location.href =
-              `https://github.com/${repository}/pull/${prNumber}/files`;
-          }
-        });
-      } else if (outdatedFindings.length) {
-        const reviewedRevisionURL = outdatedFindings
-          .map((finding) => this.reviewedRevisionFilesURLV2(finding))
-          .find(Boolean);
-        if (reviewedRevisionURL) {
-          actions.push({
-            id: "view-reviewed-revision",
-            label: "View reviewed revision",
-            onSelect: () => {
-              this.window.location.href = reviewedRevisionURL;
-            }
-          });
-        }
-      }
-      if (checksFailing) {
-        const explanationHint = this.ciExplanationHintV2(ciExplanationReasons);
-        actions.push({
-          id: "view-failed-checks",
-          label: `Failed checks (${failedCheckCount})`,
-          title: explanationHint || undefined,
-          onSelect: () => {
-            this.window.location.href =
-              `https://github.com/${repository}/pull/${prNumber}/checks?ghpr_check=first`;
-          }
-        });
-      }
-
-      const skillActions = this.hasScope("skill:run")
-        ? (this.snapshot?.skills || [])
-            .filter((skill) =>
-              skill.is_runnable &&
-              skill.id !== "pr.review" &&
-              (skill.targets || []).some((target) =>
-                target === "pull_request_revision" || target === "pull_request"
-              )
-            )
-            .map((skill) => ({
-              id: `run-skill-${skill.id}`,
-              label: skill.display_name || skill.id,
-              onSelect: () => this.startPullRequestSkillV2(skill.id)
-            }))
-        : [];
-      const progressLog = activeReview ? this.reviewProgressLogModelV2(activeReview) : undefined;
-      if (isConversationSurface(this.window.location)) {
-        this.document.getElementById(OPERATION_CARD_ID)?.remove();
-        return { actions, skillActions, progressLog, progressLabel: agentBackend ? `Coding agent · ${agentBackend}` : undefined };
-      }
-      const fileCount = new Set(
-        findings.map((finding) => finding.file || finding.original_file).filter(Boolean)
-      ).size;
-      const summary = revisionRef
-        ? `Findings from the reviewed revision ${revisionRef.slice(0, 7)}. The latest revision may have changed these lines.`
-        : activeReview
-          ? "Reviewing the exact latest revision…"
-          : review
-            ? reviewIsLatest
-              ? "Latest revision reviewed."
-              : "A newer revision is ready to review."
-            : "Ready to review this revision.";
-      const signals = [];
-      if (agentBackend) {
-        signals.push({ label: `Coding agent · ${agentBackend}`, tone: "agent" });
-      }
-      if (findings.length) {
-        signals.push({
-          label: `${findings.length} ${findings.length === 1 ? "finding" : "findings"} · ${fileCount} ${fileCount === 1 ? "file" : "files"}`
-        });
-      }
-      if (reviewedHeadSHA) {
-        signals.push({
-          label: `Reviewed ${reviewedHeadSHA.slice(0, 7)}`,
-          tone: reviewIsLatest ? undefined : "danger"
-        });
-      }
-      if (!revisionRef && !reviewIsLatest && reviewedHeadSHA && currentHeadSHA) {
-        signals.push({
-          label: `Outdated · head ${currentHeadSHA.slice(0, 7)}`,
-          tone: "danger"
-        });
-      }
-      if (checksFailing) signals.push({ label: "Checks failing", tone: "danger" });
-      const host = operationHost();
-
-      host.replaceChildren(SR.renderOperationCard(this.document, {
-        state: activeReview
-          ? "running"
-          : revisionRef || checksFailing
-            ? "attention"
-            : "ready",
-        ...cardFrame,
-        statusLabel: activeReview
-          ? "Reviewing…"
-          : revisionRef
-            ? "Outdated revision"
-            : "Ready",
-        summary,
-        signals,
-        progressLog,
-        updateAction: this.updateAvailable() && this.bridge.baseURL
-          ? {
-              id: "update-userscript",
-              label: "Update",
-              onSelect: () => this.gm.openInTab(`${this.bridge.baseURL}/install/ghpr.user.js`)
-            }
-          : undefined,
-        primaryAction: this.hasScope("skill:run") && !activeReview
-          ? {
-              id: "review-pr",
-              label: review ? "Review latest" : "Review PR",
-              onSelect: () => this.startPRReviewV2()
-            }
-          : activeReview
-            ? {
-                id: "review-pr",
-                label: "Reviewing…",
-                disabled: true
-              }
-            : undefined,
-        skillActions,
-        actions
-      }));
+    // Unpaired and unauthorized pages keep the same single entry; the menu
+    // itself carries the Connect action and the last load error with Retry.
+    renderConnect() {
+      this.snapshot = null;
+      this.loadError = null;
+      this.render();
     }
 
-    explainCIFailureV2(SR, exactSubject = null, exactSubjectKey = null) {
-      if (this.pendingExplainCIV2 || this.activeRunForSkill("ci.failure.explain")) return;
+    // Findings are only painted onto the GitHub diff while the user asks for
+    // it; switching them off (or switching PR) removes every annotation this
+    // userscript added and leaves the GitHub DOM as it found it.
+    renderFindingAnnotations() {
+      const SR = global.GhprSurfaceRenderers;
+      if (!SR) return;
+      if (!this.surfaceRegistry) {
+        this.surfaceRegistry = new SR.SurfaceRegistry({ document: this.document });
+      }
+      const anchored = this.snapshot ? this.anchoredFindingsForSurfaceV2() : [];
+      if (!this.showCodeAnnotations || !this.snapshot || !anchored.length ||
+          !isFilesChangedSurface(this.window.location)) {
+        this.surfaceRegistry.destroyAll();
+        for (const badge of this.document.querySelectorAll("[data-ghpr-file-tree-badge]")) {
+          badge.remove();
+        }
+        this.filesFindingPanelMount?.destroy();
+        this.filesFindingPanelMount = null;
+        return;
+      }
+      const activeKeys = [];
+      const mount = (surfaceId, host, model, viewType, opts) => {
+        if (!host) return null;
+        const content = this.surfaceRegistry.mount(surfaceId, host, model, viewType, opts);
+        activeKeys.push(`${surfaceId}::${opts.instanceKey || "default"}`);
+        return content;
+      };
+      this.renderFilesTreeBadgesV2();
+      this.renderFilesDiffLineSurfacesV2(SR, mount);
+      this.renderFilesFileHeadersV2(SR, mount);
+      this.surfaceRegistry.unmountStale(activeKeys);
+    }
+
+    explainCIFailureV2(SR) {
       const subject = this.snapshot?.current_revision_subject;
       if (!this.modalHost || subject?.type !== "pull_request_revision") {
         this.renderTransientError("The latest pull request revision is not available yet.");
@@ -4717,14 +4513,7 @@
         startActionID: "start-explain-failure",
         showImport: false,
         onStart: async (selection) => {
-          const started = exactSubject && exactSubjectKey
-            ? await this.runSkillForSubjectV2(
-                "ci.failure.explain",
-                exactSubject,
-                exactSubjectKey,
-                selection
-              )
-            : await this.runCIFailureExplanationV2(SR, selection);
+          const started = await this.runCIFailureExplanationV2(SR, selection);
           if (started) this.modalHost?.close();
           return started;
         }
@@ -4734,7 +4523,9 @@
         ariaLabel: "Explain failed checks"
       });
     }
-    rerunFailedChecksV2(SR, exactSubject = null, exactSubjectKey = null) {
+
+    rerunFailedChecksV2() {
+      const SR = global.GhprSurfaceRenderers;
       if (!SR) {
         this.renderTransientError("The failed-check action dialog is unavailable.");
         return;
@@ -4748,7 +4539,7 @@
         onExplain: canExplain
           ? () => {
               this.modalHost?.close();
-              this.explainCIFailureV2(SR, exactSubject, exactSubjectKey);
+              this.explainCIFailureV2(SR);
             }
           : undefined,
         onRerun: () => {
@@ -4766,7 +4557,6 @@
     async runCIFailureExplanationV2(SR, runtimeSelection) {
       if (this.pendingExplainCIV2 || this.activeRunForSkill("ci.failure.explain")) return false;
       this.pendingExplainCIV2 = true;
-      this.renderOperationCardV2(SR);
       try {
         const action = {
           kind: "run_skill",
@@ -4790,100 +4580,7 @@
         return false;
       } finally {
         this.pendingExplainCIV2 = false;
-        this.renderOperationCardV2(SR);
       }
-    }
-
-
-    reviewProgressLogModelV2(run) {
-      const supplied = Array.isArray(run.log_entries) ? run.log_entries : [];
-      const inputEntries = supplied.filter((entry) => entry.stream === "skill_input");
-      const outputEntries = supplied.filter((entry) => entry.stream === "agent_output");
-      const receivedOutput = outputEntries.length > 0 || supplied.some((entry) =>
-        entry.message === "Receiving Agent output"
-      );
-      const fallbackEntry = (message) => ({
-        timestamp: run.started_at || run.created_at,
-        kind: "running",
-        message
-      });
-      const step = (id, label, entries, active, status) => ({
-        id,
-        label,
-        status,
-        entries: entries.length ? entries : [fallbackEntry(
-          id === "executing" ? "Preparing Skill input…" : "Waiting for Agent output…"
-        )],
-        expanded: this.reviewStepExpandedV2.has(id)
-          ? this.reviewStepExpandedV2.get(id)
-          : active,
-        onToggle: (expanded) => {
-          this.reviewStepExpandedV2.set(id, expanded);
-        }
-      });
-      return {
-        label: "Review log",
-        progressText: run.progress_message || outputEntries.at(-1)?.message,
-        steps: [
-          step(
-            "executing",
-            "Executing Skill",
-            inputEntries,
-            !receivedOutput,
-            receivedOutput ? "success" : "running"
-          ),
-          step(
-            "receiving-output",
-            "Receiving Agent output",
-            outputEntries,
-            receivedOutput,
-            receivedOutput ? "running" : "waiting"
-          )
-        ],
-        expanded: this.reviewLogExpandedV2,
-        onToggle: (expanded) => {
-          this.reviewLogExpandedV2 = expanded;
-        }
-      };
-    }
-
-    renderSurfaceV2() {
-      this.document.getElementById(ROOT_ID)?.remove();
-      this.document.getElementById(HEADER_ENTRY_ID)?.remove();
-      const SR = global.GhprSurfaceRenderers;
-      if (!SR) return;
-      SR.installSurfaceStyles(this.document);
-      const conversationActions = this.renderOperationCardV2(SR);
-      if (!this.surfaceRegistry) this.surfaceRegistry = new SR.SurfaceRegistry({ document: this.document });
-      if (!this.drawerHost) this.drawerHost = new SR.DrawerHost({ document: this.document });
-      if (!this.modalHost) this.modalHost = new SR.ModalHost({ document: this.document });
-      if (!this.checksInsightHost) {
-        this.checksInsightHost = new SR.InlinePanelHost({
-          document: this.document,
-          surfaceId: SR.SURFACE_IDS.checksJobInsight
-        });
-      }
-      if (!this.snapshot) return;
-
-      const activeKeys = [];
-      const mount = (surfaceId, host, model, viewType, opts) => {
-        if (!host) return null;
-        const content = this.surfaceRegistry.mount(surfaceId, host, model, viewType, opts);
-        activeKeys.push(`${surfaceId}::${opts.instanceKey || "default"}`);
-        return content;
-      };
-
-      this.renderConversationReviewSummaryV2(SR, mount, conversationActions);
-      this.document.querySelector("[data-ghpr-files-review-menu]")?.remove();
-      this.renderFilesTreeBadgesV2();
-      // The diff-line pass resolves ?ghpr_finding= navigation, which may select
-      // a file-scoped finding, so the file-level band renders after it.
-      this.renderFilesDiffLineSurfacesV2(SR, mount);
-      this.renderFilesFileHeadersV2(SR, mount);
-      this.renderChecksSurfacesV2(SR, mount);
-      this.renderActionsJobSurfaceV2(SR, mount);
-
-      this.surfaceRegistry.unmountStale(activeKeys);
     }
 
     findingsForSurfaceV2() {
@@ -5125,19 +4822,6 @@
       this.drawerHost.open(content, { triggerEl });
     }
 
-    reportSurfaceHealthV2(surface, state, detail) {
-      if (!surface || !this.hasScope("ui:contribute")) return;
-      this._surfaceHealthV2 = this._surfaceHealthV2 || new Map();
-      const signature = `${state}:${detail || ""}`;
-      if (this._surfaceHealthV2.get(surface) === signature) return;
-      this._surfaceHealthV2.set(surface, signature);
-      this.bridge.request("POST", "/api/v1/surface-health", {
-        surface,
-        state,
-        detail: detail || null
-      }).catch(() => {});
-    }
-
     reviewRunsForSummaryV2() {
       return [...(this.snapshot?.runs || [])]
         .filter((run) => run.skill_id === "pr.review")
@@ -5147,156 +4831,6 @@
           return rightTime.localeCompare(leftTime) || String(right.id).localeCompare(String(left.id));
         });
     }
-
-    reviewFindingRecordsForRunV2(run) {
-      if (!run) return [];
-      const visible = new Map(this.findingsForSurfaceV2().map((finding) => [finding.id, finding]));
-      return (run.result?.code_review?.findings || []).map((payload) => {
-        const anchor = visible.get(payload.id);
-        if (!anchor) return null;
-        return {
-          ...anchor,
-          title: payload.title || anchor.title,
-          body: payload.body || payload.summary || anchor.body,
-          summary: payload.summary || payload.body || anchor.summary,
-          details_text: payload.details || anchor.details_text,
-          details: payload.details || anchor.details,
-          severity: payload.severity || anchor.severity,
-          confidence: payload.confidence ?? anchor.confidence,
-          category: payload.category || anchor.category,
-          quoted_code: payload.quoted_code || anchor.quoted_code,
-          snippet: payload.snippet || anchor.snippet
-        };
-      }).filter(Boolean);
-    }
-
-    reviewSummaryModelForRunV2(run) {
-      if (!run) return null;
-      const findings = this.reviewFindingRecordsForRunV2(run)
-        .map((finding, index) => this.buildReviewFindingModelV2(finding, {
-          expanded: index === 0,
-          openInFiles: true
-        }));
-      const head = run.result?.code_review?.reviewed_head_sha || run.result?.code_review?.head_sha || "";
-      const current = this.snapshot?.current_revision_subject?.head_sha || "";
-      return {
-        meta: `${labelForSkillAgent(run.agent || run.result?.code_review?.engine || "Imported review")} · ${head.slice(0, 7)}${head && current && head.toLowerCase() === current.toLowerCase() ? " · current" : " · outdated"} · ${findings.length} findings`,
-        overview: run.result?.code_review?.overview_markdown || "",
-        findings
-      };
-    }
-
-    renderConversationReviewSummaryV2(SR, mount, conversationActions = {}) {
-      if (!isConversationSurface(this.window.location)) return;
-      const sidebar = this.document.querySelectorAll("#partial-discussion-sidebar");
-      const health = sidebar.length === 1 ? "healthy" : sidebar.length === 0 ? "missing" : "ambiguous";
-      this.reportSurfaceHealthV2(
-        SR.SURFACE_IDS.conversationReviewSummary,
-        health,
-        health === "healthy" ? "Conversation sidebar found." : `Expected one Conversation sidebar; found ${sidebar.length}.`
-      );
-      const pageKey = this.page?.key || "";
-      if (this.reviewSummaryStateV2.pageKey !== pageKey) {
-        this.reviewSummaryStateV2 = { pageKey, annotationsOpen: true, expandedAnnotationKeys: new Set(), selectedRunID: null, reviewOpen: false };
-      }
-      const failedCheckCount = Number(this.snapshot?.pull_request?.check_failure_count || 0);
-      const reasons = this.ciExplanationReasonsV2();
-      const explainRuns = [...(this.snapshot?.runs || [])].filter((run) => run.skill_id === "ci.failure.explain")
-        .sort((a, b) => String(b.completed_at || b.started_at || b.created_at || "").localeCompare(String(a.completed_at || a.started_at || a.created_at || "")));
-      const activeExplain = explainRuns.find((run) => ["queued", "running"].includes(run.status));
-      const explainLabel = this.pendingExplainCIV2 || activeExplain ? "Explaining…" : explainRuns[0]?.status === "completed" ? "Explain again" : ["failed", "cancelled"].includes(explainRuns[0]?.status) ? "Retry explain" : "Explain CI Failure";
-      const activeReview = this.reviewRunsForSummaryV2().find((run) => ["queued", "running"].includes(run.status));
-      const reviewRuns = this.reviewRunsForSummaryV2();
-      const currentHead = this.snapshot?.current_revision_subject?.head_sha || "";
-      const currentCompleted = reviewRuns.find((run) => run.status === "completed" && (run.result?.code_review?.reviewed_head_sha || run.result?.code_review?.head_sha || "").toLowerCase() === currentHead.toLowerCase());
-      const rememberedCompleted = reviewRuns.find((run) => run.id === this.reviewSummaryStateV2.selectedRunID && run.status === "completed" && run.result?.code_review);
-      const selectedRun = rememberedCompleted || currentCompleted || reviewRuns.find((run) => run.status === "completed" && run.result?.code_review) || null;
-      this.reviewSummaryStateV2.selectedRunID = selectedRun?.id || null;
-      const skill = (this.snapshot?.skills || []).find((item) => item.id === "pr.review");
-      const runtimes = skill && skill.is_runnable !== false ? this.runtimeOptionsV2(skill) : [];
-      const reviewerRows = runtimes.map((runtime) => {
-        const matching = reviewRuns.filter((run) => {
-          const engine = run.agent || run.result?.code_review?.engine;
-          return engine === runtime.id || labelForSkillAgent(engine) === runtime.label;
-        });
-        const latestAttempt = matching[0];
-        const completed = matching.filter((run) => run.status === "completed" && run.result?.code_review);
-        const currentResult = completed.find((run) => {
-          const head = run.result.code_review.reviewed_head_sha || run.result.code_review.head_sha || "";
-          return head && currentHead && head.toLowerCase() === currentHead.toLowerCase();
-        });
-        const selectedResult = currentResult || completed[0] || null;
-        const head = selectedResult?.result?.code_review?.reviewed_head_sha || selectedResult?.result?.code_review?.head_sha || "";
-        const current = head && currentHead && head.toLowerCase() === currentHead.toLowerCase();
-        const isRunning = latestAttempt && ["queued", "running"].includes(latestAttempt.status);
-        const statusLabel = isRunning ? (latestAttempt.status === "queued" ? "Queued" : "Reviewing…") : latestAttempt?.status === "failed" ? "Failed" : latestAttempt?.status === "cancelled" ? "Cancelled" : selectedResult ? `${selectedResult.result.code_review.findings?.length || 0} findings${current ? "" : " · Outdated"}` : "Not reviewed";
-        return {
-          id: runtime.id, label: runtime.label,
-          avatarURL: runtime.id === "codex" ? "https://github.com/openai.png?size=64" : runtime.id === "claude_code" ? "https://github.com/anthropics.png?size=64" : "https://github.com/oh-my-pi.png?size=64",
-          avatar: runtime.id === "codex" ? "CX" : runtime.id === "claude_code" ? "C" : "O",
-          modelLabel: runtime.selectedModel || "Runtime default", effortLabel: runtime.selectedReasoningEffort || "Runtime default", statusLabel,
-          resultLabel: selectedResult ? `${selectedResult.result.code_review.findings?.length || 0} findings` : "",
-          requestLabel: latestAttempt?.status === "failed" || latestAttempt?.status === "cancelled" ? "Retry" : current ? "Re-request" : "Request",
-          requestDisabled: !this.hasScope("skill:run") || Boolean(activeReview) || !this.snapshot?.current_revision_subject,
-          disabledReason: !this.hasScope("skill:run") ? "Run permission is required." : activeReview ? "A review is already running." : undefined,
-          onRequest: () => this.startPRReviewV2(runtime.id),
-          onConfigure: () => this.startPRReviewV2(runtime.id),
-          onSelectResult: () => { this.reviewSummaryStateV2.selectedRunID = selectedResult?.id || null; this.reviewSummaryStateV2.reviewOpen = true; this.render(); }
-        };
-      });
-      const selectedReview = this.reviewSummaryModelForRunV2(selectedRun);
-      const selectedFindings = this.reviewFindingRecordsForRunV2(selectedRun);
-      const summaryModel = {
-        reviewers: reviewerRows, selectedReview, reviewOpen: this.reviewSummaryStateV2.reviewOpen,
-        reviewActions: (conversationActions?.actions || []).filter((action) => action.id !== "view-failed-checks" && (action.id !== "view-findings" || !selectedFindings.length)),
-        skillActions: (conversationActions?.skillActions || []).filter((action) => action.id !== "run-skill-ci.failure.explain"),
-        progressLog: conversationActions?.progressLog,
-        progressLabel: conversationActions?.progressLabel,
-        onToggleReview: () => { this.reviewSummaryStateV2.reviewOpen = !this.reviewSummaryStateV2.reviewOpen; this.render(); },
-        onCopyAll: selectedFindings.length ? () => this.copyTextV2(SR.reviewSummaryCopyText({
-          reviewedShortSHA: (selectedRun?.result?.code_review?.reviewed_head_sha || "").slice(0, 7),
-          findingCount: selectedFindings.length, fileCount: new Set(selectedFindings.map((finding) => finding.file)).size,
-          findings: selectedFindings.map((finding, index) => this.buildReviewFindingModelV2(finding, { expanded: index === 0, openInFiles: true }))
-        })) : undefined,
-        onOpenInFiles: selectedFindings[0] ? () => this.navigateToFindingV2(selectedFindings[0]) : undefined
-      };
-      const checksActions = failedCheckCount > 0 ? {
-        failedCount: failedCheckCount,
-        annotations: reasons.map((item) => ({
-          key: item.key, label: item.label || "CI failure explanation", reason: item.reason, evidence: item.evidence,
-          suggestedAction: item.run.result?.payload?.suggested_action,
-          expanded: this.reviewSummaryStateV2.expandedAnnotationKeys.has(item.key),
-          onToggle: () => { const keys = this.reviewSummaryStateV2.expandedAnnotationKeys; keys.has(item.key) ? keys.delete(item.key) : keys.add(item.key); this.render(); },
-          onViewFullResult: () => this.openRunDrawerV2(item.run)
-        })),
-        open: this.reviewSummaryStateV2.annotationsOpen,
-        onToggle: () => { this.reviewSummaryStateV2.annotationsOpen = !this.reviewSummaryStateV2.annotationsOpen; this.render(); },
-        actions: [
-          ...(conversationActions?.actions || []).filter((action) => action.id === "view-failed-checks"),
-          this.hasScope("skill:run") ? { id: "explain-ci-failure", label: explainLabel, disabled: Boolean(activeExplain) || this.pendingExplainCIV2, onSelect: () => this.explainCIFailureV2(SR) } : null,
-          { id: "rerun-failed-ci", label: `Re-run ${failedCheckCount} failed ${failedCheckCount === 1 ? "job" : "jobs"}`, className: "ghpr-review-summary-rerun", onSelect: () => this.rerunFailedChecksV2(SR) }
-        ].filter(Boolean)
-      } : undefined;
-      if (sidebar.length === 1) {
-        const nativeReviewers = sidebar[0].querySelector(":scope > .sidebar-reviewers, :scope > [data-testid='reviewers-section'], :scope > [data-testid='sidebar-reviewers']");
-        mount(SR.SURFACE_IDS.conversationReviewSummary, sidebar[0], {
-          ...summaryModel, onUpdate: this.updateAvailable() && this.bridge.baseURL ? () => this.gm.openInTab(`${this.bridge.baseURL}/install/ghpr.user.js`) : undefined,
-          updateLabel: "Update ghpr userscript", onConfigureReview: () => this.startPRReviewV2()
-        }, "review_summary", { instanceKey: "default", anchor: nativeReviewers || sidebar[0].firstElementChild, position: nativeReviewers ? "after" : "before" });
-      }
-      if (checksActions) {
-        const anchors = semanticTargets(this.document, "pr.conversation.after-checks");
-        const annotationHealth = anchors.length === 1 ? "healthy" : anchors.length === 0 ? "missing" : "ambiguous";
-        this.reportSurfaceHealthV2(SR.SURFACE_IDS.conversationAnnotations, annotationHealth,
-          annotationHealth === "healthy" ? "Conversation timeline anchor found." : `Expected one Conversation timeline anchor; found ${anchors.length}.`);
-        if (anchors.length === 1) {
-          mount(SR.SURFACE_IDS.conversationAnnotations, anchors[0].parentNode, {
-            checksActions, annotationsOnly: true
-          }, "review_summary", { instanceKey: "default", anchor: anchors[0], position: "after" });
-        }
-      }
-    }
-
 
     renderFilesTreeBadgesV2() {
       const selector = "[data-ghpr-file-tree-badge]";
@@ -5389,11 +4923,6 @@
     renderFilesFileHeadersV2(SR, mount) {
       if (!isFilesChangedSurface(this.window.location)) return;
       const fileTables = semanticTargets(this.document, "files.diff.line-decoration");
-      this.reportSurfaceHealthV2(
-        SR.SURFACE_IDS.filesFileHeader,
-        fileTables.length ? "healthy" : "missing",
-        fileTables.length ? "Files diff hosts found." : "No loaded Files diff host was found."
-      );
       const findings = this.anchoredFindingsForSurfaceV2();
       if (!findings.length) return;
       const byFile = new Map();
@@ -5458,12 +4987,6 @@
 
     renderFilesDiffLineSurfacesV2(SR, mount) {
       if (!isFilesChangedSurface(this.window.location)) return;
-      const lineHosts = semanticTargets(this.document, "files.diff.line-decoration");
-      this.reportSurfaceHealthV2(
-        SR.SURFACE_IDS.filesDiffLineAfter,
-        lineHosts.length ? "healthy" : "missing",
-        lineHosts.length ? "Files line hosts found." : "No loaded Files line host was found."
-      );
       const allFindings = this.anchoredFindingsForSurfaceV2();
       const findings = allFindings.filter((finding) => finding.file && finding.line);
       const groups = new Map();
@@ -5503,7 +5026,6 @@
           );
         }
       }
-      this.handleFindingNavigationV2(SR, allFindings);
     }
 
     findingAnchorLabelV2(finding) {
@@ -5723,123 +5245,6 @@
       if (href) this.window.location.href = href;
     }
 
-    subjectKeyForWorkflowJob(subject) {
-      const repository = String(subject.repository).toLowerCase();
-      const runID = subject.workflow_run_id;
-      const jobID = subject.workflow_job_id;
-      if (subject.workflow_attempt && subject.head_sha) {
-        return `github:workflow-job:${repository}:run:${runID}:attempt:${subject.workflow_attempt}:job:${jobID}@${subject.head_sha}`;
-      }
-      return workflowJobSubjectKey({ repository, runId: runID, jobId: jobID });
-    }
-
-    workflowJobMetadataForRunV2(run) {
-      const runSubject = run?.subject;
-      if (runSubject?.type === "workflow_job") {
-        return {
-          repository: runSubject.repository || this.page?.repository,
-          workflow_run_id: runSubject.workflow_run_id,
-          workflow_job_id: runSubject.workflow_job_id,
-          workflow_name: null
-        };
-      }
-      const metadata = run?.result?.payload?._ghpr_job;
-      if (!metadata?.workflow_run_id || !metadata?.workflow_job_id) return null;
-      return metadata;
-    }
-
-    ciExplanationReasonsV2(currentJobKeys = null) {
-      const seen = new Set();
-      const reasons = [];
-      const runs = [...(this.snapshot?.runs || [])]
-        .filter((run) =>
-          run.skill_id === "ci.failure.explain" &&
-          run.status === "completed" &&
-          run.result?.payload &&
-          typeof run.result.payload === "object"
-        )
-        .sort((left, right) =>
-          String(right.completed_at || right.started_at || "")
-            .localeCompare(String(left.completed_at || left.started_at || ""))
-        );
-      for (const run of runs) {
-        const payload = run.result.payload;
-        const reason = typeof payload.why_it_failed === "string"
-          ? payload.why_it_failed.trim()
-          : "";
-        if (!reason) continue;
-        const job = this.workflowJobMetadataForRunV2(run);
-        const key = job
-          ? `${String(job.repository || this.page?.repository).toLowerCase()}:${job.workflow_run_id}:${job.workflow_job_id}`
-          : run.id;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        reasons.push({
-          run,
-          job,
-          key,
-          label: job?.workflow_name || run.result?.analysis?.job_name || null,
-          reason,
-          evidence: Array.isArray(payload.relevant_evidence)
-            ? payload.relevant_evidence.filter((item) => typeof item === "string" && item.trim())
-            : []
-        });
-      }
-      if (currentJobKeys) {
-        return reasons.filter((item) => item.job && currentJobKeys.has(item.key));
-      }
-      const latestPageRun = reasons.find((item) =>
-        item.run.subject?.type === "legacy_page" || !item.run.subject
-      );
-      return latestPageRun ? [latestPageRun] : [];
-    }
-    ciExplanationHintV2(reasons = this.ciExplanationReasonsV2()) {
-      return reasons
-        .flatMap((item) => [
-          `• ${item.label ? `${item.label}: ` : ""}${item.reason}`,
-          ...item.evidence.map((evidence) => `  • ${evidence}`)
-        ])
-        .join("\n");
-    }
-
-
-    latestRunForSubjectV2(skillID, subject) {
-      return [...(this.snapshot?.runs || [])]
-        .filter((run) => {
-          if (run.skill_id !== skillID) return false;
-          const job = this.workflowJobMetadataForRunV2(run);
-          if (job) {
-            return String(job.workflow_run_id) === String(subject.workflow_run_id) &&
-              String(job.workflow_job_id) === String(subject.workflow_job_id);
-          }
-          return run.subject_key === this.subjectKeyForWorkflowJob(subject);
-        })
-        .sort((left, right) =>
-          String(right.completed_at || right.started_at || "").localeCompare(String(left.completed_at || left.started_at || ""))
-        )[0] || null;
-    }
-
-    async resolveWorkflowJobSubjectV2(subject) {
-      if (subject.workflow_attempt && subject.head_sha) return subject;
-      const resolved = await this.bridge.request(
-        "POST",
-        "/api/v1/subjects/resolve",
-        {
-          type: "workflow_job",
-          repository: subject.repository,
-          workflow_job_id: subject.workflow_job_id
-        }
-      );
-      return {
-        type: "workflow_job",
-        repository: resolved.repository,
-        workflow_run_id: resolved.workflow_run_id,
-        workflow_attempt: resolved.workflow_attempt,
-        workflow_job_id: resolved.workflow_job_id,
-        head_sha: resolved.head_sha
-      };
-    }
-
     runtimeOptionsV2(skill) {
       const allowed = new Set(skill?.agents || ["omp", "claude_code", "codex"]);
       const preferences = new Map(
@@ -5981,625 +5386,7 @@
       }
     }
 
-    async runSkillForSubjectV2(skillID, subject, subjectKey, runtimeSelection = null) {
-      const pendingKey = `${skillID}::${subjectKey}`;
-      if (this.pendingSubjectRuns.has(pendingKey)) return false;
-      const active = this.latestRunForSubjectV2(skillID, subject);
-      if (active && (active.status === "queued" || active.status === "running")) return false;
-      this.pendingSubjectRuns.add(pendingKey);
-      try {
-        const exactSubject = subject.type === "workflow_job"
-          ? await this.resolveWorkflowJobSubjectV2(subject)
-          : subject;
-        const action = { kind: "run_skill", skill_id: skillID, subject: exactSubject };
-        if (runtimeSelection?.agent) action.agent = runtimeSelection.agent;
-        if (runtimeSelection?.model) action.model = runtimeSelection.model;
-        if (runtimeSelection?.reasoningEffort) {
-          action.reasoning_effort = runtimeSelection.reasoningEffort;
-        }
-        const response = await this.bridge.request("POST", "/api/v1/actions", {
-          action,
-          page: this.page,
-          confirmed: false
-        });
-        this.openResponseURL(response);
-        await this.refresh();
-        return true;
-      } catch (error) {
-        this.renderTransientError(error.message);
-        return false;
-      } finally {
-        this.pendingSubjectRuns.delete(pendingKey);
-      }
-    }
-
-    openRunDrawerV2(run) {
-      if (!this.drawerHost) return;
-      const SR = global.GhprSurfaceRenderers;
-      if (!SR) return;
-      const content = SR.renderSurface(this.document, "detail_drawer", {
-        title: run.skill_id,
-        subtitle: run.status,
-        raw: JSON.stringify(run.result || {}, null, 2)
-      });
-      this.drawerHost.open(content);
-    }
-
-    buildCiInsightModelV2(subject) {
-      const explainRun = this.latestRunForSubjectV2("ci.failure.explain", subject);
-      const classifyRun = this.latestRunForSubjectV2("ci.failure.classify_flaky", subject);
-      const section = (run, kind) => {
-        if (!run) return { status: "unavailable" };
-        if (run.status === "queued" || run.status === "running") return { status: "running" };
-        if (run.status !== "completed" || !run.result?.payload ||
-            typeof run.result.payload !== "object") {
-          return { status: "unavailable" };
-        }
-        const payload = run.result.payload;
-        if (kind === "explain") {
-          return {
-            status: "ready",
-            whyItFailed: payload.why_it_failed,
-            relevantEvidence: Array.isArray(payload.relevant_evidence)
-              ? payload.relevant_evidence
-              : [],
-            suggestedAction: payload.suggested_action,
-            onViewFullResult: () => this.openRunDrawerV2(run)
-          };
-        }
-        const confidenceRaw = Number(payload.confidence);
-        const payloadHistory = payload.history && typeof payload.history === "object"
-          ? payload.history
-          : undefined;
-        return {
-          status: "ready",
-          verdict: labelForVerdict(payload.verdict),
-          confidencePercent: Number.isFinite(confidenceRaw)
-            ? (confidenceRaw <= 1 ? confidenceRaw * 100 : confidenceRaw)
-            : undefined,
-          flakyEvidence: Array.isArray(payload.flaky_evidence)
-            ? payload.flaky_evidence
-            : [],
-          history: payloadHistory
-            ? {
-                failedRuns: payloadHistory.failed_runs,
-                totalRuns: payloadHistory.total_runs,
-                windowDays: payloadHistory.window_days
-              }
-            : undefined,
-          reproduction: payload.reproduction,
-          suggestedAction: payload.suggested_action,
-          onViewFullResult: () => this.openRunDrawerV2(run)
-        };
-      };
-      return {
-        explain: section(explainRun, "explain"),
-        classify: section(classifyRun, "classify")
-      };
-    }
-    checksInsightModelV2(subject, row) {
-      const model = this.buildCiInsightModelV2(subject);
-      const jobLink = row?.querySelector("a[href*='/actions/runs/']");
-      model.explain = {
-        ...(model.explain || {}),
-        actions: [
-          ...((model.explain && model.explain.actions) || []),
-          ...(model.explain?.status !== "running"
-            ? [{
-                id: "explain",
-                label: model.explain?.status === "ready" ? "Explain again" : "Explain CI Failure",
-                onSelect: () => this.explainCIFailureV2(
-                  global.GhprSurfaceRenderers,
-                  subject,
-                  this.subjectKeyForWorkflowJob(subject)
-                )
-              }]
-            : []),
-          ...(jobLink
-            ? [{ id: "inspect", label: "Inspect job", onSelect: () => jobLink.click() }]
-            : []),
-          {
-            id: "rerun",
-            label: "Re-run failed jobs",
-            onSelect: () => this.rerunFailedChecksV2(
-              global.GhprSurfaceRenderers,
-              subject,
-              this.subjectKeyForWorkflowJob(subject)
-            )
-          }
-        ]
-      };
-      model.classify = {
-        ...(model.classify || {}),
-        actions: [
-          ...((model.classify && model.classify.actions) || []),
-          ...(model.classify?.status !== "running"
-            ? [{
-                id: "classify",
-                label: model.classify?.status === "ready" ? "Classify again" : "Classify Flaky",
-                onSelect: () => this.runSkillForSubjectV2(
-                  "ci.failure.classify_flaky",
-                  subject,
-                  this.subjectKeyForWorkflowJob(subject)
-                )
-              }]
-            : [])
-        ]
-      };
-      return model;
-    }
-
-
-    checksRootV2() {
-      return this.document.querySelector("#checks_tab, .checks-listing, #partial-pull-checks") ||
-        (this.document.querySelectorAll("main").length === 1 ? this.document.querySelector("main") : null);
-    }
-
-    checksDiscoveryStateV2() {
-      const key = `${this.page?.key || ""}:${this.snapshot?.current_revision_subject?.head_sha || ""}`;
-      if (this.checksDiscoveryV2?.key !== key) {
-        this.checksDiscoveryV2 = { key, requested: false, attempted: new Set() };
-      }
-      return this.checksDiscoveryV2;
-    }
-
-    nativeChecksTextV2(node) {
-      const walker = this.document.createTreeWalker(node, this.window.NodeFilter.SHOW_TEXT);
-      const parts = [];
-      while (walker.nextNode()) {
-        if (!walker.currentNode.parentElement?.closest("[data-ghpr-surface], [data-ghpr-managed]")) {
-          parts.push(walker.currentNode.textContent);
-        }
-      }
-      return parts.join(" ").trim();
-    }
-
-    failedChecksJobsV2(root) {
-      const rows = new Set(semanticTargets(this.document, "checks.run.trailing"));
-      for (const link of root.querySelectorAll("a[href*='check_run_id=']")) {
-        if (!link.closest("[data-ghpr-surface], [data-ghpr-managed]")) {
-          rows.add(link.closest(".js-check-run, .CheckRun, [data-testid='check-run-row'], li") || link);
-        }
-      }
-      const jobs = new Map();
-      let nativeRowCount = 0;
-      for (const row of rows) {
-        if (!root.contains(row) || row.closest("[data-ghpr-surface], [data-ghpr-managed]")) continue;
-        nativeRowCount += 1;
-        const nativeText = this.nativeChecksTextV2(row);
-        const failureIcon = [...row.querySelectorAll(".octicon-x, .octicon-x-circle, [data-conclusion='failure'], [data-status='failure']")]
-          .some((node) => !node.closest("[data-ghpr-surface], [data-ghpr-managed]"));
-        if (!failureIcon && !/\b(failed|failure|timed out)\b/i.test(`${row.getAttribute("aria-label") || ""} ${nativeText}`)) continue;
-        const link = row.matches("a[href]") ? row : row.querySelector("a[href*='/actions/runs/'], a[href*='check_run_id=']");
-        if (!link) continue;
-        const parsed = parseWorkflowJobHref(link.getAttribute("href"));
-        const label = row.getAttribute("data-check-name") || link.getAttribute("aria-label") ||
-          this.nativeChecksTextV2(row.querySelector(".text-bold, .text-semibold, span") || link) || nativeText;
-        if (parsed) {
-          const subject = {
-            type: "workflow_job", repository: parsed.repository,
-            workflow_run_id: Number(parsed.runId), workflow_job_id: Number(parsed.jobId)
-          };
-          const subjectKey = this.subjectKeyForWorkflowJob(subject);
-          jobs.set(subjectKey, { row, subject, subjectKey, label });
-        } else {
-          const url = new URL(link.getAttribute("href"), this.window.location.href);
-          const checkRunID = url.searchParams.get("check_run_id");
-          if (url.origin !== "https://github.com" || url.pathname !== `/${this.page.repository}/pull/${this.page.pr_number}/checks` || !/^\d+$/.test(checkRunID || "")) continue;
-          const subjectKey = `github:check-run:${checkRunID}`;
-          jobs.set(subjectKey, { row, subject: null, subjectKey, label, nativeLink: link, checkRunID });
-        }
-      }
-      return { jobs: [...jobs.values()], nativeRowCount };
-    }
-
-    selectChecksJobV2(SR, jobs, index, { scroll = true, updateURL = true } = {}) {
-      const selected = jobs[index];
-      if (!selected) return;
-      this.selectedChecksJobKey = selected.subjectKey;
-      if (scroll) {
-        for (let parent = selected.row.parentElement; parent; parent = parent.parentElement) {
-          if (parent.matches("details:not([open])")) parent.querySelector(":scope > summary")?.click();
-        }
-      }
-      if (updateURL) {
-        const url = new URL(this.window.location.href);
-        url.searchParams.set("ghpr_check", selected.subjectKey);
-        this.window.history.replaceState({}, "", url);
-      }
-      if (!selected.subject) {
-        this.checksInsightHost?.close();
-        if (updateURL) selected.nativeLink.click();
-        if (scroll) selected.row.scrollIntoView?.({ block: "center" });
-        return;
-      }
-      const model = this.checksInsightModelV2(selected.subject, selected.row);
-      model.navigation = {
-        position: index + 1,
-        total: jobs.length,
-        noun: jobs.length === 1 ? "failed check" : "failed checks",
-        ariaLabel: "Failed checks navigation",
-        previousID: "previous-failed-check",
-        nextID: "next-failed-check",
-        onPrevious: index > 0
-          ? () => this.selectChecksJobV2(SR, jobs, index - 1)
-          : undefined,
-        onNext: index + 1 < jobs.length
-          ? () => this.selectChecksJobV2(SR, jobs, index + 1)
-          : undefined
-      };
-      const content = SR.renderSurface(this.document, "ci_insight", model);
-      this.checksInsightHost.openAfter(selected.row, content, {
-        subjectKey: selected.subjectKey,
-        instanceKey: "panel"
-      });
-      if (scroll) selected.row.scrollIntoView?.({ block: "center" });
-      if (updateURL) this.renderSurfaceV2();
-    }
-
-    expandRequestedFailedSuiteV2(explanationReasons) {
-      const state = this.checksDiscoveryStateV2();
-      if (this.pendingChecksExpansionV2 || (!state.requested && !new URLSearchParams(this.window.location.search).has("ghpr_check"))) return;
-      const root = this.checksRootV2();
-      if (!root) return;
-      const labels = explanationReasons.map((item) => item.label?.trim().toLowerCase()).filter(Boolean);
-      const candidates = [...root.querySelectorAll("details:not([open]) > summary, button[aria-expanded='false'], [role='button'][aria-expanded='false']")];
-      const toggle = candidates.find((candidate) => {
-        if (candidate.closest("[data-ghpr-surface], [data-ghpr-managed]")) return false;
-        const text = this.nativeChecksTextV2(candidate).toLowerCase();
-        const suite = candidate.closest(".js-check-suite, [data-check-suite-id]");
-        const controlID = candidate.getAttribute("aria-controls");
-        const controlled = controlID ? this.document.getElementById(controlID) : null;
-        const isSuite = suite || candidate.matches(".js-check-suite-toggle") ||
-          (candidate.tagName === "SUMMARY" && /\bon:\s*(pull_request|push|workflow_dispatch|schedule|merge_group)/.test(text)) ||
-          (controlled && root.contains(controlled) && controlled.querySelector(".js-check-run, [data-testid='check-run-row'], a[href*='check_run_id=']")) ||
-          labels.some((label) => text && (text.includes(label) || label.includes(text)));
-        const key = controlID || suite?.getAttribute("data-check-suite-id") || candidate.id || text;
-        if (!isSuite || !key || state.attempted.has(key)) return false;
-        state.attempted.add(key);
-        return true;
-      });
-      if (!toggle) return;
-      this.pendingChecksExpansionV2 = true;
-      toggle.click();
-      this.window.setTimeout(() => {
-        this.pendingChecksExpansionV2 = false;
-        if (!this.stopped && isChecksSurface(this.window.location) && this.checksDiscoveryV2 === state) this.renderSurfaceV2();
-      }, 250);
-    }
-
-    renderChecksSurfacesV2(SR, mount) {
-      if (!isChecksSurface(this.window.location)) return;
-      const root = this.checksRootV2();
-      if (!root) {
-        this.reportSurfaceHealthV2(SR.SURFACE_IDS.checksSummary, "missing", "No unique native Checks page container was found.");
-        this.reportSurfaceHealthV2(SR.SURFACE_IDS.checksJobTrailing, "missing", "No native Checks page container was found.");
-        return;
-      }
-      const { jobs: failedJobs, nativeRowCount } = this.failedChecksJobsV2(root);
-      this.reportSurfaceHealthV2(
-        SR.SURFACE_IDS.checksJobTrailing,
-        nativeRowCount ? "healthy" : "missing",
-        nativeRowCount ? "Native Checks rows found." : "No native Checks rows were found; suites may still be collapsed or loading."
-      );
-      const currentJobKeys = new Set(failedJobs.filter((job) => job.subject).map(({ subject }) =>
-        `${String(subject.repository).toLowerCase()}:${subject.workflow_run_id}:${subject.workflow_job_id}`
-      ));
-      const matchedReasons = failedJobs.length
-        ? this.ciExplanationReasonsV2(currentJobKeys)
-        : [];
-      const explanationReasons = matchedReasons.length
-        ? matchedReasons
-        : this.ciExplanationReasonsV2();
-      this.expandRequestedFailedSuiteV2(explanationReasons);
-      const requestedCheck = new URLSearchParams(this.window.location.search).get("ghpr_check");
-      if (requestedCheck && failedJobs.length) {
-        const requestedIndex = requestedCheck === "first"
-          ? 0
-          : failedJobs.findIndex((job) => job.subjectKey === requestedCheck);
-        if (requestedIndex >= 0) this.selectedChecksJobKey = failedJobs[requestedIndex].subjectKey;
-      }
-
-      const nativeCheckID = new URLSearchParams(this.window.location.search).get("check_run_id");
-      if (!requestedCheck && nativeCheckID) {
-        this.selectedChecksJobKey = failedJobs.find((job) => job.checkRunID === nativeCheckID)?.subjectKey || this.selectedChecksJobKey;
-      }
-      const selectedIndex = failedJobs.findIndex((job) => job.subjectKey === this.selectedChecksJobKey);
-      const reportedFailures = Number(this.snapshot?.pull_request?.check_failure_count || 0);
-      const failedCount = Math.max(failedJobs.length, reportedFailures);
-      const discovery = this.checksDiscoveryStateV2();
-      const discover = () => {
-        discovery.requested = true;
-        discovery.attempted.clear();
-        const url = new URL(this.window.location.href);
-        url.searchParams.set("ghpr_check", "first");
-        this.window.history.replaceState({}, "", url);
-        this.renderSurfaceV2();
-      };
-      mount(SR.SURFACE_IDS.checksSummary, root, {
-        title: "ghpr CI summary",
-        summary: `${failedCount} failed ${failedCount === 1 ? "check" : "checks"} · ${failedJobs.length} available for navigation`,
-        emptyLabel: this.pendingChecksExpansionV2 ? "Loading checks from collapsed suites…" :
-          !failedJobs.length && failedCount ? "Failed jobs are not loaded yet. Find failed checks to expand their suites." :
-          !failedCount ? "No failed checks found." : undefined,
-        reasons: explanationReasons,
-        explanationLabel: explanationReasons.length ? "Latest ghpr CI explanation" : "No explanations yet.",
-        actions: [{ id: "find-failed-checks", label: "Find failed checks", disabled: this.pendingChecksExpansionV2, onSelect: discover }],
-        jobs: failedJobs.map((job, index) => ({
-          label: job.label, selected: index === selectedIndex,
-          onSelect: () => this.selectChecksJobV2(SR, failedJobs, index)
-        })),
-        navigation: failedJobs.length ? {
-          position: selectedIndex + 1, total: failedJobs.length, noun: "failed checks",
-          ariaLabel: "Failed checks navigation",
-          previousID: "previous-failed-check", nextID: "next-failed-check",
-          onPrevious: selectedIndex > 0 ? () => this.selectChecksJobV2(SR, failedJobs, selectedIndex - 1) : undefined,
-          onNext: selectedIndex + 1 < failedJobs.length ? () => this.selectChecksJobV2(SR, failedJobs, selectedIndex + 1) : undefined
-        } : undefined
-      }, "ci_summary", { instanceKey: "summary", position: "prepend" });
-      this.reportSurfaceHealthV2(SR.SURFACE_IDS.checksSummary, "healthy", "Checks summary and navigation mounted.");
-      let selectedRowStillPresent = failedJobs.some((job) => !job.subject && job.subjectKey === this.selectedChecksJobKey);
-      for (const [index, job] of failedJobs.entries()) {
-        const { row, subject, subjectKey } = job;
-        if (!subject) continue;
-        const explainRun = this.latestRunForSubjectV2("ci.failure.explain", subject);
-        const classifyRun = this.latestRunForSubjectV2("ci.failure.classify_flaky", subject);
-        const activeRun = [explainRun, classifyRun].find((run) => run && (run.status === "queued" || run.status === "running"));
-        const completedRun = [classifyRun, explainRun].find((run) => run && run.status === "completed" && run.result);
-        const failedRun = [classifyRun, explainRun].find((run) => run && (run.status === "failed" || run.status === "cancelled"));
-        let status = "idle";
-        let confidencePercent;
-        const reason = explainRun?.status === "completed" &&
-          typeof explainRun.result?.payload?.why_it_failed === "string"
-          ? explainRun.result.payload.why_it_failed
-          : null;
-        const actions = [];
-        if (activeRun) {
-          status = "running";
-          actions.push({ id: "cancel", label: "Cancel", onSelect: () => this.invokeAction({ kind: "cancel_run", run_id: activeRun.id }) });
-        } else if (completedRun) {
-          const payload = completedRun.result.payload || {};
-          status = payload.verdict || "needs_investigation";
-          const confidenceRaw = Number(payload.confidence);
-          confidencePercent = Number.isFinite(confidenceRaw) ? (confidenceRaw <= 1 ? confidenceRaw * 100 : confidenceRaw) : undefined;
-          actions.push(
-            { id: "explain", label: "Explain", onSelect: () => this.selectChecksJobV2(SR, failedJobs, index) },
-            { id: "rerun", label: "Re-run", onSelect: () => this.runSkillForSubjectV2("ci.failure.classify_flaky", subject, subjectKey) }
-          );
-        } else if (failedRun) {
-          status = "failed";
-          actions.push({ id: "retry", label: "Retry", onSelect: () => this.runSkillForSubjectV2(failedRun.skill_id, subject, subjectKey) });
-        } else {
-          actions.push({ id: "explain", label: "Explain", onSelect: () => this.selectChecksJobV2(SR, failedJobs, index) });
-        }
-        mount(
-          SR.SURFACE_IDS.checksJobTrailing,
-          row,
-          { status, confidencePercent, reason, actions },
-          "job_verdict",
-          { instanceKey: subjectKey, subjectKey, position: "append" }
-        );
-        if (this.selectedChecksJobKey === subjectKey) {
-          selectedRowStillPresent = true;
-          this.selectChecksJobV2(SR, failedJobs, index, {
-            scroll: false,
-            updateURL: false
-          });
-        }
-      }
-      if (requestedCheck === "first" && failedJobs[0]?.nativeLink) {
-        this.selectChecksJobV2(SR, failedJobs, 0);
-      }
-      if (!selectedRowStillPresent && this.checksInsightHost?.isOpen) {
-        this.checksInsightHost.close();
-        this.selectedChecksJobKey = null;
-      }
-    }
-
-    revealNativeLogsV2() {
-      const logs = this.document.querySelector("[data-testid='logs-region']");
-      if (!logs) return;
-      logs.hidden = false;
-      logs.removeAttribute("hidden");
-      logs.scrollIntoView?.({ block: "center" });
-    }
-
-    renderActionsJobSurfaceV2(SR, mount) {
-      const parsed = parseWorkflowJobHref(this.window.location.pathname);
-      if (!parsed) return;
-      const subject = {
-        type: "workflow_job",
-        repository: parsed.repository,
-        workflow_run_id: Number(parsed.runId),
-        workflow_job_id: Number(parsed.jobId)
-      };
-      const subjectKey = this.subjectKeyForWorkflowJob(subject);
-      const failureSummaries = [...this.document.querySelectorAll("[data-testid='failure-summary']")];
-      const health = failureSummaries.length === 1 ? "healthy" : failureSummaries.length === 0 ? "missing" : "ambiguous";
-      this.reportSurfaceHealthV2(
-        SR.SURFACE_IDS.actionsJobAfterFailureSummary,
-        health,
-        health === "healthy" ? "Actions failure summary found." : `Expected one Actions failure summary; found ${failureSummaries.length}.`
-      );
-      if (failureSummaries.length !== 1) return;
-      const failureSummary = failureSummaries[0];
-      const host = failureSummary.parentElement;
-      if (!host) return;
-      const model = this.checksInsightModelV2(subject, null);
-      model.surfaceMode = "actions_job";
-      model.jobName = this.document.querySelector("[data-testid='job-title']")?.textContent?.trim()
-        || this.document.querySelector("h1")?.textContent?.trim()
-        || undefined;
-      model.classify = {
-        ...(model.classify || {}),
-        actions: [
-          ...((model.classify && model.classify.actions) || []),
-          { id: "logs", label: "View raw logs", onSelect: () => this.revealNativeLogsV2() }
-        ]
-      };
-      mount(
-        SR.SURFACE_IDS.actionsJobAfterFailureSummary,
-        host,
-        model,
-        "ci_insight",
-        {
-          instanceKey: subjectKey,
-          subjectKey,
-          anchor: failureSummary || undefined,
-          position: failureSummary ? "after" : "append"
-        }
-      );
-    }
-
-    renderPanel() {
-      const panel = createElement(this.document, "div", {
-        className: "ghpr-panel-body"
-      });
-      const updateNotice = this.renderUpdateNotice();
-      if (updateNotice) panel.append(updateNotice);
-      const analysis = this.snapshot.analyses[0] || null;
-      const actions = this.panelSection("Actions");
-      if (this.page?.type === "pull_request" && this.hasScope("skill:run")) {
-        actions.append(
-          this.runAction("Explain CI Failure", {
-            kind: "run_skill",
-            skill_id: "ci.failure.explain"
-          }),
-          this.runAction("Classify Flaky", {
-            kind: "run_skill",
-            skill_id: "ci.failure.classify_flaky"
-          })
-        );
-        const skills = this.renderRunnableSkills();
-        if (skills) actions.append(skills);
-      } else if (this.page?.type === "pull_request") {
-        actions.append(this.permissionPrompt(
-          "Run Skills",
-          "skill:run",
-          "Analysis actions are off for this client."
-        ));
-      }
-      if (actions.children.length) panel.append(actions);
-
-      const running = this.snapshot.runs.filter((run) =>
-        run.status === "queued" || run.status === "running"
-      );
-      if (running.length) {
-        const runs = this.panelSection("Running");
-        for (const run of running) {
-          const rowChildren = [
-            createElement(this.document, "span", {
-              text: run.progress_message || `${run.status} · ${run.skill_id}`
-            })
-          ];
-          if (this.hasScope("detail:open")) {
-            rowChildren.push(button(this.document, "View live log", () =>
-              this.invokeAction({ kind: "open_detail", run_id: run.id })
-            ));
-          } else {
-            rowChildren.push(this.permissionPrompt("Open live log", "detail:open", "Open local analysis is off for this client."));
-          }
-          if (this.hasScope("skill:cancel")) {
-            rowChildren.push(button(this.document, "Cancel", () =>
-              this.invokeAction({ kind: "cancel_run", run_id: run.id })
-            ));
-          } else {
-            rowChildren.push(this.permissionPrompt("Cancel Skill runs", "skill:cancel", "Cancel permission is required for this action."));
-          }
-          const row = createElement(this.document, "div", {
-            className: "ghpr-action-row"
-          }, rowChildren);
-          runs.append(row);
-        }
-        panel.append(runs);
-      }
-
-      const finished = this.snapshot.runs.filter((run) =>
-        run.status === "completed" || run.status === "failed" || run.status === "cancelled"
-      ).slice(0, 3);
-      if (finished.length) {
-        const results = this.panelSection("Recent runs");
-        for (const run of finished) {
-          if (run.status === "completed" && run.result) {
-            if (this.hasScope("detail:open")) {
-              results.append(this.panelAction(
-                run.result.title || run.skill_id,
-                () => this.invokeAction({ kind: "open_detail", run_id: run.id })
-              ));
-            } else {
-              results.append(this.permissionPrompt("Open analysis", "detail:open", "Open local analysis is off for this client."));
-            }
-          } else {
-            const rowChildren = [
-              createElement(this.document, "span", {
-                text: `${run.skill_id} · ${run.error || run.status}`
-              })
-            ];
-            if (this.hasScope("skill:run")) {
-              rowChildren.push(this.runAction(
-                "Retry",
-                { kind: "retry_run", run_id: run.id },
-                "ghpr-button"
-              ));
-            } else {
-              rowChildren.push(this.permissionPrompt("Retry Skill", "skill:run", "Run permission is required for retry."));
-            }
-            const row = createElement(this.document, "div", {
-              className: "ghpr-action-row"
-            }, rowChildren);
-            results.append(row);
-          }
-        }
-        panel.append(results);
-      }
-
-
-      const tags = this.panelSection("Local ghpr tags");
-      if (this.hasScope("tag:write")) {
-        for (const [value, label] of [
-          ["flaky", "Flaky"],
-          ["not_flaky", "Not flaky"],
-          ["needs_investigation", "Needs investigation"]
-        ]) {
-          const selected = this.snapshot.tags.includes(value);
-          tags.append(this.panelAction(`${selected ? "✓ " : ""}${label}`, () =>
-            this.invokeAction({
-              kind: selected ? "remove_tag" : "set_tag",
-              tag: value
-            })
-          ));
-        }
-      } else {
-        tags.append(this.permissionPrompt(
-          "Edit local ghpr tags",
-          "tag:write",
-          "Local ghpr tag changes are off for this client."
-        ));
-      }
-      panel.append(tags);
-
-      const links = this.panelSection("");
-      if (analysis) {
-        if (this.hasScope("detail:open")) {
-          links.append(this.panelAction("Open Full Analysis", () =>
-            this.invokeAction({ kind: "open_detail", analysis_id: analysis.id })
-          ));
-        } else {
-          links.append(this.permissionPrompt("Open Full Analysis", "detail:open", "Open local analysis is off for this client."));
-        }
-      }
-      if (this.hasScope("app:open")) {
-        links.append(this.panelAction("Open in ghpr-view", () =>
-          this.invokeAction({ kind: "open_app" })
-        ));
-      } else {
-        links.append(this.permissionPrompt("Open ghpr-view", "app:open", "Open ghpr-view permission is required."));
-      }
-      if (links.children.length) panel.append(links);
-      return panel;
-    }
-
-    panelSection(label) {
+    menuSection(label) {
       const section = createElement(this.document, "div", { className: "ghpr-section" });
       if (label) {
         section.append(createElement(this.document, "div", {
@@ -6705,6 +5492,16 @@
 
     panelAction(label, callback) {
       return button(this.document, label, callback, "ghpr-panel-action");
+    }
+
+    menuAction(label, callback) {
+      const control = button(this.document, label, callback, "ghpr-panel-action");
+      control.setAttribute("role", "menuitem");
+      return control;
+    }
+
+    panelSection(label) {
+      return this.menuSection(label);
     }
 
     activeRunForSkill(skillID) {
@@ -6881,14 +5678,6 @@
     }
 
     async dismissFinding(findingID) {
-      if (!this.isSurfaceV2()) {
-        this.dismissedFindingIDs.add(findingID);
-        await this.gm.setValue(
-          STORAGE.dismissedFindings,
-          [...this.dismissedFindingIDs]
-        );
-        return true;
-      }
       if (!this.hasScope("finding:write")) {
         this.renderTransientError("finding:write permission is required to dismiss this finding.");
         return false;
@@ -6989,8 +5778,7 @@
     renderReviewSummaryCard(review) {
       const host = semanticTargets(this.document, "pr.mergebox.after")[0];
       if (!host) return;
-      const findings = (review.findings || [])
-        .filter((finding) => !this.dismissedFindingIDs.has(finding.id));
+      const findings = review.findings || [];
       const card = createElement(this.document, "section", {
         className: "ghpr-card ghpr-review-summary",
         attributes: {
@@ -7265,8 +6053,7 @@
     renderFilesFindings() {
       const hosts = semanticTargets(this.document, "files.diff.line-decoration");
       if (!hosts.length) return;
-      const findings = this.findingsForSnapshot()
-        .filter((finding) => !this.dismissedFindingIDs.has(finding.id));
+      const findings = this.findingsForSnapshot();
       if (!findings.length) return;
       const host = hosts[0];
       if (host.querySelector(":scope > .ghpr-files-findings")) return;
@@ -7507,24 +6294,22 @@
 
     renderTransientError(message) {
       if (!message) return;
-      if (this.isSurfaceV2() && this.drawerHost && global.GhprSurfaceRenderers) {
+      this.actionError = String(message);
+      this.menuOpen = true;
+      const menu = this.headerMenu
+        || this.document.getElementById(HEADER_ENTRY_ID)?.querySelector(".ghpr-header-menu");
+      if (menu) {
+        this.syncHeaderMenu(menu, { rebuild: true });
+        return;
+      }
+      if (this.drawerHost && global.GhprSurfaceRenderers) {
         const content = global.GhprSurfaceRenderers.renderSurface(
           this.document,
           "detail_drawer",
           { title: "ghpr unavailable", raw: String(message) }
         );
         this.drawerHost.open(content);
-        return;
       }
-      const root = this.document.getElementById(ROOT_ID);
-      if (!root) return;
-      root.querySelector(".ghpr-error")?.remove();
-      const error = createElement(this.document, "span", {
-        className: "ghpr-error",
-        text: message
-      });
-      root.append(error);
-      this.window.setTimeout(() => error.remove(), 5000);
     }
   }
 

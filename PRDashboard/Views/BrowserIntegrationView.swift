@@ -101,13 +101,6 @@ struct BrowserIntegrationView: View {
                         symbol: controller.isGitHubPageConnected ? "link.circle.fill" : "link.circle",
                         color: controller.isGitHubPageConnected ? .green : .secondary
                     )
-                    Toggle("Use GitHub-native surfaces", isOn: Binding(
-                        get: { controller.githubSurfaceV2Enabled },
-                        set: { controller.githubSurfaceV2Enabled = $0 }
-                    ))
-                    .toggleStyle(.switch)
-                    .accessibilityIdentifier("github-surface-v2-toggle")
-
                     if !controller.unhealthySurfaces.isEmpty || !controller.unhealthySlots.isEmpty {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Surface health")

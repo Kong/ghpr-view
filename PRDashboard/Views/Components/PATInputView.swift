@@ -30,7 +30,7 @@ struct PATInputView: View {
             HStack(spacing: 4) {
                 Image(systemName: "info.circle")
                     .font(.system(size: 11))
-                Text("Required scopes: repo, read:user, workflow")
+                Text("Required scopes: repo, read:user, workflow, read:org")
                     .font(.system(size: 11))
             }
             .foregroundColor(.secondary)
