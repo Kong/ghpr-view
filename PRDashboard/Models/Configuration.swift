@@ -218,7 +218,16 @@ extension Configuration {
         Set(notificationEventKinds.compactMap(PRActivityEventKind.init(rawValue:)))
     }
 
-    func isRepositoryNotified(_ repoFullName: String) -> Bool {
+    /// Activity follows the PR list repository filter. An explicitly tracked PR stays
+    /// in scope even when it is outside that filter.
+    func collectsActivity(for repoFullName: String, explicitlyTracked: Bool = false) -> Bool {
+        explicitlyTracked || PullRequestFilter.matchesRepositoryScope(repoFullName, filters: repositories)
+    }
+
+    /// Empty notification repositories mean the PR list filter, not every repository
+    /// the account has ever touched.
+    func isRepositoryNotified(_ repoFullName: String, explicitlyTracked: Bool = false) -> Bool {
+        guard collectsActivity(for: repoFullName, explicitlyTracked: explicitlyTracked) else { return false }
         guard !notificationRepositories.isEmpty else { return true }
         let normalized = repoFullName.lowercased()
         return notificationRepositories.contains { $0.lowercased() == normalized }

@@ -37,9 +37,7 @@ enum PullRequestFilter {
     ) -> Bool {
         let repositoryFilters = configuration.repositories.map { $0.lowercased() }
         let repo = repoFullName.lowercased()
-        let matchesRepositoryFilter = repositoryFilters.contains { filter in
-            filter.hasSuffix("/") ? repo.hasPrefix(filter) : repo == filter
-        }
+        let matchesRepositoryFilter = Self.matchesRepositoryScope(repoFullName, filters: configuration.repositories)
         let isExplicitlyIncluded = repositoryFilters.contains(repo)
 
         if !repositoryFilters.isEmpty && !matchesRepositoryFilter {
@@ -70,6 +68,16 @@ enum PullRequestFilter {
             configuration: configuration
         )
         prList.mergedPullRequests = apply(prList.mergedPullRequests, configuration: configuration)
+    }
+
+    /// Empty filters match every repository. A filter ending in `/` matches that owner or org prefix.
+    static func matchesRepositoryScope(_ repoFullName: String, filters: [String]) -> Bool {
+        let repositoryFilters = filters.map { $0.lowercased() }
+        guard !repositoryFilters.isEmpty else { return true }
+        let repo = repoFullName.lowercased()
+        return repositoryFilters.contains { filter in
+            filter.hasSuffix("/") ? repo.hasPrefix(filter) : repo == filter
+        }
     }
 }
 

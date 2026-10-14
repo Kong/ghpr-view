@@ -601,7 +601,7 @@ struct MainView: View {
             return nil
         }
         return {
-            presentationCoordinator.present(.settings)
+            presentationCoordinator.present(.settings(.integrations))
         }
     }
 

@@ -202,6 +202,9 @@ struct PRActivityView: View {
                 .foregroundStyle(.secondary)
                 .padding(.vertical, 6)
         } else {
+            Text("Dismiss reminder only hides that row here. It does not reply, resolve, rerun CI, or change GitHub.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
             ForEach(groups, id: \.pr.prNodeID) { group in
                 prCard(pr: group.pr, items: group.items)
             }
@@ -209,7 +212,8 @@ struct PRActivityView: View {
     }
 
     private func prCard(pr: MonitoredPR, items: [PRActionItem]) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        let reminders = PRActivityEngine.reminders(from: items)
+        return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Button {
                     if let url = pr.url {
@@ -228,8 +232,8 @@ struct PRActivityView: View {
                 menu(for: pr)
             }
 
-            ForEach(items) { item in
-                itemRow(item, pr: pr)
+            ForEach(reminders) { reminder in
+                itemRow(reminder, pr: pr)
             }
         }
         .padding(10)
@@ -237,14 +241,17 @@ struct PRActivityView: View {
         .cornerRadius(8)
     }
 
-    private func itemRow(_ item: PRActionItem, pr: MonitoredPR) -> some View {
-        let events = viewModel.activityEvents(forPR: pr.prNodeID).filter { item.eventIDs.contains($0.id) }
+    private func itemRow(_ reminder: ActivityReminder, pr: MonitoredPR) -> some View {
+        let events = snapshot.events
+            .filter { reminder.eventIDs.contains($0.id) }
+            .sorted { $0.occurredAt > $1.occurredAt }
+        let suggested = reminder.actionKinds.map(PRActivityDigestFormatter.actionLabel).joined(separator: " · ")
         return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
-                Text(item.reasons.map(PRActivityDigestFormatter.reasonLabel).joined(separator: " · "))
+                Text(reminder.reasons.map(PRActivityDigestFormatter.reasonLabel).joined(separator: " · "))
                     .font(.system(size: 11, weight: .medium))
-                if item.state != .open {
-                    Text(PRActivityDigestFormatter.stateLabel(item.state))
+                if reminder.state != .open {
+                    Text(PRActivityDigestFormatter.stateLabel(reminder.state))
                         .font(.caption2)
                         .padding(.horizontal, 4)
                         .padding(.vertical, 1)
@@ -252,9 +259,6 @@ struct PRActivityView: View {
                         .cornerRadius(3)
                 }
                 Spacer()
-                Text(item.actionKinds.map(PRActivityDigestFormatter.actionLabel).joined(separator: " · "))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
             }
 
             if let latest = events.first {
@@ -262,25 +266,52 @@ struct PRActivityView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
+            if events.count > 1 {
+                Text(String(format: String(localized: "%lld other changes on this reminder"), events.count - 1))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            if !suggested.isEmpty {
+                Text(String(format: String(localized: "Suggested: %@"), suggested))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .help("A suggestion only. ghpr does not do this on GitHub.")
+            }
 
             HStack(spacing: 8) {
-                ForEach(Array(item.evidenceURLs.prefix(3)), id: \.absoluteString) { url in
-                    Button("Open evidence") {
+                if let url = reminder.evidenceURLs.first ?? pr.url {
+                    Button(openLabel(for: reminder)) {
                         NSWorkspace.shared.open(url)
                     }
                     .buttonStyle(.link)
                     .controlSize(.small)
+                    .help("Opens this on GitHub. ghpr does not reply, resolve, or rerun anything.")
+                }
+                if reminder.evidenceURLs.count > 1 {
+                    Menu("More links") {
+                        ForEach(Array(reminder.evidenceURLs.dropFirst().prefix(5)), id: \.absoluteString) { url in
+                            Button(linkLabel(url)) {
+                                NSWorkspace.shared.open(url)
+                            }
+                        }
+                    }
+                    .controlSize(.small)
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
                 }
                 Spacer()
-                Button("Handled") { viewModel.markActivityHandled(item) }
+                Button("Dismiss reminder") { viewModel.markActivityHandled(reminder.itemIDs) }
                     .controlSize(.small)
+                    .help("Hides this reminder in ghpr only. It does not reply, resolve a thread, rerun CI, or change GitHub. New activity shows it again.")
                 Menu("Snooze") {
-                    Button("1 hour") { viewModel.snoozeActivity(item, until: Date().addingTimeInterval(3600)) }
-                    Button("Tomorrow") { viewModel.snoozeActivity(item, until: Date().addingTimeInterval(24 * 3600)) }
-                    Button("Next week") { viewModel.snoozeActivity(item, until: Date().addingTimeInterval(7 * 24 * 3600)) }
+                    Button("1 hour") { viewModel.snoozeActivity(reminder.itemIDs, until: Date().addingTimeInterval(3600)) }
+                    Button("Tomorrow") { viewModel.snoozeActivity(reminder.itemIDs, until: Date().addingTimeInterval(24 * 3600)) }
+                    Button("Next week") { viewModel.snoozeActivity(reminder.itemIDs, until: Date().addingTimeInterval(7 * 24 * 3600)) }
                 }
                 .controlSize(.small)
                 .frame(width: 90)
+                .help("Hides this reminder until then. New activity shows it again immediately.")
             }
         }
         .padding(.vertical, 3)
@@ -305,6 +336,24 @@ struct PRActivityView: View {
         }
         .menuStyle(.borderlessButton)
         .frame(width: 24)
+    }
+
+    private func openLabel(for reminder: ActivityReminder) -> String {
+        switch reminder.actionKinds.first {
+        case .reviewFeedback: return String(localized: "Open review")
+        case .fixCI: return String(localized: "Open failing check")
+        case .respondToMention: return String(localized: "Open mention")
+        case .reReview: return String(localized: "Open to review again")
+        case .resolveThread: return String(localized: "Open thread")
+        case .confirmCI: return String(localized: "Open CI")
+        case .review: return String(localized: "Open review request")
+        case nil: return String(localized: "Open on GitHub")
+        }
+    }
+
+    private func linkLabel(_ url: URL) -> String {
+        let tail = url.lastPathComponent
+        return tail.isEmpty ? url.absoluteString : tail
     }
 
     // MARK: - Tracked PRs
@@ -360,7 +409,7 @@ struct PRActivityView: View {
                     ForEach(batch.deliveries, id: \.channel) { delivery in
                         Text("\(delivery.channel.rawValue): \(PRActivityDigestFormatter.deliveryLabel(delivery.status))\(delivery.failureMessage.map { " — \($0)" } ?? "")")
                             .font(.caption2)
-                            .foregroundStyle(delivery.status == .delivered ? .secondary : .primary)
+                            .foregroundStyle(delivery.status == .delivered || delivery.status == .superseded ? .secondary : .primary)
                     }
                 }
             }

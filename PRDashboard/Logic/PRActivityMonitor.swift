@@ -39,6 +39,25 @@ protocol PRActivityDigestChannel: AnyObject {
     /// never deliver an old in-flight batch to a new target.
     var targetBinding: [String: String] { get }
     func deliver(_ batch: DigestBatch) async throws -> DigestReceipt
+    /// Removes an already-shown notification when every event in that digest no longer applies.
+    func withdrawDeliveredDigest(id: String)
+}
+
+extension PRActivityDigestChannel {
+    func withdrawDeliveredDigest(id: String) {}
+}
+
+/// One activity reminder. Items that cite the same event collapse into one of these
+/// so the list and the badge do not repeat it.
+struct ActivityReminder: Identifiable, Equatable {
+    var id: String
+    var itemIDs: [String]
+    var reasons: [PRActionReason]
+    var actionKinds: [PRActionKind]
+    var eventIDs: [String]
+    var evidenceURLs: [URL]
+    var state: PRActionState
+    var stateUpdatedAt: Date
 }
 
 // MARK: - Pure engine
@@ -542,11 +561,6 @@ enum PRActivityEngine {
         viewer: MonitorViewerIdentity
     ) -> [(reason: PRActionReason, action: PRActionKind)] {
         var results: [(PRActionReason, PRActionKind)] = []
-        defer {
-            if pr.origins.contains(.explicit), explicitlyTracked(pr: pr, kind: event.kind) {
-                results.append((.explicitlyTracked, actionKind(for: event.kind)))
-            }
-        }
 
         guard pr.lifecycle == .open else { return results }
         guard !event.isFromViewer else { return results }
@@ -600,6 +614,13 @@ enum PRActivityEngine {
             results.append((.authoredPRDirectMention, .respondToMention))
         case .ciCheckRecovered, .ciCheckRerunStarted, .prClosed, .prMerged, .prReopened:
             break
+        }
+        // Tracking widens which events are actionable. It must not add a second
+        // reminder for an event that already has a more specific reason. This has to
+        // happen before the return: a defer runs after `return results` has copied
+        // the array, so it cannot change what the caller sees.
+        if results.isEmpty, pr.origins.contains(.explicit), explicitlyTracked(pr: pr, kind: event.kind) {
+            results.append((.explicitlyTracked, actionKind(for: event.kind)))
         }
         return results
     }
@@ -704,21 +725,22 @@ enum PRActivityEngine {
         return items
     }
 
-    /// Retires action items that no longer apply: PR closed/merged, a superseded CI
-    /// revision, a recovered check, or a rerun that replaced the failing attempt.
+    /// Retires action items that no longer apply.
+    ///
+    /// A CI failure is invalidated when that check passed, a later attempt of the same
+    /// job replaced it, or the failure belongs to a head that is no longer current.
+    /// A rereview reminder is invalidated once the viewer has reviewed the current head.
+    /// Other events on the same item stay open.
     static func retireActionItems(
         _ items: [PRActionItem],
         prs: [MonitoredPR],
         recentEvents: [PRActivityEvent],
+        viewer: MonitorViewerIdentity,
         now: Date
     ) -> [PRActionItem] {
         let prsByNodeID = Dictionary(prs.map { ($0.prNodeID, $0) }, uniquingKeysWith: { first, _ in first })
-        let recoveredCheckIDs = Set(recentEvents.filter { $0.kind == .ciCheckRecovered }.map(\.revision.checkID).compactMap { $0 })
-        let supersededRunAttempts = Set(
-            recentEvents
-                .filter { $0.kind == .ciCheckRerunStarted || $0.kind == .pushedNewCommit }
-                .map { "\($0.revision.runID ?? "")#\($0.revision.runAttempt ?? -1)" }
-        )
+        let eventsByID = Dictionary(recentEvents.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let eventsByPR = Dictionary(grouping: recentEvents, by: \.prNodeID)
 
         return items.map { item in
             guard item.state == .open || item.state == .snoozed || item.state == .rerunInProgress else { return item }
@@ -727,38 +749,249 @@ enum PRActivityEngine {
 
             if pr.lifecycle != .open {
                 updated.state = .superseded
+                updated.coveredEventIDs = item.eventIDs
+                updated.snoozedUntil = nil
                 updated.stateUpdatedAt = now
                 return updated
             }
-            if item.actionKinds == [.fixCI] {
-                if let checkID = item.revision.checkID, recoveredCheckIDs.contains(checkID) {
-                    updated.state = .recovered
-                    updated.stateUpdatedAt = now
-                    return updated
-                }
-                if pr.headOID != nil, let itemHead = item.revision.headOID, itemHead != pr.headOID {
-                    // The failing revision is no longer the current head.
-                    updated.state = .superseded
-                    updated.stateUpdatedAt = now
-                    return updated
-                }
-                let attemptKey = "\(item.revision.runID ?? "")#\(item.revision.runAttempt ?? -1)"
-                if supersededRunAttempts.contains(attemptKey), item.revision.runAttempt != nil {
-                    updated.state = .rerunInProgress
-                    updated.stateUpdatedAt = now
-                    return updated
-                }
+
+            let prEvents = eventsByPR[item.prNodeID] ?? []
+            let stale = staleEventIDs(on: item, pr: pr, prEvents: prEvents, eventsByID: eventsByID, viewer: viewer)
+            if stale.isEmpty {
+                return markRerunIfNeeded(item, prEvents: prEvents, now: now)
+            }
+
+            for id in stale where !updated.coveredEventIDs.contains(id) {
+                updated.coveredEventIDs.append(id)
+            }
+            if updated.pendingEventIDs.isEmpty {
+                let staleEvents = stale.compactMap { eventsByID[$0] }
+                updated.state = resolutionState(for: staleEvents, pr: pr)
+                updated.snoozedUntil = nil
+                updated.stateUpdatedAt = now
             }
             return updated
         }
     }
 
-    // MARK: Digest
+    /// Event IDs that must not be announced. Covered events and events on a retired
+    /// item are included; an event still pending on another open item is not.
+    static func eventsNoLongerNotifiable(_ items: [PRActionItem], now: Date) -> Set<String> {
+        let pending = Set(items.filter { $0.isActionable(now: now) }.flatMap(\.pendingEventIDs))
+        let dropped = items.flatMap { item -> [String] in
+            item.isActionable(now: now) ? item.coveredEventIDs : item.eventIDs
+        }
+        return Set(dropped).subtracting(pending)
+    }
+
+    struct DigestResolution {
+        var batches: [DigestBatch]
+        var announcedEventIDs: [String]
+        var withdrawBatchIDs: [String]
+    }
+
+    /// Drops resolved events from digests that have not been sent, and names delivered
+    /// batches whose notification should be withdrawn because nothing in them still applies.
+    static func resolveStaleDigests(
+        batches: [DigestBatch],
+        announcedEventIDs: [String],
+        invalidated: Set<String>,
+        events: [PRActivityEvent],
+        items: [PRActionItem]
+    ) -> DigestResolution {
+        guard !invalidated.isEmpty else {
+            return DigestResolution(batches: batches, announcedEventIDs: announcedEventIDs, withdrawBatchIDs: [])
+        }
+        var announced = Set(announcedEventIDs)
+        announced.formUnion(invalidated)
+        var withdraw: [String] = []
+        let eventsByID = Dictionary(events.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+
+        let resolved = batches.map { batch -> DigestBatch in
+            let live = batch.coveredEventIDs.filter { !invalidated.contains($0) }
+            if live.isEmpty {
+                if batch.deliveries.contains(where: { $0.channel == .macOS && $0.status == .delivered }) {
+                    withdraw.append(batch.id)
+                }
+                var cancelled = batch
+                cancelled.coveredEventIDs = []
+                cancelled.entries = []
+                cancelled.deliveries = batch.deliveries.map { delivery in
+                    guard delivery.status != .delivered else { return delivery }
+                    var updated = delivery
+                    updated.status = .superseded
+                    updated.failureMessage = String(localized: "No longer applies.")
+                    updated.completedAt = updated.completedAt ?? Date()
+                    return updated
+                }
+                return cancelled
+            }
+            guard live.count != batch.coveredEventIDs.count else { return batch }
+            var updated = batch
+            updated.coveredEventIDs = live
+            updated.entries = scrubbedEntries(batch.entries, live: Set(live), eventsByID: eventsByID, items: items)
+            return updated
+        }
+        return DigestResolution(
+            batches: resolved,
+            announcedEventIDs: Array(announced).sorted(),
+            withdrawBatchIDs: withdraw
+        )
+    }
+
+    /// The batch to send, or nil when every covered event has been resolved.
+    static func deliverableBatch(
+        _ batch: DigestBatch,
+        invalidated: Set<String>,
+        events: [PRActivityEvent],
+        items: [PRActionItem]
+    ) -> DigestBatch? {
+        let live = batch.coveredEventIDs.filter { !invalidated.contains($0) }
+        guard !live.isEmpty else { return nil }
+        guard live.count != batch.coveredEventIDs.count else { return batch }
+        var updated = batch
+        updated.coveredEventIDs = live
+        let eventsByID = Dictionary(events.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        updated.entries = scrubbedEntries(batch.entries, live: Set(live), eventsByID: eventsByID, items: items)
+        return updated.entries.isEmpty ? nil : updated
+    }
+
+    private static func staleEventIDs(
+        on item: PRActionItem,
+        pr: MonitoredPR,
+        prEvents: [PRActivityEvent],
+        eventsByID: [String: PRActivityEvent],
+        viewer: MonitorViewerIdentity
+    ) -> Set<String> {
+        var stale = Set<String>()
+        let itemEvents = item.eventIDs.compactMap { eventsByID[$0] }
+        stale.formUnion(staleCIFailureIDs(in: itemEvents, pr: pr, prEvents: prEvents))
+
+        if item.reasons.contains(.myReviewNeedsRereview),
+           let head = pr.headOID,
+           !needsRereview(pr: pr, headOID: head, viewer: viewer) {
+            stale.formUnion(itemEvents.filter { $0.kind == .pushedNewCommit }.map(\.id))
+        }
+        return stale
+    }
+
+    private static func staleCIFailureIDs(
+        in itemEvents: [PRActivityEvent],
+        pr: MonitoredPR,
+        prEvents: [PRActivityEvent]
+    ) -> Set<String> {
+        guard let checks = pr.checkpoint(for: .ci)?.ci?.checks else { return [] }
+        let checksByID = Dictionary(checks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let successors = rerunSuccessors(in: prEvents)
+        let currentHead = pr.headOID
+        var stale = Set<String>()
+
+        for event in itemEvents where event.kind == .ciCheckFailed {
+            let checkID = event.revision.checkID
+            if let checkID, let check = checksByID[checkID] {
+                if check.isSuccessful || successorReplaced(checkID, successors: successors, checksByID: checksByID, head: currentHead) {
+                    stale.insert(event.id)
+                }
+                continue
+            }
+            if let checkID, successorReplaced(checkID, successors: successors, checksByID: checksByID, head: currentHead) {
+                stale.insert(event.id)
+                continue
+            }
+            if let failedHead = event.revision.headOID, let currentHead, failedHead != currentHead {
+                stale.insert(event.id)
+            }
+        }
+        return stale
+    }
+
+    /// True when a later attempt of this check has finished. An in-progress rerun does
+    /// not count: that stays a rerun, and only a finished attempt replaces the failure.
+    private static func successorReplaced(
+        _ checkID: String,
+        successors: [String: String],
+        checksByID: [String: CheckpointCheck],
+        head: String?
+    ) -> Bool {
+        var seen = Set<String>()
+        var current = checkID
+        while let next = successors[current], seen.insert(next).inserted {
+            if let check = checksByID[next],
+               check.headOID == nil || head == nil || check.headOID == head,
+               check.isSuccessful || check.isFailed {
+                return true
+            }
+            current = next
+        }
+        return false
+    }
+
+    private static func rerunSuccessors(in events: [PRActivityEvent]) -> [String: String] {
+        var map: [String: String] = [:]
+        let marker = ":rerun:"
+        for event in events where event.kind == .ciCheckRerunStarted && event.identityKey.hasPrefix("ci:") {
+            guard let range = event.identityKey.range(of: marker) else { continue }
+            let oldID = String(event.identityKey[event.identityKey.index(event.identityKey.startIndex, offsetBy: 3)..<range.lowerBound])
+            let newID = String(event.identityKey[range.upperBound...])
+            if !oldID.isEmpty, !newID.isEmpty {
+                map[oldID] = newID
+            }
+        }
+        return map
+    }
+
+    private static func resolutionState(for stale: [PRActivityEvent], pr: MonitoredPR) -> PRActionState {
+        let passedOnCurrentHead = stale.contains { event in
+            event.kind == .ciCheckFailed && (event.revision.headOID == nil || event.revision.headOID == pr.headOID)
+        }
+        return passedOnCurrentHead ? .recovered : .superseded
+    }
+
+    private static func markRerunIfNeeded(
+        _ item: PRActionItem,
+        prEvents: [PRActivityEvent],
+        now: Date
+    ) -> PRActionItem {
+        guard item.actionKinds == [.fixCI], item.revision.runAttempt != nil else { return item }
+        let attemptKey = "\(item.revision.runID ?? "")#\(item.revision.runAttempt ?? -1)"
+        let rerunning = prEvents.contains { event in
+            guard event.kind == .ciCheckRerunStarted || event.kind == .pushedNewCommit else { return false }
+            return "\(event.revision.runID ?? "")#\(event.revision.runAttempt ?? -1)" == attemptKey
+        }
+        guard rerunning else { return item }
+        var updated = item
+        updated.state = .rerunInProgress
+        updated.stateUpdatedAt = now
+        return updated
+    }
+
+    private static func scrubbedEntries(
+        _ entries: [DigestEntry],
+        live: Set<String>,
+        eventsByID: [String: PRActivityEvent],
+        items: [PRActionItem]
+    ) -> [DigestEntry] {
+        entries.compactMap { entry in
+            let liveItems = items.filter { item in
+                entry.actionItemIDs.contains(item.id) && item.pendingEventIDs.contains { live.contains($0) }
+            }
+            let liveEventIDs = dedupe(liveItems.flatMap { $0.pendingEventIDs.filter { live.contains($0) } })
+            guard !liveEventIDs.isEmpty else { return nil }
+            var copy = entry
+            copy.reasons = dedupe(liveItems.flatMap(\.reasons))
+            copy.actionKinds = dedupe(liveItems.flatMap(\.actionKinds))
+            copy.changeKinds = dedupe(liveEventIDs.compactMap { eventsByID[$0]?.kind })
+            copy.eventCount = liveEventIDs.count
+            copy.actionItemIDs = dedupe(liveItems.map(\.id))
+            return copy
+        }
+    }
 
     /// Builds the next digest batch, or nil when nothing deserves a notification.
     ///
-    /// Only actionable items with at least one event the user has not been told about
-    /// qualify, so a stale but still-open item is never re-announced every window.
+    /// An event is announced at most once. Events already delivered, and events
+    /// already owned by an existing batch, stay out, so a later window cannot clone
+    /// the same reminder. A failed batch is retried in place instead of copied.
     /// `mutedNodeIDs` carries the PR mute preference resolved by the caller.
     static func makeDigest(
         state: PRActivityAccountState,
@@ -770,12 +1003,11 @@ enum PRActivityEngine {
         guard !actionable.isEmpty else { return nil }
 
         let eventsByID = Dictionary(state.events.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        // Events already announced, plus events sitting in a batch whose outcome is
-        // still in flight or unknown. An unknown outcome is never retried
-        // automatically, so those events must not be re-batched either.
+        // Owned by a batch that is in flight, already sent, failed, or of unknown
+        // outcome. Cloning those IDs into a new batch is how the same event gets
+        // notified twice.
         var suppressed = Set(state.digest.announcedEventIDs)
         for batch in state.digest.batches {
-            guard batch.deliveries.contains(where: { $0.status == .sending || $0.status == .unknown }) else { continue }
             suppressed.formUnion(batch.coveredEventIDs)
         }
         let announced = suppressed
@@ -797,9 +1029,10 @@ enum PRActivityEngine {
 
         var candidates: [String: CandidatePR] = [:]
         for item in actionable {
+            let tracked = prsByNodeID[item.prNodeID]?.isExplicitlyTracked ?? false
             guard !mutedNodeIDs.contains(item.prNodeID) else { continue }
-            guard configuration.isRepositoryNotified(item.reference.repoFullName) else { continue }
-            let unannounced = item.eventIDs.filter { !announced.contains($0) }
+            guard configuration.isRepositoryNotified(item.reference.repoFullName, explicitlyTracked: tracked) else { continue }
+            let unannounced = item.pendingEventIDs.filter { !announced.contains($0) }
             let relevant = unannounced.compactMap { eventsByID[$0] }.filter { event in
                 allowedKinds.isEmpty || allowedKinds.contains(event.kind)
             }
@@ -814,8 +1047,12 @@ enum PRActivityEngine {
             candidate.latestEventAt = max(candidate.latestEventAt, latestEventAt)
             candidate.reasons.append(contentsOf: item.reasons)
             candidate.actionKinds.append(contentsOf: item.actionKinds)
-            candidate.eventIDs.append(contentsOf: relevant.map(\.id))
-            candidate.itemIDs.append(item.id)
+            for event in relevant where !candidate.eventIDs.contains(event.id) {
+                candidate.eventIDs.append(event.id)
+            }
+            if !candidate.itemIDs.contains(item.id) {
+                candidate.itemIDs.append(item.id)
+            }
             candidate.evidenceURLs.append(contentsOf: item.evidenceURLs)
             for event in relevant where !candidate.changeKinds.contains(event.kind) {
                 candidate.changeKinds.append(event.kind)
@@ -847,7 +1084,7 @@ enum PRActivityEngine {
             )
         }
 
-        let coveredEventIDs = included.flatMap(\.eventIDs)
+        let coveredEventIDs = dedupe(included.flatMap(\.eventIDs))
         let deliveries = configuration.digestChannels.map { channel in
             DigestDelivery(
                 channel: channel,
@@ -884,6 +1121,59 @@ enum PRActivityEngine {
 
     private static func dedupeURLs(_ urls: [URL]) -> [URL] {
         dedupe(urls)
+    }
+
+    /// One visible reminder per set of items that cite the same event. Distinct
+    /// events on the same PR stay separate; a shared event is not shown twice.
+    static func reminders(from items: [PRActionItem]) -> [ActivityReminder] {
+        guard !items.isEmpty else { return [] }
+        var parent = Array(items.indices)
+        func find(_ index: Int) -> Int {
+            var index = index
+            while parent[index] != index {
+                parent[index] = parent[parent[index]]
+                index = parent[index]
+            }
+            return index
+        }
+        func union(_ lhs: Int, _ rhs: Int) {
+            let left = find(lhs)
+            let right = find(rhs)
+            if left != right { parent[right] = left }
+        }
+
+        var ownerByEvent: [String: Int] = [:]
+        for (index, item) in items.enumerated() {
+            for eventID in item.eventIDs {
+                if let owner = ownerByEvent[eventID] {
+                    union(owner, index)
+                } else {
+                    ownerByEvent[eventID] = index
+                }
+            }
+        }
+
+        var grouped: [Int: [PRActionItem]] = [:]
+        for (index, item) in items.enumerated() {
+            grouped[find(index), default: []].append(item)
+        }
+
+        return grouped.values.map { group in
+            let sorted = group.sorted { $0.stateUpdatedAt > $1.stateUpdatedAt }
+            let itemIDs = dedupe(sorted.map(\.id))
+            let state: PRActionState = sorted.contains { $0.state == .open } ? .open : (sorted.first?.state ?? .open)
+            return ActivityReminder(
+                id: itemIDs.sorted().joined(separator: "|"),
+                itemIDs: itemIDs,
+                reasons: dedupe(sorted.flatMap(\.reasons)),
+                actionKinds: dedupe(sorted.flatMap(\.actionKinds)),
+                eventIDs: dedupe(sorted.flatMap(\.eventIDs)),
+                evidenceURLs: dedupeURLs(sorted.flatMap(\.evidenceURLs)),
+                state: state,
+                stateUpdatedAt: sorted.map(\.stateUpdatedAt).max() ?? .distantPast
+            )
+        }
+        .sorted { $0.stateUpdatedAt > $1.stateUpdatedAt }
     }
 }
 
@@ -1010,6 +1300,7 @@ enum PRActivityDigestFormatter {
         case .delivered: return String(localized: "delivered")
         case .failed: return String(localized: "failed")
         case .unknown: return String(localized: "unknown")
+        case .superseded: return String(localized: "no longer applies")
         }
     }
 }
@@ -1029,6 +1320,8 @@ extension PRActionItem {
 /// - Nothing is committed to memory before the store accepted it: a failed write keeps
 ///   the previous committed observation, and the next pass re-derives the same events
 ///   with the same IDs, so a retry can never double-notify.
+/// - Passes do not overlap. An event already owned by a digest batch is not cloned
+///   into another batch; a failed batch is retried in place.
 /// - A corrupt store file is reported and left in place instead of being reset.
 /// - Every awaited step re-checks its generation, so an account, endpoint or
 ///   configuration switch discards in-flight results from the old generation.
@@ -1060,6 +1353,9 @@ final class PRActivityMonitor: ObservableObject {
     private var isRunning = false
     private var isPaused = false
     private var passTask: Task<Void, Never>?
+    private var passInFlight = false
+    private var queuedPass = false
+    private var deliveringBatchIDs: Set<String> = []
     private var storeErrorMessage: String?
 
     init(
@@ -1094,7 +1390,11 @@ final class PRActivityMonitor: ObservableObject {
     func applyConfiguration(_ newConfiguration: Configuration) -> Bool {
         let previousInterval = observationInterval
         configuration = newConfiguration
+        let withdrawIDs = dropUndeliverableDigests()
         publish()
+        for id in withdrawIDs {
+            channels.forEach { $0.withdrawDeliveredDigest(id: id) }
+        }
         guard newConfiguration.monitorEnabled else {
             stop()
             return true
@@ -1194,6 +1494,23 @@ final class PRActivityMonitor: ObservableObject {
     /// Runs one discovery + observation pass. `generation` is re-checked after every
     /// await so a stale pass can never commit into a newer account or configuration.
     func performPass(generation passGeneration: Int) async {
+        guard passGeneration == generation else { return }
+        if passInFlight {
+            queuedPass = true
+            return
+        }
+        passInFlight = true
+        defer {
+            passInFlight = false
+            let shouldContinue = queuedPass
+            queuedPass = false
+            if shouldContinue {
+                let generation = self.generation
+                Task { [weak self] in
+                    await self?.performPass(generation: generation)
+                }
+            }
+        }
         guard let acquisition, !isPaused, configuration.monitorEnabled else { return }
         guard passGeneration == generation else { return }
 
@@ -1244,6 +1561,8 @@ final class PRActivityMonitor: ObservableObject {
             }
         }
 
+        var seenEventIDs = Set(candidate.events.map(\.id))
+        newEvents = newEvents.filter { seenEventIDs.insert($0.id).inserted }
         candidate.actionItems = PRActivityEngine.mergeActionItems(
             existing: candidate.actionItems,
             newEvents: newEvents,
@@ -1255,9 +1574,21 @@ final class PRActivityMonitor: ObservableObject {
         candidate.actionItems = PRActivityEngine.retireActionItems(
             candidate.actionItems,
             prs: candidate.monitoredPRs,
-            recentEvents: newEvents,
+            recentEvents: candidate.events,
+            viewer: identity,
             now: now
         )
+        let invalidated = undeliverableEventIDs(in: candidate)
+        let resolution = PRActivityEngine.resolveStaleDigests(
+            batches: candidate.digest.batches,
+            announcedEventIDs: candidate.digest.announcedEventIDs,
+            invalidated: invalidated,
+            events: candidate.events,
+            items: candidate.actionItems
+        )
+        candidate.digest.batches = resolution.batches
+        candidate.digest.announcedEventIDs = resolution.announcedEventIDs
+        let withdrawIDs = resolution.withdrawBatchIDs
         candidate.hasEstablishedBaseline = true
         candidate.updatedAt = now
 
@@ -1285,6 +1616,9 @@ final class PRActivityMonitor: ObservableObject {
             "Monitor pass complete: prs=\(candidate.monitoredPRs.count, privacy: .public) observed=\(targets.count, privacy: .public) events=\(newEvents.count, privacy: .public) actionable=\(candidate.actionableItems(now: now).count, privacy: .public) unhealthySources=\(unhealthy, privacy: .public) discoveryComplete=\((candidate.discoveryCoverage?.isComplete ?? false), privacy: .public) reasons=\(reasonHistogram, privacy: .public) details=\(detailsByKind, privacy: .public)"
         )
         publish(lastPassAt: now)
+        for id in withdrawIDs {
+            channels.forEach { $0.withdrawDeliveredDigest(id: id) }
+        }
         deliverDueDigest(generation: passGeneration)
     }
 
@@ -1326,6 +1660,11 @@ final class PRActivityMonitor: ObservableObject {
     ) {
         candidate.discoveryCoverage = outcome.coverage
         for discovered in outcome.discovered {
+            let existing = candidate.monitoredPRs.first { $0.prNodeID == discovered.prNodeID }
+            guard configuration.collectsActivity(
+                for: discovered.reference.repoFullName,
+                explicitlyTracked: existing?.isExplicitlyTracked ?? false
+            ) else { continue }
             if let index = candidate.monitoredPRs.firstIndex(where: { $0.prNodeID == discovered.prNodeID }) {
                 var pr = candidate.monitoredPRs[index]
                 pr.origins.formUnion(discovered.origins)
@@ -1355,11 +1694,51 @@ final class PRActivityMonitor: ObservableObject {
 
     private func observationTargets(from prs: [MonitoredPR], now: Date) -> [MonitoredPR] {
         let eligible = prs.filter { pr in
+            guard configuration.collectsActivity(
+                for: pr.reference.repoFullName,
+                explicitlyTracked: pr.isExplicitlyTracked
+            ) else { return false }
             guard pr.lifecycle != .open else { return true }
             return now.timeIntervalSince(pr.lastObservedAt) >= Self.closedPRObservationInterval
         }
         // Stalest first: rotation bounded by `maxPRsPerPass` keeps cost predictable.
         return Array(eligible.sorted { $0.lastObservedAt < $1.lastObservedAt }.prefix(Self.maxPRsPerPass))
+    }
+
+    private func undeliverableEventIDs(in state: PRActivityAccountState) -> Set<String> {
+        PRActivityEngine.eventsNoLongerNotifiable(state.actionItems, now: clock())
+            .union(outOfScopeEventIDs(in: state))
+    }
+
+    /// Cancels digests whose events are outside the current repository filter, without
+    /// waiting for the next observation pass.
+    private func dropUndeliverableDigests() -> [String] {
+        guard var candidate = state else { return [] }
+        let resolution = PRActivityEngine.resolveStaleDigests(
+            batches: candidate.digest.batches,
+            announcedEventIDs: candidate.digest.announcedEventIDs,
+            invalidated: undeliverableEventIDs(in: candidate),
+            events: candidate.events,
+            items: candidate.actionItems
+        )
+        guard resolution.batches != candidate.digest.batches
+            || resolution.announcedEventIDs != candidate.digest.announcedEventIDs else {
+            return []
+        }
+        candidate.digest.batches = resolution.batches
+        candidate.digest.announcedEventIDs = resolution.announcedEventIDs
+        candidate.updatedAt = clock()
+        guard commit(candidate) else { return [] }
+        return resolution.withdrawBatchIDs
+    }
+
+    private func outOfScopeEventIDs(in state: PRActivityAccountState) -> Set<String> {
+        let tracked = Set(state.monitoredPRs.filter(\.isExplicitlyTracked).map(\.prNodeID))
+        return Set(state.events.compactMap { event in
+            configuration.isRepositoryNotified(event.reference.repoFullName, explicitlyTracked: tracked.contains(event.prNodeID))
+                ? nil
+                : event.id
+        })
     }
 
     private func apply(
@@ -1460,11 +1839,21 @@ final class PRActivityMonitor: ObservableObject {
     private func deliverDueDigest(generation passGeneration: Int) {
         guard configuration.notificationsEnabled, let state else { return }
         let now = clock()
-        if let last = state.digest.lastAutoDigestAt, now.timeIntervalSince(last) < Self.digestWindow {
-            return
-        }
+        let windowElapsed = state.digest.lastAutoDigestAt.map { now.timeIntervalSince($0) >= Self.digestWindow } ?? true
         let available = channels.filter(\.isAvailable)
         guard !available.isEmpty else { return }
+
+        // One automated send per window. A failed batch is retried as itself; its
+        // events are not copied into a second notification.
+        if windowElapsed, let batchID = newestRetryableFailedBatchID(in: state) {
+            guard retryFailedBatch(batchID, now: now) else { return }
+            startDelivery(batchID: batchID, generation: passGeneration)
+            return
+        }
+
+        startPendingDeliveries(generation: passGeneration)
+        guard windowElapsed else { return }
+
         // Mute is a delivery preference: resolve it here so the pure digest builder
         // never needs UI state, and collection stays unaffected.
         let mutedNodeIDs = Set(state.monitoredPRs.filter { isMuted($0.reference) }.map(\.prNodeID))
@@ -1495,16 +1884,64 @@ final class PRActivityMonitor: ObservableObject {
         guard commit(candidate) else { return }
         logger.info("Digest batch queued: \(batch.entries.count, privacy: .public) entries across \(batch.deliveries.count, privacy: .public) channel(s)")
         publish()
+        startDelivery(batchID: batch.id, generation: passGeneration)
+    }
 
-        let batchID = batch.id
+    /// Newest failed batch that still has an event the user has not been told about.
+    /// Older clones of the same event are left alone so a retry cannot fan out.
+    private func newestRetryableFailedBatchID(in state: PRActivityAccountState) -> String? {
+        let announced = Set(state.digest.announcedEventIDs)
+        return state.digest.batches.reversed().first { batch in
+            let failed = batch.deliveries.contains { $0.status == .failed }
+            let unannounced = batch.coveredEventIDs.contains { !announced.contains($0) }
+            return failed && unannounced
+        }?.id
+    }
+
+    private func retryFailedBatch(_ batchID: String, now: Date) -> Bool {
+        guard var candidate = state, let index = candidate.digest.batches.firstIndex(where: { $0.id == batchID }) else { return false }
+        var reset = false
+        for deliveryIndex in candidate.digest.batches[index].deliveries.indices {
+            guard candidate.digest.batches[index].deliveries[deliveryIndex].status == .failed else { continue }
+            candidate.digest.batches[index].deliveries[deliveryIndex].status = .pending
+            candidate.digest.batches[index].deliveries[deliveryIndex].failureMessage = nil
+            reset = true
+        }
+        guard reset else { return false }
+        candidate.digest.lastAutoDigestAt = now
+        candidate.updatedAt = now
+        guard commit(candidate) else { return false }
+        publish()
+        return true
+    }
+
+    /// Finishes a batch that was committed but never sent (for example after a crash).
+    /// Does not create a new batch, so the same events are not announced twice.
+    private func startPendingDeliveries(generation passGeneration: Int) {
+        guard let state else { return }
+        for batch in state.digest.batches where batch.deliveries.contains(where: { $0.status == .pending }) {
+            startDelivery(batchID: batch.id, generation: passGeneration)
+        }
+    }
+
+    private func startDelivery(batchID: String, generation passGeneration: Int) {
+        guard deliveringBatchIDs.insert(batchID).inserted else { return }
         Task { [weak self] in
             await self?.deliver(batchID: batchID, generation: passGeneration)
+            self?.deliveringBatchIDs.remove(batchID)
         }
     }
 
     /// User-initiated retry of a batch whose delivery failed or ended unknown.
     func retryDigestBatch(id: String) {
         guard var candidate = state, let batchIndex = candidate.digest.batches.firstIndex(where: { $0.id == id }) else { return }
+        let invalidated = undeliverableEventIDs(in: candidate)
+        guard PRActivityEngine.deliverableBatch(
+            candidate.digest.batches[batchIndex],
+            invalidated: invalidated,
+            events: candidate.events,
+            items: candidate.actionItems
+        ) != nil else { return }
         for index in candidate.digest.batches[batchIndex].deliveries.indices {
             let status = candidate.digest.batches[batchIndex].deliveries[index].status
             guard status == .failed || status == .unknown else { continue }
@@ -1512,10 +1949,7 @@ final class PRActivityMonitor: ObservableObject {
             candidate.digest.batches[batchIndex].deliveries[index].failureMessage = nil
         }
         guard commit(candidate) else { return }
-        let currentGeneration = generation
-        Task { [weak self] in
-            await self?.deliver(batchID: id, generation: currentGeneration)
-        }
+        startDelivery(batchID: id, generation: generation)
     }
 
     /// Delivers the pending channels of one batch. Each channel commits its own receipt;
@@ -1544,14 +1978,31 @@ final class PRActivityMonitor: ObservableObject {
                 continue
             }
 
+            let invalidated = undeliverableEventIDs(in: current)
+            guard let sendable = PRActivityEngine.deliverableBatch(
+                batch,
+                invalidated: invalidated,
+                events: current.events,
+                items: current.actionItems
+            ) else {
+                mark(delivery: pendingIndex, in: batchID, status: .superseded, message: String(localized: "No longer applies."), receipt: nil)
+                continue
+            }
+
             mark(delivery: pendingIndex, in: batchID, status: .sending, message: nil, receipt: nil)
             guard passGeneration == generation else { return }
 
             do {
-                let receipt = try await channel.deliver(batch)
+                let receipt = try await channel.deliver(sendable)
                 guard passGeneration == generation else { return }
+                let resolvedDuringSend = undeliverableEventIDs(in: state ?? current)
+                if sendable.coveredEventIDs.allSatisfy({ resolvedDuringSend.contains($0) }) {
+                    channel.withdrawDeliveredDigest(id: batchID)
+                    mark(delivery: pendingIndex, in: batchID, status: .superseded, message: String(localized: "No longer applies."), receipt: nil)
+                    continue
+                }
                 mark(delivery: pendingIndex, in: batchID, status: .delivered, message: nil, receipt: receipt)
-                recordAnnouncedEvents(batch.coveredEventIDs, batchID: batchID)
+                recordAnnouncedEvents(sendable.coveredEventIDs, batchID: batchID)
             } catch let error as SlackClientError {
                 switch error {
                 case .rateLimited(let retryAfter):
@@ -1598,7 +2049,7 @@ final class PRActivityMonitor: ObservableObject {
         delivery.failureMessage = message
         if let receipt { delivery.receipt = receipt }
         if status == .sending { delivery.attemptedAt = clock() }
-        if status == .delivered || status == .failed || status == .unknown { delivery.completedAt = clock() }
+        if status == .delivered || status == .failed || status == .unknown || status == .superseded { delivery.completedAt = clock() }
         candidate.digest.batches[batchIndex].deliveries[deliveryIndex] = delivery
         candidate.updatedAt = clock()
         guard commit(candidate) else { return }
@@ -1619,20 +2070,30 @@ final class PRActivityMonitor: ObservableObject {
     // MARK: User actions
 
     func markHandled(itemID: String, now: Date? = nil) {
-        updateItem(itemID) { item in
+        markHandled(itemIDs: [itemID], now: now)
+    }
+
+    func markHandled(itemIDs: [String], now: Date? = nil) {
+        let timestamp = now ?? clock()
+        updateItems(itemIDs) { item in
             item.state = .handled
             item.coveredEventIDs = item.eventIDs
             item.snoozedUntil = nil
-            item.stateUpdatedAt = now ?? self.clock()
+            item.stateUpdatedAt = timestamp
         }
     }
 
     func snooze(itemID: String, until: Date) {
-        updateItem(itemID) { item in
+        snooze(itemIDs: [itemID], until: until)
+    }
+
+    func snooze(itemIDs: [String], until: Date) {
+        let timestamp = clock()
+        updateItems(itemIDs) { item in
             item.state = .snoozed
             item.coveredEventIDs = item.eventIDs
             item.snoozedUntil = until
-            item.stateUpdatedAt = self.clock()
+            item.stateUpdatedAt = timestamp
         }
     }
 
@@ -1674,10 +2135,20 @@ final class PRActivityMonitor: ObservableObject {
     }
 
     private func updateItem(_ itemID: String, transform: (inout PRActionItem) -> Void) {
-        guard var candidate = state, let index = candidate.actionItems.firstIndex(where: { $0.id == itemID }) else { return }
-        var item = candidate.actionItems[index]
-        transform(&item)
-        candidate.actionItems[index] = item
+        updateItems([itemID], transform: transform)
+    }
+
+    private func updateItems(_ itemIDs: [String], transform: (inout PRActionItem) -> Void) {
+        guard var candidate = state else { return }
+        let wanted = Set(itemIDs)
+        var changed = false
+        for index in candidate.actionItems.indices where wanted.contains(candidate.actionItems[index].id) {
+            var item = candidate.actionItems[index]
+            transform(&item)
+            candidate.actionItems[index] = item
+            changed = true
+        }
+        guard changed else { return }
         candidate.updatedAt = clock()
         guard commit(candidate) else { return }
         publish()
