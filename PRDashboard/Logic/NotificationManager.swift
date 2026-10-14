@@ -8,16 +8,43 @@ private let notificationLogger = Logger(
     category: "NotificationManager"
 )
 
+enum NotificationDeliveryError: LocalizedError, Equatable {
+    case notAuthorized
+    case schedulingFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .notAuthorized:
+            return String(localized: "macOS notifications are not authorized for PR Dashboard.")
+        case .schedulingFailed(let reason):
+            return String(localized: "macOS notification could not be delivered: \(reason)")
+        }
+    }
+}
+
+/// Native (macOS) delivery for activity digests, plus the shared mute preference.
+///
+/// Only digests are delivered here: the app no longer posts one notification per PR
+/// event. Authorization failure affects this channel alone and never marks the Slack
+/// channel unavailable.
 final class NotificationManager: NSObject, ObservableObject {
+    static let digestCategoryIdentifier = "PR_ACTIVITY_DIGEST"
+    static let openActivityActionIdentifier = "OPEN_ACTIVITY"
+    static let muteActionIdentifier = "MUTE_PR"
+    static let digestBatchUserInfoKey = "digest_batch_id"
+    static let prIdentifierUserInfoKey = "pr_identifier"
+
     @Published private(set) var isAuthorized = false
     var openURL: (@MainActor (URL) -> Void)?
+    /// Opens the native activity entry when the user activates a digest notification.
+    var openActivity: (@MainActor () -> Void)?
 
     private let notificationCenter: UNUserNotificationCenter?
-    private var mutedPRIds: Set<Int> = []
-
-    private let mutedPRsKey = "muted_pr_ids"
-    private var lastNotificationTime: [Int: Date] = [:]
-    private let notificationThrottleInterval: TimeInterval = 600  // 10 minutes
+    private var mutedPRIdentifiers: Set<String> = []
+    private static let mutedPRIdentifiersKey = "muted_pr_identifiers"
+    /// Pre-1.7 builds stored mute state as GitHub database IDs with no owner/repo, so the
+    /// values cannot be mapped onto identifiers. Nothing in the UI ever wrote that key.
+    private static let legacyMutedPRIDsKey = "muted_pr_ids"
 
     init(useSystemNotificationCenter: Bool = true) {
         notificationCenter = useSystemNotificationCenter
@@ -26,6 +53,7 @@ final class NotificationManager: NSObject, ObservableObject {
         super.init()
         notificationCenter?.delegate = self
         loadMutedPRs()
+        registerCategories()
     }
 
     func requestPermission() {
@@ -35,163 +63,105 @@ final class NotificationManager: NSObject, ObservableObject {
             }
             if let error {
                 notificationLogger.error(
-                    "Notification permission failed: \(error.localizedDescription)"
+                    "Notification permission failed: \(error.localizedDescription, privacy: .public)"
                 )
             }
         }
     }
 
-    func notify(pr: PullRequest, newUnresolvedCount: Int) {
-        guard isAuthorized else { return }
-        guard !mutedPRIds.contains(pr.id) else { return }
+    // MARK: - Digest delivery
 
-        // Throttle notifications
-        if let lastTime = lastNotificationTime[pr.id],
-           Date().timeIntervalSince(lastTime) < notificationThrottleInterval {
-            return
+    func deliverDigest(_ batch: DigestBatch) async throws -> DigestReceipt {
+        guard let notificationCenter, isAuthorized else {
+            throw NotificationDeliveryError.notAuthorized
         }
-
-        lastNotificationTime[pr.id] = Date()
 
         let content = UNMutableNotificationContent()
-        content.title = "\(pr.repoFullName) #\(pr.number)"
-        if newUnresolvedCount == 1 {
-            content.body = String(localized: "1 new unresolved comment on \"\(pr.title)\"")
-        } else {
-            content.body = String(localized: "\(newUnresolvedCount) new unresolved comments on \"\(pr.title)\"")
-        }
+        content.title = PRActivityDigestFormatter.nativeTitle(for: batch)
+        content.body = PRActivityDigestFormatter.nativeBody(for: batch)
         content.sound = .default
-        content.userInfo = ["pr_url": pr.url.absoluteString, "pr_id": pr.id]
-        content.categoryIdentifier = "PR_NOTIFICATION"
+        content.categoryIdentifier = Self.digestCategoryIdentifier
+        content.userInfo = [Self.digestBatchUserInfoKey: batch.id]
 
         let request = UNNotificationRequest(
-            identifier: "pr-\(pr.id)-\(Date().timeIntervalSince1970)",
+            identifier: "digest-\(batch.id)",
             content: content,
             trigger: nil
         )
 
-        notificationCenter?.add(request) { error in
-            if let error {
-                notificationLogger.error(
-                    "Scheduling PR notification failed: \(error.localizedDescription)"
-                )
-            }
-        }
-    }
-
-    func notifyCIStatusChange(pr: PullRequest, newStatus: CIStatus) {
-        guard isAuthorized else { return }
-        guard !mutedPRIds.contains(pr.id) else { return }
-
-        // Throttle notifications
-        if let lastTime = lastNotificationTime[pr.id],
-           Date().timeIntervalSince(lastTime) < notificationThrottleInterval {
-            return
-        }
-
-        lastNotificationTime[pr.id] = Date()
-
-        let content = UNMutableNotificationContent()
-        content.title = "\(pr.repoFullName) #\(pr.number)"
-
-        switch newStatus {
-        case .success:
-            content.body = String(localized: "All CI checks passed on \"\(pr.title)\"")
-        case .failure:
-            content.body = String(localized: "CI checks failed on \"\(pr.title)\"")
-        default:
-            return  // Don't notify for pending/expected
-        }
-
-        content.sound = .default
-        content.userInfo = ["pr_url": pr.url.absoluteString, "pr_id": pr.id]
-        content.categoryIdentifier = "PR_NOTIFICATION"
-
-        let request = UNNotificationRequest(
-            identifier: "ci-\(pr.id)-\(Date().timeIntervalSince1970)",
-            content: content,
-            trigger: nil
+        try await add(request, to: notificationCenter)
+        return DigestReceipt(
+            channelID: nil,
+            workspace: nil,
+            messageTimestamp: batch.id,
+            recipientUserID: nil
         )
+    }
 
-        notificationCenter?.add(request) { error in
-            if let error {
-                notificationLogger.error(
-                    "Scheduling CI notification failed: \(error.localizedDescription)"
-                )
+    private func add(_ request: UNNotificationRequest, to center: UNUserNotificationCenter) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            center.add(request) { error in
+                if let error {
+                    continuation.resume(throwing: NotificationDeliveryError.schedulingFailed(error.localizedDescription))
+                } else {
+                    continuation.resume()
+                }
             }
         }
     }
 
-    func notifyPinnedMajorEvents(pr: PullRequest, events: [PinnedMajorPREvent]) {
-        guard isAuthorized else { return }
-        guard !mutedPRIds.contains(pr.id) else { return }
-        guard !events.isEmpty else { return }
+    // MARK: - Mute preference
 
-        let content = UNMutableNotificationContent()
-        content.title = "\(pr.repoFullName) #\(pr.number)"
-        let eventSummary = events.map(\.notificationText).joined(separator: ", ")
-        content.body = String(localized: "Pinned PR has major events: \(eventSummary) on \"\(pr.title)\"")
-        content.sound = .default
-        content.userInfo = ["pr_url": pr.url.absoluteString, "pr_id": pr.id]
-        content.categoryIdentifier = "PR_NOTIFICATION"
-
-        let request = UNNotificationRequest(
-            identifier: "pinned-pr-\(pr.id)-\(Date().timeIntervalSince1970)",
-            content: content,
-            trigger: nil
-        )
-
-        notificationCenter?.add(request) { error in
-            if let error {
-                notificationLogger.error(
-                    "Scheduling pinned PR notification failed: \(error.localizedDescription)"
-                )
-            }
-        }
+    /// Mute state for a PR, shared by digest delivery and the activity view. Muting
+    /// affects delivery only: collection and the existing unread counts are untouched.
+    func isPRMuted(_ identifier: String) -> Bool {
+        mutedPRIdentifiers.contains(identifier)
     }
 
-    func mutePR(_ prId: Int) {
-        mutedPRIds.insert(prId)
-        saveMutedPRs()
+    func mutePR(_ identifier: String) {
+        var updated = mutedPRIdentifiers
+        updated.insert(identifier)
+        mutedPRIdentifiers = updated
+        saveMutedPRs(updated)
     }
 
-    func unmutePR(_ prId: Int) {
-        mutedPRIds.remove(prId)
-        saveMutedPRs()
-    }
-
-    func isPRMuted(_ prId: Int) -> Bool {
-        mutedPRIds.contains(prId)
+    func unmutePR(_ identifier: String) {
+        var updated = mutedPRIdentifiers
+        updated.remove(identifier)
+        mutedPRIdentifiers = updated
+        saveMutedPRs(updated)
     }
 
     // MARK: - Private
 
     private func loadMutedPRs() {
-        if let ids = UserDefaults.standard.array(forKey: mutedPRsKey) as? [Int] {
-            mutedPRIds = Set(ids)
+        if let identifiers = UserDefaults.standard.stringArray(forKey: Self.mutedPRIdentifiersKey) {
+            mutedPRIdentifiers = Set(identifiers)
+        }
+        if let legacy = UserDefaults.standard.array(forKey: Self.legacyMutedPRIDsKey) as? [Int] {
+            if !legacy.isEmpty {
+                notificationLogger.warning(
+                    "Discarding \(legacy.count, privacy: .public) legacy PR mute entries: database IDs cannot be mapped to repository identifiers."
+                )
+            }
+            UserDefaults.standard.removeObject(forKey: Self.legacyMutedPRIDsKey)
         }
     }
 
-    private func saveMutedPRs() {
-        UserDefaults.standard.set(Array(mutedPRIds), forKey: mutedPRsKey)
+    private func saveMutedPRs(_ identifiers: Set<String>) {
+        UserDefaults.standard.set(Array(identifiers).sorted(), forKey: Self.mutedPRIdentifiersKey)
     }
 
     private func registerCategories() {
         let openAction = UNNotificationAction(
-            identifier: "OPEN_PR",
-            title: String(localized: "Open PR"),
+            identifier: Self.openActivityActionIdentifier,
+            title: String(localized: "Open Activity"),
             options: .foreground
         )
 
-        let muteAction = UNNotificationAction(
-            identifier: "MUTE_PR",
-            title: String(localized: "Mute Notifications"),
-            options: .destructive
-        )
-
         let category = UNNotificationCategory(
-            identifier: "PR_NOTIFICATION",
-            actions: [openAction, muteAction],
+            identifier: Self.digestCategoryIdentifier,
+            actions: [openAction],
             intentIdentifiers: [],
             options: []
         )
@@ -207,11 +177,24 @@ extension NotificationManager: UNUserNotificationCenterDelegate {
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         let userInfo = response.notification.request.content.userInfo
+        let isDigest = response.notification.request.content.categoryIdentifier == Self.digestCategoryIdentifier
+            || userInfo[Self.digestBatchUserInfoKey] != nil
 
         switch response.actionIdentifier {
-        case "OPEN_PR", UNNotificationDefaultActionIdentifier:
-            if let urlString = userInfo["pr_url"] as? String,
-               let url = URL(string: urlString) {
+        case Self.muteActionIdentifier:
+            if let identifier = userInfo[Self.prIdentifierUserInfoKey] as? String {
+                mutePR(identifier)
+            } else if isDigest, let batchID = userInfo[Self.digestBatchUserInfoKey] as? String {
+                notificationLogger.info("Digest mute action ignored: batch \(batchID, privacy: .public) covers several PRs.")
+            }
+
+        case Self.openActivityActionIdentifier, UNNotificationDefaultActionIdentifier:
+            if isDigest, let openActivity {
+                Task { @MainActor in
+                    openActivity()
+                }
+            } else if let urlString = userInfo["pr_url"] as? String,
+                      let url = URL(string: urlString) {
                 if let openURL {
                     Task { @MainActor in
                         openURL(url)
@@ -219,11 +202,6 @@ extension NotificationManager: UNUserNotificationCenterDelegate {
                 } else {
                     NSWorkspace.shared.open(url)
                 }
-            }
-
-        case "MUTE_PR":
-            if let prId = userInfo["pr_id"] as? Int {
-                mutePR(prId)
             }
 
         default:
@@ -238,7 +216,26 @@ extension NotificationManager: UNUserNotificationCenterDelegate {
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        // Show notification even when app is in foreground
+        // Show the digest even when the app is in the foreground.
         completionHandler([.banner, .sound])
+    }
+}
+
+/// `PRActivityDigestChannel` adapter for the native channel.
+@MainActor
+final class MacOSActivityDigestChannel: PRActivityDigestChannel {
+    let channel: DigestChannel = .macOS
+    private let notificationManager: NotificationManager
+
+    init(notificationManager: NotificationManager) {
+        self.notificationManager = notificationManager
+    }
+
+    var isAvailable: Bool { notificationManager.isAuthorized }
+
+    var targetBinding: [String: String] { [:] }
+
+    func deliver(_ batch: DigestBatch) async throws -> DigestReceipt {
+        try await notificationManager.deliverDigest(batch)
     }
 }

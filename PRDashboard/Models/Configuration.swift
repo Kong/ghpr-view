@@ -19,6 +19,16 @@ struct Configuration: Codable, Equatable {
     var jiraServerURL: String    // e.g. "https://company.atlassian.net"; empty = disabled
     var jiraEmail: String        // Atlassian account email; token stored in the credential store
     var jiraRefreshInterval: TimeInterval  // seconds
+    var monitorEnabled: Bool             // run the local PR activity monitor
+    var notificationTargets: [String]    // DigestChannel raw values; default macOS only
+    var notificationEventKinds: [String] // PRActivityEventKind raw values; empty = defaults
+    var notificationRepositories: [String]  // ["owner/repo", ...] - empty means all repos
+    var slackEnabled: Bool               // Slack DM digest enabled (token lives in the credential store)
+    var slackWorkspaceName: String       // display only, verified through auth.test
+    var slackWorkspaceID: String
+    var slackUserID: String              // recipient Slack user ID (DM target)
+    var slackDMChannelID: String         // resolved through conversations.open
+    var commentShortcuts: [CommentShortcut]  // user-defined comment templates; empty by default
 
     static var `default`: Configuration {
         Configuration(
@@ -39,7 +49,17 @@ struct Configuration: Codable, Equatable {
             httpProxyUsername: "",
             jiraServerURL: "",
             jiraEmail: "",
-            jiraRefreshInterval: 1800
+            jiraRefreshInterval: 1800,
+            monitorEnabled: true,
+            notificationTargets: [DigestChannel.macOS.rawValue],
+            notificationEventKinds: [],
+            notificationRepositories: [],
+            slackEnabled: false,
+            slackWorkspaceName: "",
+            slackWorkspaceID: "",
+            slackUserID: "",
+            slackDMChannelID: "",
+            commentShortcuts: []
         )
     }
 
@@ -61,7 +81,17 @@ struct Configuration: Codable, Equatable {
         httpProxyUsername: String,
         jiraServerURL: String,
         jiraEmail: String,
-        jiraRefreshInterval: TimeInterval
+        jiraRefreshInterval: TimeInterval,
+        monitorEnabled: Bool = true,
+        notificationTargets: [String] = [DigestChannel.macOS.rawValue],
+        notificationEventKinds: [String] = [],
+        notificationRepositories: [String] = [],
+        slackEnabled: Bool = false,
+        slackWorkspaceName: String = "",
+        slackWorkspaceID: String = "",
+        slackUserID: String = "",
+        slackDMChannelID: String = "",
+        commentShortcuts: [CommentShortcut] = []
     ) {
         self.refreshInterval = refreshInterval
         self.repositories = repositories
@@ -81,6 +111,16 @@ struct Configuration: Codable, Equatable {
         self.jiraServerURL = jiraServerURL
         self.jiraEmail = jiraEmail
         self.jiraRefreshInterval = jiraRefreshInterval
+        self.monitorEnabled = monitorEnabled
+        self.notificationTargets = notificationTargets
+        self.notificationEventKinds = notificationEventKinds
+        self.notificationRepositories = notificationRepositories
+        self.slackEnabled = slackEnabled
+        self.slackWorkspaceName = slackWorkspaceName
+        self.slackWorkspaceID = slackWorkspaceID
+        self.slackUserID = slackUserID
+        self.slackDMChannelID = slackDMChannelID
+        self.commentShortcuts = commentShortcuts
     }
 
     enum CodingKeys: String, CodingKey {
@@ -102,6 +142,16 @@ struct Configuration: Codable, Equatable {
         case jiraServerURL
         case jiraEmail
         case jiraRefreshInterval
+        case monitorEnabled
+        case notificationTargets
+        case notificationEventKinds
+        case notificationRepositories
+        case slackEnabled
+        case slackWorkspaceName
+        case slackWorkspaceID
+        case slackUserID
+        case slackDMChannelID
+        case commentShortcuts
     }
 
     init(from decoder: Decoder) throws {
@@ -133,10 +183,50 @@ struct Configuration: Codable, Equatable {
         jiraServerURL = try container.decodeIfPresent(String.self, forKey: .jiraServerURL) ?? defaults.jiraServerURL
         jiraEmail = try container.decodeIfPresent(String.self, forKey: .jiraEmail) ?? defaults.jiraEmail
         jiraRefreshInterval = try container.decodeIfPresent(TimeInterval.self, forKey: .jiraRefreshInterval) ?? defaults.jiraRefreshInterval
+        monitorEnabled = try container.decodeIfPresent(Bool.self, forKey: .monitorEnabled) ?? defaults.monitorEnabled
+        notificationTargets = try container.decodeIfPresent([String].self, forKey: .notificationTargets) ?? defaults.notificationTargets
+        notificationEventKinds = try container.decodeIfPresent([String].self, forKey: .notificationEventKinds) ?? defaults.notificationEventKinds
+        notificationRepositories = try container.decodeIfPresent([String].self, forKey: .notificationRepositories) ?? defaults.notificationRepositories
+        slackEnabled = try container.decodeIfPresent(Bool.self, forKey: .slackEnabled) ?? defaults.slackEnabled
+        slackWorkspaceName = try container.decodeIfPresent(String.self, forKey: .slackWorkspaceName) ?? defaults.slackWorkspaceName
+        slackWorkspaceID = try container.decodeIfPresent(String.self, forKey: .slackWorkspaceID) ?? defaults.slackWorkspaceID
+        slackUserID = try container.decodeIfPresent(String.self, forKey: .slackUserID) ?? defaults.slackUserID
+        slackDMChannelID = try container.decodeIfPresent(String.self, forKey: .slackDMChannelID) ?? defaults.slackDMChannelID
+        commentShortcuts = try container.decodeIfPresent([CommentShortcut].self, forKey: .commentShortcuts) ?? defaults.commentShortcuts
     }
 
     var isValid: Bool {
         refreshInterval >= 60
+    }
+}
+
+// MARK: - Digest preferences
+
+extension Configuration {
+    /// Delivery destinations for automated digests, in a stable order.
+    var digestChannels: [DigestChannel] {
+        var result: [DigestChannel] = []
+        for raw in notificationTargets {
+            guard let channel = DigestChannel(rawValue: raw), !result.contains(channel) else { continue }
+            result.append(channel)
+        }
+        return result
+    }
+
+    /// Event kinds the user wants in digests. Empty means "use the built-in defaults".
+    var notificationEventKindFilter: Set<PRActivityEventKind> {
+        Set(notificationEventKinds.compactMap(PRActivityEventKind.init(rawValue:)))
+    }
+
+    func isRepositoryNotified(_ repoFullName: String) -> Bool {
+        guard !notificationRepositories.isEmpty else { return true }
+        let normalized = repoFullName.lowercased()
+        return notificationRepositories.contains { $0.lowercased() == normalized }
+    }
+
+    /// A Slack digest requires a verified DM binding; a bare token is not enough.
+    var isSlackDeliveryConfigured: Bool {
+        slackEnabled && !slackUserID.isEmpty && !slackDMChannelID.isEmpty
     }
 }
 

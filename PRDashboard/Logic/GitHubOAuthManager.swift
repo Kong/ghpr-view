@@ -6,12 +6,17 @@ class GitHubOAuthManager: NSObject, ObservableObject {
     // OAuth App credentials
     // Create at: https://github.com/settings/developers
     private let clientID = "Ov23liGCAVv1nOHzVVhf"
-    private let scope = "repo read:user workflow"
+    /// Scopes requested by Device Flow and required of a PAT. `read:org` is included so
+    /// the next sign-in can grant team-reviewer access. An existing token does not gain it.
+    static let requiredScopes = ["repo", "read:user", "workflow", "read:org"]
+    private var scope: String { Self.requiredScopes.joined(separator: " ") }
     // GitHub classic PAT scopes are not strictly prefix-structured.
     // For example, `user` is broader than `read:user`, but does not share
     // a `read:user:` prefix, so we encode those implications explicitly.
     private nonisolated static let impliedScopesByGrantedScope: [String: Set<String>] = [
-        "user": ["read:user"]
+        "user": ["read:user"],
+        "write:org": ["read:org"],
+        "admin:org": ["write:org", "read:org"]
     ]
 
     @Published private(set) var authState: AuthState = .empty
@@ -95,7 +100,7 @@ class GitHubOAuthManager: NSObject, ObservableObject {
 
             // Match required scopes through the helper so broader classic scopes
             // like `user` count for narrower requirements like `read:user`.
-            let requiredScopes = ["repo", "read:user", "workflow"]
+            let requiredScopes = Self.requiredScopes
             let missingScopes = requiredScopes.filter { required in
                 !Self.grantedScopes(scopes, satisfy: required)
             }
@@ -164,6 +169,14 @@ class GitHubOAuthManager: NSObject, ObservableObject {
             return impliedScopesByGrantedScope[grantedScope]?.contains(requiredScope) == true
         }
     }
+
+    #if DEBUG
+    /// Smoke-test seam: injects an authenticated state without reading or writing the
+    /// credential store, so a launch-argument run can exercise real GitHub reads.
+    func applySmokeAuth(token: String, username: String?) {
+        authState = AuthState(accessToken: token, username: username, authMethod: .pat)
+    }
+    #endif
 
     func loadSavedAuth() {
         authState = loadPersistedAuthState()

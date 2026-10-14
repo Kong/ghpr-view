@@ -6550,7 +6550,139 @@ private struct CombinedGraphQLResponse: Decodable {
     struct RequestedReviewer: Decodable {
         let login: String?
     }
+}
 
+// MARK: - Monitor acquisition transport
+
+extension GitHubAPIClient {
+
+    /// Strict GraphQL transport for the activity monitor.
+    ///
+    /// Unlike `executeGraphQL`, a response carrying *any* GraphQL error is a failure:
+    /// a partially read source must never be committed as a complete checkpoint. The
+    /// monitor marks the affected source incomplete and keeps its previous checkpoint.
+    /// Transport failures are retried once; GraphQL error payloads never are.
+    func monitorExecuteGraphQL(
+        query: String,
+        operation: String,
+        variables: [String: Any]? = nil
+    ) async throws -> Data {
+        var request = URLRequest(url: graphQLURL)
+        request.httpMethod = "POST"
+        let requestToken = currentToken()
+        request.setValue("Bearer \(requestToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+
+        var body: [String: Any] = ["query": query]
+        if let variables, !variables.isEmpty {
+            body["variables"] = variables
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let maxAttempts = 2
+        for attempt in 1...maxAttempts {
+            do {
+                let (data, response) = try await session.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    throw MonitorTransportError.invalidResponse
+                }
+                updateRateLimitInfo(from: httpResponse)
+
+                switch httpResponse.statusCode {
+                case 200:
+                    guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                        throw MonitorTransportError.invalidResponse
+                    }
+                    let errors = (json["errors"] as? [[String: Any]])?
+                        .compactMap { $0["message"] as? String } ?? []
+                    if !errors.isEmpty {
+                        if errors.contains(where: Self.isAuthenticationFailureMessage) {
+                            reportUnauthorized(rejectedToken: requestToken)
+                            throw MonitorTransportError.unauthorized
+                        }
+                        throw MonitorTransportError.graphQLErrors(errors)
+                    }
+                    guard json["data"] is [String: Any] else {
+                        throw MonitorTransportError.invalidResponse
+                    }
+                    return data
+                case 401:
+                    reportUnauthorized(rejectedToken: requestToken)
+                    throw MonitorTransportError.unauthorized
+                case 403, 429:
+                    if let resetDate = rateLimitResetDate(from: httpResponse) {
+                        throw MonitorTransportError.rateLimited(reset: resetDate)
+                    }
+                    if httpResponse.statusCode == 403,
+                       Self.isAuthenticationFailure(statusCode: httpResponse.statusCode, data: data) {
+                        reportUnauthorized(rejectedToken: requestToken)
+                        throw MonitorTransportError.unauthorized
+                    }
+                    throw MonitorTransportError.http(httpResponse.statusCode)
+                default:
+                    throw MonitorTransportError.http(httpResponse.statusCode)
+                }
+            } catch let error as MonitorTransportError {
+                switch error {
+                case .graphQLErrors, .http, .unauthorized, .rateLimited:
+                    throw error
+                case .invalidResponse, .network:
+                    if attempt < maxAttempts {
+                        try await Task.sleep(nanoseconds: UInt64(Double.random(in: 0.5...2.0) * 1_000_000_000))
+                        continue
+                    }
+                    throw error
+                }
+            } catch {
+                if Task.isCancelled { throw MonitorTransportError.network(error) }
+                if attempt < maxAttempts {
+                    try await Task.sleep(nanoseconds: UInt64(Double.random(in: 0.5...2.0) * 1_000_000_000))
+                    continue
+                }
+                throw MonitorTransportError.network(error)
+            }
+        }
+
+        throw MonitorTransportError.invalidResponse
+    }
+
+    /// REST base URL derived from the configured GraphQL endpoint so GHES installs use
+    /// their own host. `<host>/api/graphql` maps to `<host>/api/v3`.
+    var monitorRESTBaseURL: URL {
+        let fallback = URL(string: "https://api.github.com")!
+        guard graphQLURL != Self.defaultGraphQLURL else { return fallback }
+        guard var components = URLComponents(url: graphQLURL, resolvingAgainstBaseURL: false) else {
+            return fallback
+        }
+        components.query = nil
+        components.fragment = nil
+        var path = components.path
+        if path.hasSuffix("/graphql") { path = String(path.dropLast("/graphql".count)) }
+        if path.hasSuffix("/api") { path += "/v3" }
+        components.path = path
+        return components.url ?? fallback
+    }
+
+    var monitorSession: URLSession { session }
+
+    var monitorToken: String { currentToken() }
+
+    /// Records rate-limit headers observed on a monitor REST call.
+    func monitorRecordRateLimit(from response: HTTPURLResponse) {
+        updateRateLimitInfo(from: response)
+    }
+
+    /// Reports a token GitHub rejected during monitor work to the shared auth handler.
+    func monitorReportUnauthorized(rejectedToken: String) {
+        reportUnauthorized(rejectedToken: rejectedToken)
+    }
+
+    /// Resolves the configured HTTP proxy exactly like GitHub requests do, so other
+    /// outbound clients (Slack) follow the same existing proxy preference.
+    static func resolvedProxyConfig(urlString: String, username: String, password: String) -> HTTPProxyConfig? {
+        resolveProxyConfig(urlString: urlString, username: username, password: password)
+    }
 }
 
 private extension Array {

@@ -62,7 +62,6 @@ final class ExtensionPlatformStore: ObservableObject {
         var analyses: [String: CIAnalysis] = [:]
         var findings: [String: SkillFinding]? = nil
         var findingDismissals: [String: Date]? = nil
-        var githubSurfaceV2Enabled: Bool? = nil
         var contributions: [String: BrowserContribution] = [:]
         var slotHealth: [String: SlotHealthReport] = [:]
         var surfaceHealth: [String: SurfaceHealthReport]? = nil
@@ -204,16 +203,9 @@ final class ExtensionPlatformStore: ObservableObject {
         state.findingDismissals?["\(repository.lowercased())#\(prNumber):\(fingerprint)"] != nil
     }
 
-    var githubSurfaceV2Enabled: Bool {
-        get { state.githubSurfaceV2Enabled ?? true }
-        set { state.githubSurfaceV2Enabled = newValue; touch() }
-    }
-
-    /// Legacy v1 placement health. Suppressed while GitHub-native surfaces are
-    /// active (v1 anchors are not mounted then, so stale reports are noise) and
-    /// deduplicated per slot so one missing anchor is not listed once per page.
+    /// Placement health for the userscript's single compact entry, deduplicated per
+    /// slot so one missing anchor is not listed once per page.
     var unhealthySlots: [SlotHealthReport] {
-        guard !githubSurfaceV2Enabled else { return [] }
         var newestBySlot: [BrowserSlot: SlotHealthReport] = [:]
         for report in state.slotHealth.values where !report.healthy {
             if let existing = newestBySlot[report.slot], existing.observedAt >= report.observedAt {

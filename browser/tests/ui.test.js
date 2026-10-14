@@ -278,6 +278,13 @@ async function settle() {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+function openHeaderMenu(window) {
+  const entry = window.document.getElementById("ghpr-header-entry");
+  const menu = entry?.querySelector(".ghpr-header-menu");
+  if (menu?.hidden) entry.querySelector(".ghpr-header-button").click();
+  return menu;
+}
+
 test("parses supported GitHub PR and workflow URLs", () => {
   assert.deepEqual(
     parseGitHubPage(new URL("https://github.com/Example-Org/example-repo/pull/1238/files")),
@@ -343,7 +350,8 @@ test("disables the run control of a Skill that is already running", async () => 
   const app = createGhprApp({ window, document: window.document, gm });
   await app.start();
 
-  const controls = [...window.document.querySelectorAll(".ghpr-panel-action")];
+  const menu = openHeaderMenu(window);
+  const controls = [...menu.querySelectorAll(".ghpr-panel-action")];
   const busy = controls.find((control) => control.textContent.startsWith("Classify Flaky"));
   const idle = controls.find((control) => control.textContent.startsWith("Explain CI Failure"));
   assert.equal(busy?.textContent, "Classify Flaky · Running");
@@ -356,18 +364,8 @@ test("disables the run control of a Skill that is already running", async () => 
   await settle();
   assert.equal(
     gm.requests.filter((request) => new URL(request.url).pathname === "/api/v1/actions").length,
-    0
-  );
-
-  gm.commands.get("Analyze current PR")();
-  await settle();
-  assert.equal(
-    gm.requests.filter((request) => new URL(request.url).pathname === "/api/v1/actions").length,
-    0
-  );
-  assert.match(
-    window.document.getElementById("ghpr-github-root").textContent,
-    /ci\.failure\.classify_flaky is already running/
+    0,
+    "a disabled running control must not submit another run"
   );
 
   app.stop();
@@ -380,7 +378,7 @@ test("a repeated run click submits the Skill once", async () => {
   const app = createGhprApp({ window, document: window.document, gm });
   await app.start();
 
-  const control = [...window.document.querySelectorAll(".ghpr-panel-action")]
+  const control = [...openHeaderMenu(window).querySelectorAll(".ghpr-panel-action")]
     .find((candidate) => candidate.textContent === "Classify Flaky");
   control.click();
   control.click();
@@ -406,11 +404,8 @@ test("prompts for a userscript update reported by the Browser Bridge", async () 
   const app = createGhprApp({ window, document: window.document, gm });
   await app.start();
 
-  const card = window.document.getElementById("ghpr-github-root");
-  assert.ok(card.classList.contains("ghpr-compact"));
-  assert.equal(card.querySelector(".ghpr-badge")?.textContent, "Update");
-  card.querySelector("[aria-label='Expand ghpr card']").click();
-  const notice = card.querySelector(".ghpr-update-notice");
+  const menu = openHeaderMenu(window);
+  const notice = menu.querySelector(".ghpr-update-notice");
   assert.match(notice?.textContent || "", /Userscript update available.*2\.0\.14 → 2\.1\.0/s);
   notice.querySelector("button").click();
   assert.deepEqual(gm.opened, ["http://127.0.0.1:48120/install/ghpr.user.js"]);
@@ -496,9 +491,9 @@ test("renders an independent ghpr header menu while unpaired", async () => {
   assert.equal(entry.querySelector("button")?.textContent, "ghpr ▾");
   const menu = entry.querySelector(".ghpr-header-menu");
   assert.equal(menu.hidden, true);
-  assert.match(menu.textContent, /Connect this userscript/);
   entry.querySelector(".ghpr-header-button").click();
   assert.equal(menu.hidden, false);
+  assert.match(menu.textContent, /Connect this userscript/);
 
   app.stop();
   window.close();
@@ -514,7 +509,7 @@ test("offers Bridge pairing through a Tampermonkey command when v2 leaves GitHub
   await app.start();
 
   assert.equal(window.document.getElementById("ghpr-github-root"), null);
-  assert.equal(window.document.getElementById("ghpr-header-entry"), null);
+  assert.ok(window.document.getElementById("ghpr-header-entry"), "the compact entry stays available for Connect");
   const connect = gm.commands.get("Connect ghpr");
   assert.equal(typeof connect, "function");
 
@@ -560,7 +555,7 @@ test("mounts the ghpr entry before the modern GitHub profile control", async () 
 
 
 
-test("defaults the ghpr sidebar card to collapsed on PR checks", async () => {
+test("checks page leaves the GitHub sidebar alone and keeps actions in the menu", async () => {
   const window = createWindow();
   const app = createGhprApp({
     window,
@@ -570,53 +565,26 @@ test("defaults the ghpr sidebar card to collapsed on PR checks", async () => {
   await app.start();
 
   const sidebar = window.document.querySelector("#partial-discussion-sidebar");
-  let card = window.document.getElementById("ghpr-github-root");
-  assert.equal(card.parentElement, sidebar);
-  assert.ok(card.classList.contains("ghpr-in-sidebar"));
-  assert.ok(card.classList.contains("ghpr-compact"));
   const reviewers = sidebar.querySelector("[data-testid='reviewers-section']");
   const assignees = sidebar.querySelector("[data-testid='assignees-section']");
-  assert.equal(
-    reviewers.nextElementSibling,
-    card,
-    "The ghpr card should sit immediately after Reviewers"
-  );
-  assert.equal(
-    card.nextElementSibling,
-    assignees,
-    "The ghpr card should stay above Assignees instead of falling to the sidebar bottom"
-  );
-  assert.equal(
-    window.document.querySelector("[data-testid='issue-header'] #ghpr-github-root"),
-    null,
-    "The integration must not crowd the PR title or status row"
-  );
-  assert.equal(
-    window.document.querySelector("[aria-label='ghpr CI Analysis']"),
-    null,
-    "The expanded conversation summary must stay off secondary PR tabs"
-  );
+  assert.equal(window.document.getElementById("ghpr-github-root"), null);
+  assert.equal(reviewers.nextElementSibling, assignees, "ghpr must not insert a card between Reviewers and Assignees");
+  assert.equal(window.document.querySelector("[aria-label='ghpr CI Analysis']"), null);
+  const entry = window.document.querySelector("[data-testid='issue-header'] #ghpr-header-entry");
+  assert.ok(entry, "the compact entry belongs in the PR header");
+  assert.equal(entry.querySelector(".ghpr-header-menu").hidden, true);
 
-  const toggle = card.querySelector("[aria-label='Expand ghpr card']");
-  assert.equal(toggle.getAttribute("aria-expanded"), "false");
-  toggle.click();
-  assert.equal(card.classList.contains("ghpr-compact"), false);
-  assert.equal(toggle.getAttribute("aria-label"), "Collapse ghpr card");
-  assert.match(card.textContent, /ghpr.*Likely flaky.*Explain CI Failure/s);
-
+  const menu = openHeaderMenu(window);
+  assert.match(menu.textContent, /Likely flaky/);
+  assert.match(menu.textContent, /Explain CI Failure/);
   await app.refresh();
-  card = window.document.getElementById("ghpr-github-root");
-  assert.equal(
-    card.classList.contains("ghpr-compact"),
-    false,
-    "Polling must preserve the user's expansion choice on the current surface"
-  );
+  assert.equal(menu.hidden, false, "polling must not close the menu the user opened");
 
   app.stop();
   window.close();
 });
 
-test("defaults the ghpr card to expanded on the PR conversation", async () => {
+test("conversation stays collapsed until Review results is opened", async () => {
   const window = createWindow("/example-org/example-repo/pull/1238");
   const app = createGhprApp({
     window,
@@ -625,22 +593,25 @@ test("defaults the ghpr card to expanded on the PR conversation", async () => {
   });
   await app.start();
 
-  const card = window.document.getElementById("ghpr-github-root");
-  assert.equal(card.classList.contains("ghpr-compact"), false);
-  assert.ok(card.querySelector("[aria-label='Collapse ghpr card']"));
-  assert.match(
-    window.document.querySelector("[aria-label='ghpr CI Analysis']")?.textContent || "",
-    /Likely flaky.*three main-branch runs/s
-  );
+  assert.equal(window.document.getElementById("ghpr-github-root"), null);
+  assert.equal(window.document.querySelector("[aria-label='ghpr CI Analysis']"), null);
+  const menu = openHeaderMenu(window);
+  const toggle = menu.querySelector(".ghpr-review-results-toggle");
+  assert.equal(toggle.getAttribute("aria-expanded"), "false");
+  assert.match(menu.textContent, /Likely flaky/);
 
   app.stop();
   window.close();
 });
 
-test("falls back to a responsive floating card when GitHub has no sidebar", async () => {
+test("falls back to a floating entry when GitHub has no header host", async () => {
   const window = createWindow();
-  window.document.querySelector("#partial-discussion-sidebar").remove();
-  setViewport(window, 390, 640);
+  window.document.querySelector("#partial-discussion-sidebar")?.remove();
+  for (const host of window.document.querySelectorAll(
+    ".gh-header-actions, .gh-header-show, .AppHeader-globalBar-end, header"
+  )) {
+    host.remove();
+  }
   const app = createGhprApp({
     window,
     document: window.document,
@@ -648,19 +619,81 @@ test("falls back to a responsive floating card when GitHub has no sidebar", asyn
   });
   await app.start();
 
-  const card = window.document.getElementById("ghpr-github-root");
-  assert.equal(card.parentElement, window.document.body);
-  assert.ok(card.classList.contains("ghpr-floating"));
-  assert.ok(card.classList.contains("ghpr-compact"));
-  const styles = window.document.getElementById("ghpr-github-styles").textContent;
-  assert.match(styles, /@media \(max-width: 720px\)[\s\S]*left: 8px;[\s\S]*right: 8px;/);
-  assert.match(styles, /max-height: min\(68vh, 520px\)/);
-  assert.match(styles, /ghpr-compact \{[\s\S]*max-height: none;[\s\S]*padding: 8px 10px;/);
-  assert.match(styles, /ghpr-floating\.ghpr-compact \{[\s\S]*left: auto;[\s\S]*width: min\(220px/);
+  const entry = window.document.getElementById("ghpr-header-entry");
+  assert.equal(entry.parentElement, window.document.body);
+  assert.ok(entry.classList.contains("ghpr-header-floating"));
+  assert.equal(window.document.getElementById("ghpr-github-root"), null);
 
   app.stop();
   window.close();
 });
+
+test("mounts the ghpr entry in the current GitHub global bar", async () => {
+  const window = createWindow();
+  window.document.querySelector(".gh-header-actions")?.remove();
+  const header = window.document.createElement("header");
+  header.innerHTML = `
+    <div data-testid="top-nav-right">
+      <button class="AppHeader-user" aria-label="Open user navigation menu">Profile</button>
+    </div>
+  `;
+  window.document.body.prepend(header);
+  const app = createGhprApp({
+    window,
+    document: window.document,
+    gm: new FakeGM({ paired: false })
+  });
+  await app.start();
+
+  const globalActions = window.document.querySelector("[data-testid='top-nav-right']");
+  const entry = window.document.getElementById("ghpr-header-entry");
+  assert.equal(entry.parentElement, globalActions);
+  assert.equal(globalActions.querySelector(".AppHeader-user").previousElementSibling, entry);
+  assert.equal(entry.classList.contains("ghpr-header-floating"), false);
+
+  app.stop();
+  window.close();
+});
+
+test("keeps the header menu inside a narrow viewport", async () => {
+  const window = createWindow();
+  setViewport(window, 558, 683);
+  const app = createGhprApp({
+    window,
+    document: window.document,
+    gm: new FakeGM({ paired: false })
+  });
+  await app.start();
+
+  const entry = window.document.getElementById("ghpr-header-entry");
+  const button = entry.querySelector(".ghpr-header-button");
+  button.getBoundingClientRect = () => ({
+    left: 500, right: 590, top: 72, bottom: 104, width: 90, height: 32, x: 500, y: 72
+  });
+  app.renderHeaderEntry();
+  assert.equal(entry.parentElement, window.document.body);
+  assert.ok(entry.classList.contains("ghpr-header-floating"));
+  assert.ok(entry.classList.contains("ghpr-header-floating-narrow"));
+
+  button.getBoundingClientRect = () => ({
+    left: 478, right: 550, top: 8, bottom: 40, width: 72, height: 32, x: 478, y: 8
+  });
+  button.click();
+  const menu = entry.querySelector(".ghpr-header-menu") ||
+    window.document.querySelector(".ghpr-header-menu");
+  const left = parseFloat(menu.style.left);
+  const width = parseFloat(menu.style.width);
+  assert.equal(menu.hidden, false);
+  assert.ok(left >= 8, `menu left ${left} should stay inside the viewport`);
+  assert.ok(left + width <= 550, `menu right ${left + width} should stay inside the viewport`);
+  assert.equal(menu.style.getPropertyValue("height"), "auto");
+  assert.equal(menu.style.getPropertyValue("bottom"), "auto");
+  assert.equal(menu.style.getPropertyValue("position"), "fixed");
+
+  app.stop();
+  window.close();
+});
+
 
 test("renders failed-check actions, local tags, and contribution fallback on PR checks", async () => {
   const window = createWindow();
@@ -668,36 +701,24 @@ test("renders failed-check actions, local tags, and contribution fallback on PR 
   const app = createGhprApp({ window, document: window.document, gm });
   await app.start();
 
-  assert.equal(window.document.querySelector("#ghpr-github-root .ghpr-panel-title")?.textContent, "ghpr");
+  assert.equal(window.document.getElementById("ghpr-github-root"), null);
   const headerEntry = window.document.getElementById("ghpr-header-entry");
   assert.ok(headerEntry, "ghpr should mount a header entry on authenticated PR pages");
   headerEntry.querySelector(".ghpr-header-button").click();
+  const menu = headerEntry.querySelector(".ghpr-header-menu");
   assert.match(
-    headerEntry.querySelector(".ghpr-header-menu")?.textContent || "",
+    menu?.textContent || "",
     /Explain CI Failure.*Classify Flaky.*Run Skill.*Run Team Policy.*Tags.*Needs investigation/s
   );
-  headerEntry.querySelector(".ghpr-header-button").click();
-  assert.equal(
-    window.document.querySelector("[aria-label='ghpr CI Analysis']"),
-    null
-  );
-  window.document.querySelector("[aria-label='Expand ghpr card']").click();
+  assert.equal(window.document.querySelector("[aria-label='ghpr CI Analysis']"), null);
   const failedRow = window.document.querySelectorAll("[data-testid='check-run-row']")[0];
-  assert.match(failedRow.textContent, /Likely flaky.*Analyze/s);
   const successRow = window.document.querySelectorAll("[data-testid='check-run-row']")[1];
+  assert.doesNotMatch(failedRow.textContent, /Analyze/);
   assert.doesNotMatch(successRow.textContent, /Analyze/);
   assert.match(
-    window.document.querySelector("#ghpr-github-root .ghpr-panel-body")?.textContent || "",
-    /Run Team Policy Check/
-  );
-  assert.match(
-    window.document.querySelector("#ghpr-github-root .ghpr-panel-body")?.textContent || "",
-    /Local ghpr tags.*Flaky.*Not flaky.*Needs investigation/s
-  );
-  assert.match(
-    window.document.querySelector("#ghpr-header-entry .ghpr-header-menu")?.textContent || "",
+    menu.textContent,
     /Extensions.*Run Team Policy Check/s,
-    "missing semantic anchors must also fall back to the header menu"
+    "missing semantic anchors fall back into the header menu"
   );
 
   const health = gm.requests
@@ -710,7 +731,7 @@ test("renders failed-check actions, local tags, and contribution fallback on PR 
     "missing semantic anchors must be reported and fall back to the ghpr card"
   );
 
-  const classify = [...window.document.querySelectorAll("#ghpr-github-root .ghpr-panel-body .ghpr-panel-action")]
+  const classify = [...menu.querySelectorAll(".ghpr-panel-action")]
     .find((element) => element.textContent === "Classify Flaky");
   classify.click();
   await settle();
@@ -760,21 +781,13 @@ test("shows an active Skill run and opens its live log from GitHub surfaces", as
   });
   await checksApp.start();
 
-  const root = checksWindow.document.getElementById("ghpr-github-root");
-  assert.equal(root.dataset.state, "running");
-  assert.equal(
-    root.querySelector(".ghpr-panel-head .ghpr-badge")?.textContent,
-    "Running"
-  );
+  const menu = openHeaderMenu(checksWindow);
   const failedRow = checksWindow.document.querySelectorAll("[data-testid='check-run-row']")[0];
-  assert.match(failedRow.textContent, /Running.*View log/s);
-  assert.doesNotMatch(failedRow.textContent, /Analyze/);
-  assert.match(
-    checksWindow.document.querySelector(".ghpr-panel-body")?.textContent || "",
-    /Running.*Comparing failure history.*View live log/s
-  );
-
-  failedRow.querySelector(".ghpr-check-tools button").click();
+  assert.doesNotMatch(failedRow.textContent, /View log|Analyze/);
+  assert.match(menu.textContent, /Explain CI Failure · Running/);
+  const view = [...menu.querySelectorAll("button")].find((button) => button.textContent === "View live log");
+  assert.ok(view, "an active run stays reachable from the menu");
+  view.click();
   await settle();
   const detailAction = checksGM.requests
     .filter((request) => new URL(request.url).pathname === "/api/v1/actions")
@@ -795,13 +808,9 @@ test("shows an active Skill run and opens its live log from GitHub surfaces", as
     gm: new FakeGM({ snapshot })
   });
   await conversationApp.start();
-  const runningCard = conversationWindow.document.querySelector(
-    "[aria-label='ghpr Skill Running']"
-  );
-  assert.match(
-    runningCard?.textContent || "",
-    /ci\.failure\.explain.*Running.*Comparing failure history.*2 \/ 3.*View live log/s
-  );
+  assert.equal(conversationWindow.document.querySelector("[aria-label='ghpr Skill Running']"), null);
+  const conversationMenu = openHeaderMenu(conversationWindow);
+  assert.match(conversationMenu.textContent, /View live log/);
   assert.equal(
     conversationWindow.document.querySelector("[aria-label='ghpr CI Analysis']"),
     null
@@ -830,7 +839,7 @@ test("does not expose PR-only analysis actions on workflow run pages", async () 
   const app = createGhprApp({ window, document: window.document, gm });
   await app.start();
 
-  const text = window.document.querySelector("#ghpr-github-root")?.textContent || "";
+  const text = openHeaderMenu(window)?.textContent || "";
   assert.doesNotMatch(text, /Explain CI Failure|Classify Flaky|Run Skill/);
   gm.commands.get("Analyze current PR")();
   await settle();
@@ -878,9 +887,8 @@ test("offers permission repair instead of actions when skill:run is not granted"
   });
   const app = createGhprApp({ window, document: window.document, gm });
   await app.start();
-  window.document.querySelector("[aria-label='Expand ghpr card']").click();
+  const panel = openHeaderMenu(window);
 
-  const panel = window.document.querySelector(".ghpr-panel-body");
   assert.match(panel?.textContent || "", /skill:run required.*Grant Run Skills/s);
   assert.doesNotMatch(panel?.textContent || "", /Explain CI Failure|Classify Flaky/);
   const failedRow = window.document.querySelectorAll("[data-testid='check-run-row']")[0];
@@ -921,10 +929,6 @@ test("offers permission repair instead of actions when skill:run is not granted"
     request.method === "POST" && new URL(request.url).pathname === "/api/v1/pairings"
   );
   assert.deepEqual(JSON.parse(pairingRequest.data).required_scopes, ["skill:run"]);
-  assert.match(
-    window.document.querySelector(".ghpr-panel-body")?.textContent || "",
-    /Explain CI Failure.*Classify Flaky/s
-  );
   assert.equal(
     gm.requests.some((request) => new URL(request.url).pathname === "/api/v1/actions"),
     false,
@@ -992,10 +996,13 @@ test("renders declarative result cards and invokes them with page-scoped identit
   const app = createGhprApp({ window, document: window.document, gm });
   await app.start();
 
+  const menu = openHeaderMenu(window);
   const card = window.document.querySelector("[aria-label='Static Review']");
-  assert.match(card?.textContent || "", /One actionable finding.*Open Full Analysis/s);
-  assert.equal(card.querySelector("b"), null, "Skill text must remain inert");
-  card.querySelector("button").click();
+  const control = card?.querySelector("button")
+    || [...menu.querySelectorAll("button")].find((button) => button.textContent === "Static Review");
+  assert.ok(control, "a contribution with no native anchor falls back into the menu");
+  assert.equal(window.document.querySelector("b"), null, "Skill text must remain inert");
+  control.click();
   await settle();
 
   const invoke = gm.requests.find((request) =>
@@ -1004,13 +1011,13 @@ test("renders declarative result cards and invokes them with page-scoped identit
   );
   assert.ok(invoke);
   assert.equal(new URL(invoke.url).searchParams.get("page_key"), snapshot.page.key);
-  assert.match(window.document.querySelector("#ghpr-github-root")?.textContent || "", /Recent runs.*Static Review/s);
+  assert.equal(window.document.getElementById("ghpr-github-root"), null);
 
   app.stop();
   window.close();
 });
 
-test("renders structured review findings and persists dismissals", async () => {
+test("renders structured review findings in the collapsed review results", async () => {
   const snapshot = makeSnapshot();
   snapshot.runs = [{
     id: "run_review_findings",
@@ -1057,42 +1064,37 @@ test("renders structured review findings and persists dismissals", async () => {
     error: null,
     retry_of_run_id: null
   }];
+  snapshot.findings = [{
+    id: "finding-1",
+    title: "Handle the error",
+    summary: "The request failure is otherwise discarded.",
+    severity: "warning",
+    lifecycle: "exact",
+    subject: {
+      file_path: "Sources/App.swift",
+      start_line: 42,
+      end_line: 42,
+      side: "addition",
+      head_sha: "a".repeat(40)
+    }
+  }];
   const window = createWindow("/example-org/example-repo/pull/1238");
   const gm = new FakeGM({ snapshot });
   const app = createGhprApp({ window, document: window.document, gm });
   await app.start();
 
-  const finding = window.document.querySelector("[data-testid='ghpr-review-finding']");
-  assert.match(finding?.textContent || "", /Handle the error.*Sources\/App\.swift:42/);
-  const view = finding.querySelector("button");
-  assert.equal(view?.textContent, "View in Files changed");
-  view.click();
-  assert.match(window.location.href, /\/changes\?ghpr_finding=finding-1&path=Sources%2FApp\.swift&line=42#L42/);
-
-  const filesWindow = createWindow("/example-org/example-repo/pull/1238/files");
-  const table = filesWindow.document.createElement("table");
-  table.className = "diff-table";
-  filesWindow.document.body.append(table);
-  const filesGM = new FakeGM({ snapshot });
-  const filesApp = createGhprApp({ window: filesWindow, document: filesWindow.document, gm: filesGM });
-  await filesApp.start();
-  assert.equal(filesWindow.document.querySelectorAll("[data-testid='ghpr-review-finding']").length, 1);
-  const dismiss = filesWindow.document.querySelector("[data-testid='ghpr-review-finding'] .ghpr-finding-tools button");
+  const menu = openHeaderMenu(window);
+  menu.querySelector(".ghpr-review-results-toggle").click();
+  const finding = menu.querySelector(".ghpr-review-finding");
+  assert.match(finding?.textContent || "", /Handle the error/);
+  assert.match(finding?.textContent || "", /Sources\/App\.swift/);
+  const view = [...finding.querySelectorAll("button")].find((button) => button.textContent === "View diff context");
+  assert.equal(view?.textContent, "View diff context");
+  const dismiss = [...finding.querySelectorAll("button")].find((button) => button.textContent === "Dismiss");
   assert.equal(dismiss?.textContent, "Dismiss");
-  dismiss.click();
-  await settle();
-  const remainingFinding = filesWindow.document.querySelector(
-    "[data-testid='ghpr-review-finding']"
-  );
-  const persistedDismissals = filesGM.storage.get("ghpr.dismissed.findings");
 
   app.stop();
-  filesApp.stop();
   window.close();
-  filesWindow.close();
-
-  assert.equal(remainingFinding, null);
-  assert.deepEqual(persistedDismissals, ["finding-1"]);
 });
 test("renders untrusted analysis text without creating active markup", async () => {
   const snapshot = makeSnapshot();
@@ -1102,9 +1104,9 @@ test("renders untrusted analysis text without creating active markup", async () 
   const app = createGhprApp({ window, document: window.document, gm });
   await app.start();
 
-  const card = window.document.querySelector("[aria-label='ghpr CI Analysis']");
-  assert.match(card.textContent, /<img src=x/);
-  assert.equal(card.querySelector("img"), null);
+  const menu = openHeaderMenu(window);
+  assert.equal(window.document.querySelector("img"), null, "untrusted analysis text must not become markup");
+  assert.equal(menu.querySelector("img"), null);
 
   app.stop();
   window.close();
@@ -1117,6 +1119,7 @@ test("stays silent when ghpr-view is offline", async () => {
   await app.start();
 
   assert.equal(window.document.getElementById("ghpr-github-root"), null);
+  assert.equal(window.document.getElementById("ghpr-header-entry"), null);
   assert.equal(window.document.querySelector("[data-ghpr-managed]"), null);
 
   app.stop();

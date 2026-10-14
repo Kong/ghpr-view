@@ -43,6 +43,8 @@ final class ExtensionPlatformController: ObservableObject {
     init(
         snapshotProvider: @escaping BrowserBridgeRouter.SnapshotProvider,
         rerunFailedJobs: BrowserBridgeRouter.RerunFailedJobsHandler? = nil,
+        commentShortcut: BrowserBridgeRouter.CommentShortcutHandler? = nil,
+        commentShortcutCatalog: BrowserBridgeRouter.CommentShortcutCatalogProvider? = nil,
         storageURL: URL? = defaultExtensionPlatformStorageURL(),
         assetProvider: BrowserAssetProvider = .bundled(),
         appVersion: String,
@@ -67,6 +69,8 @@ final class ExtensionPlatformController: ObservableObject {
             runtime: runtime,
             snapshotProvider: snapshotProvider,
             rerunFailedJobs: rerunFailedJobs,
+            commentShortcut: commentShortcut,
+            commentShortcutCatalog: commentShortcutCatalog,
             assetProvider: assetProvider,
             appVersion: appVersion,
             draftsRootURL: draftsRootURL,
@@ -129,15 +133,9 @@ final class ExtensionPlatformController: ObservableObject {
         _ = revision
         return store.unhealthySurfaces
     }
-    /// Every GitHub placement that currently needs attention, across the active
-    /// GitHub-native surfaces and the legacy v1 slots.
+    /// Every GitHub placement that currently needs attention.
     var unhealthyPlacementCount: Int {
         unhealthySurfaces.count + unhealthySlots.count
-    }
-
-    var githubSurfaceV2Enabled: Bool {
-        get { store.githubSurfaceV2Enabled }
-        set { store.githubSurfaceV2Enabled = newValue }
     }
 
     var skills: [SkillDefinition] {

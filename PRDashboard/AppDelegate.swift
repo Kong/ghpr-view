@@ -15,6 +15,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var settingsWindow: NSWindow?
     var updateWindow: NSWindow?
     var jiraSetupWindow: NSWindow?
+    var activityWindow: NSWindow?
+    var viewModel: PRListViewModel?
     var jiraSetupCoordinator: JiraSetupCoordinator?
     var presentationCoordinator: AppPresentationCoordinator?
     var extensionPlatformController: ExtensionPlatformController?
@@ -29,9 +31,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let isExtensionPlatformUITest = CommandLine.arguments.contains {
             $0.hasPrefix("--ui-testing-browser-")
         }
+        // Smoke runs use an isolated activity store and install no delivery channel,
+        // so observing the monitor never touches real history or sends notifications.
+        let isActivitySmokeTest = CommandLine.arguments.contains("--ui-testing-activity-store")
 
         // 1. Create OAuth manager (loads saved auth automatically outside deterministic UI tests)
-        oauthManager = GitHubOAuthManager(loadSavedAuth: !isExtensionPlatformUITest)
+        oauthManager = GitHubOAuthManager(loadSavedAuth: !isExtensionPlatformUITest && !isActivitySmokeTest)
 
         // 2. Create notification manager and request permission
         notificationManager = NotificationManager()
@@ -47,7 +52,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             notificationManager: notificationManager!,
             oauthManager: oauthManager!,
             cmuxStatusProvider: CmuxBrowserRouter(),
-            loadKeychainSecrets: !isExtensionPlatformUITest
+            loadKeychainSecrets: !isExtensionPlatformUITest,
+            activityMonitor: isActivitySmokeTest
+                ? PRActivityMonitor(
+                    store: PRActivityStore(directoryURL: Self.activitySmokeStoreURL()),
+                    configuration: .default
+                )
+                : nil
         )
         updateManager = UpdateManager(configuration: prManager!.configuration)
         updateManager?.onRequestPresentation = { [weak self] in
@@ -61,6 +72,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 await self?.prLinkOpener?.open(url)
             }
         }
+        // Digest channels are installed below and rebuilt whenever configuration
+        // (proxy, Slack binding) changes.
+        configureActivityChannels()
+        notificationManager?.openActivity = { [weak self] in
+            Task { @MainActor in
+                self?.openActivityWindow()
+            }
+        }
 
         // 4.1 Load cached PR data for immediate display
         // 5. Create view model
@@ -69,6 +88,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             oauthManager: oauthManager!,
             linkOpener: prLinkOpener!
         )
+        self.viewModel = viewModel
         onboardingManager = OnboardingManager()
 
         presentationCoordinator = AppPresentationCoordinator { [weak self, weak viewModel] presentation in
@@ -84,6 +104,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         viewModel.openSettings = { [weak self] in
             self?.presentationCoordinator?.present(.settings)
         }
+
+        viewModel.openActivity = { [weak self] in
+            self?.openActivityWindow()
+        }
+
+        #if DEBUG
+        if isActivitySmokeTest,
+           let token = ProcessInfo.processInfo.environment["GHPR_SMOKE_TOKEN"],
+           !token.isEmpty {
+            oauthManager?.applySmokeAuth(
+                token: token,
+                username: ProcessInfo.processInfo.environment["GHPR_SMOKE_USERNAME"]
+            )
+        }
+        #endif
 
         let isPRActionsUITest = CommandLine.arguments.contains("--ui-testing-browser-pr-actions") ||
             CommandLine.arguments.contains("--ui-testing-browser-pr-actions-passing")
@@ -111,6 +146,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     throw BrowserBridgeActionError.pullRequestUnavailable
                 }
                 return try await prManager.rerunFailedCI(for: pr)
+            },
+            commentShortcut: { [weak self] request in
+                guard let prManager = self?.prManager else {
+                    throw CommentShortcutPreparationError.shortcutUnavailable
+                }
+                return try await prManager.prepareCommentShortcut(request)
+            },
+            commentShortcutCatalog: { [weak self] in
+                self?.prManager?.commentShortcutCatalog() ?? []
             },
             storageURL: isExtensionPlatformUITest ? nil : defaultExtensionPlatformStorageURL(),
             appVersion: Self.appInfoValue("CFBundleShortVersionString"),
@@ -158,6 +202,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] configuration in
                 self?.updateManager?.updateConfiguration(configuration)
+                // The Slack session follows the proxy preference, so channels are
+                // rebuilt whenever configuration changes.
+                self?.configureActivityChannels()
             }
             .store(in: &cancellables)
 
@@ -188,6 +235,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 10. Request notification permission if authenticated
         if oauthManager?.authState.isAuthenticated == true {
             notificationManager?.requestPermission()
+            // Monitoring starts with the app, not with the popover: a saved sign-in is
+            // enough to observe PR activity in the background.
+            prManager?.startActivityMonitoring()
         }
 
         // 11. Request notification permission after sign-in
@@ -368,6 +418,59 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         jiraSetupWindow = window
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private static func activitySmokeStoreURL() -> URL {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ghpr-activity-smoke", isDirectory: true)
+        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        return base
+    }
+
+    private func openActivityWindow() {
+        guard let viewModel else { return }
+
+        if activityWindow == nil {
+            let hostingController = NSHostingController(rootView: PRActivityView(viewModel: viewModel))
+            let window = NSWindow(contentViewController: hostingController)
+            window.title = String(localized: "Activity")
+            window.styleMask = [.titled, .closable]
+            window.setContentSize(NSSize(width: 560, height: 560))
+            window.center()
+            window.isReleasedWhenClosed = false
+            activityWindow = window
+        }
+
+        activityWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Installs the digest channels. Rebuilt on configuration changes so the Slack
+    /// session picks up proxy and binding changes instead of staying stale.
+    private func configureActivityChannels() {
+        guard let notificationManager, let prManager else { return }
+        if CommandLine.arguments.contains("--ui-testing-activity-store") {
+            // Smoke runs collect activity but never deliver it.
+            prManager.activityMonitor.setChannels([])
+            return
+        }
+        let configuration = prManager.configuration
+        let slackClient = SlackNotificationClient(
+            proxy: GitHubAPIClient.resolvedProxyConfig(
+                urlString: configuration.httpProxyURL,
+                username: configuration.httpProxyUsername,
+                password: Keychain.loadProxyPassword()
+            )
+        )
+        prManager.activityMonitor.setChannels([
+            MacOSActivityDigestChannel(notificationManager: notificationManager),
+            SlackActivityDigestChannel(
+                client: slackClient,
+                configurationProvider: { [weak self] in
+                    self?.prManager?.configuration ?? .default
+                }
+            ),
+        ])
     }
 
     private func openSettingsWindow(viewModel: PRListViewModel) {

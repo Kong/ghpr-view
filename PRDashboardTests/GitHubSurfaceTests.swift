@@ -920,27 +920,8 @@ final class GitHubSurfaceTests: XCTestCase {
     // MARK: - Legacy slot health presentation
 
     @MainActor
-    func testLegacySlotHealthIsHiddenWhileGitHubNativeSurfacesAreEnabled() {
-        let store = ExtensionPlatformStore(storageURL: nil)
-        store.githubSurfaceV2Enabled = true
-        store.reportSlotHealth(
-            clientID: "client-1",
-            pageKey: "github:pr:owner/repo#42",
-            slot: .prHeaderActions,
-            healthy: false,
-            detail: "Semantic anchor was not found."
-        )
-
-        XCTAssertTrue(
-            store.unhealthySlots.isEmpty,
-            "Stale v1 placement reports must not be surfaced while v2 anchors are the mounted ones"
-        )
-    }
-
-    @MainActor
     func testLegacySlotHealthKeepsOnlyNewestReportPerSlot() {
         let store = ExtensionPlatformStore(storageURL: nil)
-        store.githubSurfaceV2Enabled = false
         let older = Date(timeIntervalSince1970: 1_700_000_000)
         let newer = older.addingTimeInterval(60)
         for (index, page) in ["pull/42", "pull/42/files", "pull/42/checks"].enumerated() {
@@ -997,7 +978,6 @@ final class GitHubSurfaceTests: XCTestCase {
             storageURL: nil,
             appVersion: "1.0.0"
         )
-        controller.githubSurfaceV2Enabled = true
         XCTAssertEqual(controller.unhealthyPlacementCount, 0, "A clean store must read as healthy")
 
         controller.store.reportSurfaceHealth(

@@ -77,6 +77,11 @@ struct PullRequestReference: Hashable, Codable {
         "\(owner)/\(repo)"
     }
 
+    /// Stable identifier matching `PullRequest.pinIdentifier` (e.g. "owner/repo#123").
+    var identifier: String {
+        "\(repoFullName)#\(number)"
+    }
+
     /// Canonical ordering: by owner, then repo (both ascending), then number.
     /// `newestFirst` flips the number comparison so callers that want recent PRs
     /// to surface first (higher number ≈ more recent within a repo) share one rule.

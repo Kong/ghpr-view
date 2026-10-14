@@ -11,45 +11,6 @@ enum JiraConnectionState: Equatable {
 }
 
 
-enum PinnedMajorPREvent: Hashable {
-    case ciFailure
-    case changeRequests(Int)
-    case approvals(Int)
-
-    var notificationText: String {
-        switch self {
-        case .ciFailure:
-            return String(localized: "CI failing")
-        case .changeRequests(let count):
-            if count == 1 {
-                return String(localized: "1 change request")
-            }
-            return String(localized: "\(count) change requests")
-        case .approvals(let count):
-            if count == 1 {
-                return String(localized: "1 approval")
-            }
-            return String(localized: "\(count) approvals")
-        }
-    }
-}
-
-enum CIStatusNotificationPlanner {
-    static func notificationStatus(previous: PullRequest?, current: PullRequest) -> CIStatus? {
-        guard let previous else { return nil }
-        return notificationStatus(previous: previous.ciStatus, current: current.ciStatus)
-    }
-
-    static func notificationStatus(previous: CIStatus?, current: CIStatus?) -> CIStatus? {
-        guard previous != current,
-              let current,
-              current == .success || current == .failure else {
-            return nil
-        }
-        return current
-    }
-}
-
 enum CIWatchPlanner {
     static func watchCandidates(from prList: PRList) -> [PullRequest] {
         var seenIDs = Set<Int>()
@@ -193,49 +154,6 @@ enum DirectMentionProjector {
     }
 }
 
-struct PinnedMajorPRNotificationPlan: Equatable {
-    let prID: Int
-    let events: [PinnedMajorPREvent]
-}
-
-enum PinnedMajorPRNotificationPlanner {
-    static func events(for pr: PullRequest) -> [PinnedMajorPREvent] {
-        var events: [PinnedMajorPREvent] = []
-
-        if pr.ciStatus == .failure || pr.ciStatus == .unknown || pr.checkFailureCount > 0 {
-            events.append(.ciFailure)
-        }
-
-        if let changesRequestedCount = pr.changesRequestedCount, changesRequestedCount > 0 {
-            events.append(.changeRequests(changesRequestedCount))
-        }
-
-        if pr.approvalCount > 0 {
-            events.append(.approvals(pr.approvalCount))
-        }
-
-        return events
-    }
-
-    static func plans(
-        for prs: [PullRequest],
-        pinnedPRIdentifiers: Set<String>
-    ) -> [PinnedMajorPRNotificationPlan] {
-        prs.compactMap { pr in
-            guard pr.category == .authored || pr.category == .reviewRequest else { return nil }
-            guard pinnedPRIdentifiers.contains(pr.pinIdentifier) else { return nil }
-
-            let events = events(for: pr)
-            guard !events.isEmpty else { return nil }
-
-            return PinnedMajorPRNotificationPlan(
-                prID: pr.id,
-                events: events
-            )
-        }
-    }
-}
-
 @MainActor
 protocol PRManagerType: AnyObject {
     func enablePolling(_ enabled: Bool)
@@ -253,6 +171,9 @@ final class PRManager: PRManagerType, ObservableObject {
     @Published private(set) var readReviewThreadIDs: Set<String> = []
     @Published private(set) var updatingBranchPRIDs: Set<Int> = []
     @Published private(set) var loadingHoverDetailPRIDs: Set<Int> = []
+    /// Local PR activity monitor. Owned here so it starts with the app, not with the
+    /// popover, and so the UI can observe one object for PR and activity state.
+    let activityMonitor: PRActivityMonitor
     // Jira health is represented by jiraConnectionState.
 
     enum RefreshState {
@@ -274,7 +195,9 @@ final class PRManager: PRManagerType, ObservableObject {
         let reason: String
     }
 
-    private var apiClient: GitHubAPIClient
+    /// Internal so the comment-shortcut preparer (a separate file) can resolve
+    /// canonical PR context through the same authenticated client.
+    var apiClient: GitHubAPIClient
     private let jiraClient: JiraAPIClient
     private let notificationManager: NotificationManager
     private let oauthManager: GitHubOAuthManager
@@ -296,8 +219,6 @@ final class PRManager: PRManagerType, ObservableObject {
     private var lastMentionedRefreshSucceededAt: Date?
     private var lastAuthoredMentionReferenceCoverageAt: Date?
     private var lastAuthoredMentionReferenceCoverageUsername: String?
-    private var previousPRs: [Int: PullRequest] = [:]
-    private var previousPinnedMajorEvents: [Int: Set<PinnedMajorPREvent>] = [:]
     private var hoverDetailTasks: [Int: Task<Void, Never>] = [:]
     private var hoverDetailCache: [Int: HoverDetailCacheEntry] = [:]
     private let cmuxStatusProvider: CmuxPRStatusProviding?
@@ -334,14 +255,19 @@ final class PRManager: PRManagerType, ObservableObject {
         notificationManager: NotificationManager,
         oauthManager: GitHubOAuthManager,
         cmuxStatusProvider: CmuxPRStatusProviding? = nil,
-        loadKeychainSecrets: Bool = true
+        loadKeychainSecrets: Bool = true,
+        activityMonitor: PRActivityMonitor? = nil
     ) {
         self.apiClient = apiClient
         self.jiraClient = jiraClient
         self.notificationManager = notificationManager
         self.oauthManager = oauthManager
         self.cmuxStatusProvider = cmuxStatusProvider
-        self.configuration = Self.loadConfiguration()
+        let loadedConfiguration = Self.loadConfiguration()
+        self.configuration = loadedConfiguration
+        let monitor = activityMonitor ?? PRActivityMonitor(configuration: loadedConfiguration)
+        monitor.setAcquisition(apiClient)
+        self.activityMonitor = monitor
         apiClient.setUnauthorizedHandler { [weak oauthManager] rejectedToken in
             Task { @MainActor in
                 oauthManager?.handleRejectedToken(rejectedToken)
@@ -382,7 +308,32 @@ final class PRManager: PRManagerType, ObservableObject {
             tokenPresent: loadKeychainSecrets && !Keychain.loadJiraAPIToken().isEmpty
         )
 
+        monitor.setMutedProvider { [weak notificationManager] reference in
+            notificationManager?.isPRMuted(reference.identifier) ?? false
+        }
+
         setupBindings()
+    }
+
+    /// Starts activity monitoring immediately after launch, independent of the popover.
+    /// Digest channels are injected by the composition root (AppDelegate).
+    func startActivityMonitoring() {
+        guard configuration.monitorEnabled else { return }
+        activityMonitor.applyConfiguration(configuration)
+        activityMonitor.start()
+    }
+
+    func isPRMuted(reference: PullRequestReference) -> Bool {
+        notificationManager.isPRMuted(reference.identifier)
+    }
+
+    func setPRMuted(_ muted: Bool, reference: PullRequestReference) {
+        if muted {
+            notificationManager.mutePR(reference.identifier)
+        } else {
+            notificationManager.unmutePR(reference.identifier)
+        }
+        activityMonitor.refreshNow()
     }
     private static func computeJiraConnectionState(
         config: Configuration,
@@ -464,6 +415,7 @@ final class PRManager: PRManagerType, ObservableObject {
     private func handleNetworkChange(_ path: NWPath) {
         let wasExpensive = isOnExpensiveNetwork
         isOnExpensiveNetwork = path.isExpensive
+        updateActivityMonitorPause()
 
         guard configuration.pausePollingOnExpensiveNetwork else { return }
 
@@ -484,6 +436,7 @@ final class PRManager: PRManagerType, ObservableObject {
     private func handlePowerStateChange() {
         let wasLowPowerMode = isLowPowerMode
         isLowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
+        updateActivityMonitorPause()
 
         guard configuration.pausePollingInLowPowerMode else { return }
 
@@ -501,6 +454,14 @@ final class PRManager: PRManagerType, ObservableObject {
         }
     }
 
+    /// The activity monitor follows the same pause preferences as UI polling, so a low
+    /// power mode or expensive network never triggers background activity reads.
+    private func updateActivityMonitorPause() {
+        let pausedByLowPower = isLowPowerMode && configuration.pausePollingInLowPowerMode
+        let pausedByNetwork = isOnExpensiveNetwork && configuration.pausePollingOnExpensiveNetwork
+        activityMonitor.setPaused(pausedByLowPower || pausedByNetwork)
+    }
+
     private func handleAuthStateChange(_ authState: AuthState) {
         invalidateBackgroundRefreshWork(reason: "auth_state_change")
         apiClient.updateToken(authState.accessToken ?? "")
@@ -509,14 +470,16 @@ final class PRManager: PRManagerType, ObservableObject {
             cancelRecoveryRetry(resetFailureCount: true)
             enablePolling(true, refreshTrigger: .auth, refreshIfNeeded: false)
             requestRefresh(trigger: .auth)
+            startActivityMonitoring()
         } else {
             enablePolling(false)
             stopCIWatchTimer(reason: "sign_out")
             cancelRefreshWork(reason: "sign_out")
+            // Cancels in-flight monitor work without deleting the account's stored
+            // history: signing back in resumes from the same checkpoints.
+            activityMonitor.handleSignOut()
             prList = .empty
             directMentionTracking = [:]
-            previousPRs = [:]
-            previousPinnedMajorEvents = [:]
             hoverDetailTasks.values.forEach { $0.cancel() }
             hoverDetailTasks = [:]
             hoverDetailCache = [:]
@@ -548,7 +511,6 @@ final class PRManager: PRManagerType, ObservableObject {
         if var cached = PRCache.shared.load() {
             prepareCachedPRList(&cached)
             self.prList = cached
-            previousPRs = Self.previousPRState(from: cached.allPRs)
             updateCIWatchTimer()
             persistProjectedCaches()
         }
@@ -753,11 +715,6 @@ final class PRManager: PRManagerType, ObservableObject {
                     "After filters: \(prs.count) open PRs, \(mentionedPRs.count) mentioned PRs, \(directMentionPRs.count) direct mention PRs, \(mergedPRs.count) merged PRs"
                 )
 
-                if configuration.notificationsEnabled {
-                    checkForChangesAndNotify(newPRs: prs)
-                    notifyPinnedMajorEvents(newPRs: prs)
-                }
-
                 // Enrich PRs with Jira tickets from body (fetches only for uncached PRs)
                 do {
                     let jiraCache = try await apiClient.fetchJiraTickets(
@@ -812,7 +769,6 @@ final class PRManager: PRManagerType, ObservableObject {
                 )
                 self.prList = newPRList
                 self.applyReadState(to: &self.prList)
-                self.previousPRs = Self.previousPRState(from: self.prList.allPRs)
                 self.refreshState = .idle
                 self.consecutiveTransientFailures = 0
                 self.cancelRecoveryRetry(resetFailureCount: true)
@@ -847,7 +803,6 @@ final class PRManager: PRManagerType, ObservableObject {
                     self.prepareCachedPRList(&cached)
                     self.prList = cached
                     self.prList.error = error
-                    self.previousPRs = Self.previousPRState(from: cached.allPRs)
                 } else {
                     self.prList.isLoading = false
                     self.prList.error = error
@@ -1713,15 +1668,11 @@ final class PRManager: PRManagerType, ObservableObject {
     }
 
     func refreshSinglePRCI(for pr: PullRequest) async {
-        await refreshSinglePRCI(for: pr, notifyOnTerminalChange: false)
-    }
-
-    private func refreshSinglePRCI(for pr: PullRequest, notifyOnTerminalChange: Bool) async {
         do {
             let result = try await apiClient.fetchSinglePRCIStatus(
                 owner: pr.repositoryOwner, repo: pr.repositoryName, number: pr.number
             )
-            applyCIRefreshResult(result, for: pr, notifyOnTerminalChange: notifyOnTerminalChange)
+            applyCIRefreshResult(result, for: pr)
             updateCIWatchTimer()
             logger.info("Refreshed single PR CI status for #\(pr.number): \(result.ciStatus?.rawValue ?? "nil")")
         } catch {
@@ -1734,10 +1685,8 @@ final class PRManager: PRManagerType, ObservableObject {
 
     private func applyCIRefreshResult(
         _ result: GitHubAPIClient.SinglePRCIResult,
-        for pr: PullRequest,
-        notifyOnTerminalChange: Bool
+        for pr: PullRequest
     ) {
-        let previousPR = previousPRs[pr.id]
         var updatedPR: PullRequest?
 
         func apply(to prs: inout [PullRequest]) {
@@ -1774,24 +1723,8 @@ final class PRManager: PRManagerType, ObservableObject {
         }
 
 
-        guard let updatedPR else { return }
-        previousPRs[updatedPR.id] = updatedPR
+        guard updatedPR != nil else { return }
         persistProjectedCaches(forceTrackingWrite: trackingChanged)
-
-        guard notifyOnTerminalChange,
-              configuration.notificationsEnabled,
-              let newStatus = CIStatusNotificationPlanner.notificationStatus(
-                previous: previousPR,
-                current: updatedPR
-              ) else {
-            return
-        }
-
-        if newStatus == .failure && pinnedPRIdentifiers.contains(updatedPR.pinIdentifier) {
-            notifyPinnedMajorEventsIfNeeded(for: updatedPR)
-        } else {
-            notificationManager.notifyCIStatusChange(pr: updatedPR, newStatus: newStatus)
-        }
     }
 
     private func updateCIWatchTimer() {
@@ -1859,7 +1792,7 @@ final class PRManager: PRManagerType, ObservableObject {
 
             for pr in candidates {
                 guard !Task.isCancelled else { return }
-                await self.refreshSinglePRCI(for: pr, notifyOnTerminalChange: true)
+                await self.refreshSinglePRCI(for: pr)
             }
         }
     }
@@ -2164,6 +2097,8 @@ final class PRManager: PRManagerType, ObservableObject {
             config: config,
             tokenPresent: !Keychain.loadJiraAPIToken().isEmpty
         )
+        activityMonitor.applyConfiguration(config)
+        updateActivityMonitorPause()
         updateCIWatchTimer()
     }
 
@@ -2245,73 +2180,6 @@ final class PRManager: PRManagerType, ObservableObject {
         }
     }
 
-    private func checkForChangesAndNotify(newPRs: [PullRequest]) {
-        for pr in newPRs {
-            guard let previousPR = previousPRs[pr.id] else {
-                // This is a new PR we haven't seen before - skip notification
-                continue
-            }
-
-            // Check for unresolved comment changes
-            let previousUnresolved = previousPR.unresolvedCount
-            let currentUnresolved = pr.unresolvedCount
-
-            if currentUnresolved > previousUnresolved {
-                let newCount = currentUnresolved - previousUnresolved
-                notificationManager.notify(pr: pr, newUnresolvedCount: newCount)
-            }
-
-            // Check for CI status changes
-            if let newStatus = CIStatusNotificationPlanner.notificationStatus(
-                previous: previousPR,
-                current: pr
-            ) {
-                if newStatus == .failure && pinnedPRIdentifiers.contains(pr.pinIdentifier) {
-                    continue
-                }
-                notificationManager.notifyCIStatusChange(pr: pr, newStatus: newStatus)
-            }
-        }
-    }
-
-    private func notifyPinnedMajorEventsIfNeeded(for pr: PullRequest) {
-        guard pinnedPRIdentifiers.contains(pr.pinIdentifier) else { return }
-        guard pr.category == .authored || pr.category == .reviewRequest else { return }
-
-        previousPinnedMajorEvents[pr.id] = notifyPinnedMajorEventsDelta(for: pr)
-    }
-
-    /// Notifies for pinned major events newly observed since the last recorded state and
-    /// returns the current event set for the caller to persist. Suppresses notifications on
-    /// first sighting (cold start, newly pinned) — the caller records state and waits for the
-    /// next delta.
-    private func notifyPinnedMajorEventsDelta(for pr: PullRequest) -> Set<PinnedMajorPREvent> {
-        let events = PinnedMajorPRNotificationPlanner.events(for: pr)
-        if let previousSet = previousPinnedMajorEvents[pr.id] {
-            let newEvents = events.filter { !previousSet.contains($0) }
-            if !newEvents.isEmpty {
-                notificationManager.notifyPinnedMajorEvents(pr: pr, events: newEvents)
-            }
-        }
-        return Set(events)
-    }
-
-    private func notifyPinnedMajorEvents(newPRs: [PullRequest]) {
-        guard !pinnedPRIdentifiers.isEmpty else {
-            previousPinnedMajorEvents.removeAll(keepingCapacity: true)
-            return
-        }
-
-        var nextState: [Int: Set<PinnedMajorPREvent>] = [:]
-
-        for pr in newPRs where pinnedPRIdentifiers.contains(pr.pinIdentifier) {
-            guard pr.category == .authored || pr.category == .reviewRequest else { continue }
-            nextState[pr.id] = notifyPinnedMajorEventsDelta(for: pr)
-        }
-
-        previousPinnedMajorEvents = nextState
-    }
-
     // MARK: - Pin PR
 
     func pinPR(_ identifier: String) {
@@ -2358,10 +2226,6 @@ final class PRManager: PRManagerType, ObservableObject {
         if let data = try? JSONEncoder().encode(config) {
             UserDefaults.standard.set(data, forKey: configurationKey)
         }
-    }
-
-    private static func previousPRState(from prs: [PullRequest]) -> [Int: PullRequest] {
-        Dictionary(prs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
     private static func loadDate(forKey key: String) -> Date? {

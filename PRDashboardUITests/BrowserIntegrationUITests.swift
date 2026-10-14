@@ -250,63 +250,6 @@ final class BrowserIntegrationUITests: XCTestCase {
         )
     }
 
-    func testGitHubSurfaceV2DefaultsOnInConnectionDetails() throws {
-        let app = launch(with: "--ui-testing-browser-settings")
-        let settings = app.windows["Settings"]
-        XCTAssertTrue(settings.waitForExistence(timeout: 8), "Settings window should open in UI test mode")
-
-        let browserDetails = app.buttons["browser-integration-details-toggle"]
-        XCTAssertTrue(browserDetails.waitForExistence(timeout: 3))
-        browserDetails.click()
-        XCTAssertEqual(browserDetails.value as? String, "Expanded")
-
-        let v2Toggle = app.descendants(matching: .any)
-            .matching(identifier: "github-surface-v2-toggle")
-            .firstMatch
-        XCTAssertTrue(
-            v2Toggle.waitForExistence(timeout: 3),
-            "The GitHub-native surfaces rollback toggle must be present in connection details"
-        )
-        XCTAssertTrue(
-            (v2Toggle.value as? Int) == 1 || (v2Toggle.value as? String) == "1",
-            "GitHub-native surfaces must be enabled by default"
-        )
-    }
-
-    func testGitHubSurfaceV2RollbackToggleRestoresLegacySurfaces() throws {
-        let app = launch(with: "--ui-testing-browser-settings")
-        let settings = app.windows["Settings"]
-        XCTAssertTrue(settings.waitForExistence(timeout: 8), "Settings window should open in UI test mode")
-
-        let browserDetails = app.buttons["browser-integration-details-toggle"]
-        XCTAssertTrue(browserDetails.waitForExistence(timeout: 3))
-        browserDetails.click()
-
-        let v2Toggle = app.descendants(matching: .any)
-            .matching(identifier: "github-surface-v2-toggle")
-            .firstMatch
-        XCTAssertTrue(
-            v2Toggle.waitForExistence(timeout: 3),
-            "The GitHub-native surfaces rollback toggle must be present in connection details"
-        )
-        XCTAssertTrue(
-            (v2Toggle.value as? Int) == 1 || (v2Toggle.value as? String) == "1",
-            "GitHub-native surfaces must start enabled before rollback is exercised"
-        )
-
-        v2Toggle.click()
-        XCTAssertTrue(
-            (v2Toggle.value as? Int) == 0 || (v2Toggle.value as? String) == "0",
-            "Toggling rollback must disable GitHub-native surfaces"
-        )
-
-        v2Toggle.click()
-        XCTAssertTrue(
-            (v2Toggle.value as? Int) == 1 || (v2Toggle.value as? String) == "1",
-            "Re-enabling the toggle must restore GitHub-native surfaces"
-        )
-    }
-
     func testConnectionDetailsShowsMissingOrAmbiguousSurfaceHealth() throws {
         let app = launch(with: "--ui-testing-browser-settings")
         let settings = app.windows["Settings"]

@@ -232,6 +232,8 @@ final class PRListViewModel: ObservableObject {
     @Published private(set) var jiraConnectionState: JiraConnectionState = .notConfigured
     @Published var jiraPrompt: JiraPrompt?
     @Published private(set) var jiraCredentialRevision: Int = 0
+    /// Local activity monitor state: open action items, coverage, delivery receipts.
+    @Published private(set) var activity: PRActivitySnapshot = .idle
 
     private let prManager: PRManager
     private let oauthManager: GitHubOAuthManager
@@ -245,6 +247,7 @@ final class PRListViewModel: ObservableObject {
 
     var isJiraConfigured: Bool { jiraConnectionState == .configured }
     var openSettings: (() -> Void)?
+    var openActivity: (() -> Void)?
     init(
         prManager: PRManager,
         oauthManager: GitHubOAuthManager,
@@ -288,6 +291,13 @@ final class PRListViewModel: ObservableObject {
                     return
                 }
                 self.prList = visiblePRList
+            }
+            .store(in: &cancellables)
+
+        prManager.activityMonitor.$snapshot
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] snapshot in
+                self?.activity = snapshot
             }
             .store(in: &cancellables)
 
@@ -788,6 +798,76 @@ final class PRListViewModel: ObservableObject {
             guard let self else { return }
             self.pinChangeToken = UUID()
         }
+    }
+
+    // MARK: - Activity monitor
+
+    func showActivity() {
+        openActivity?()
+    }
+
+    /// The monitor itself, for views that subscribe to its published state directly.
+    var activityMonitorForView: PRActivityMonitor {
+        prManager.activityMonitor
+    }
+
+    func activityEvents(forPR prNodeID: String, limit: Int = 5) -> [PRActivityEvent] {
+        prManager.activityMonitor.events(forPR: prNodeID, limit: limit)
+    }
+
+    func refreshActivity() {
+        prManager.activityMonitor.refreshNow()
+    }
+
+    /// Items grouped per monitored PR, newest activity first.
+    var activityItemsByPR: [(pr: MonitoredPR, items: [PRActionItem])] {
+        let items = activity.actionItems.filter { $0.isActionable(now: Date()) }
+        let grouped = Dictionary(grouping: items, by: \.prNodeID)
+        return grouped
+            .compactMap { nodeID, items -> (MonitoredPR, [PRActionItem])? in
+                guard let pr = activity.pr(nodeID) else { return nil }
+                return (pr, items.sorted { $0.stateUpdatedAt > $1.stateUpdatedAt })
+            }
+            .sorted { lhs, rhs in
+                PullRequestReference.ordered(lhs.0.reference, rhs.0.reference, newestFirst: true)
+            }
+    }
+
+    var actionableActivityCount: Int {
+        let now = Date()
+        return activity.actionItems.filter { $0.isActionable(now: now) }.count
+    }
+
+    func markActivityHandled(_ item: PRActionItem) {
+        prManager.activityMonitor.markHandled(itemID: item.id)
+    }
+
+    func snoozeActivity(_ item: PRActionItem, until: Date) {
+        prManager.activityMonitor.snooze(itemID: item.id, until: until)
+    }
+
+    func reopenActivity(_ item: PRActionItem) {
+        prManager.activityMonitor.reopen(itemID: item.id)
+    }
+
+    func setActivityTracking(_ pr: MonitoredPR, tracked: Bool, eventKinds: Set<PRActivityEventKind>? = nil) {
+        if tracked {
+            prManager.activityMonitor.setExplicitTracking(prNodeID: pr.prNodeID, eventKinds: eventKinds)
+        } else {
+            prManager.activityMonitor.stopTracking(prNodeID: pr.prNodeID)
+        }
+    }
+
+    func isActivityMuted(_ pr: MonitoredPR) -> Bool {
+        prManager.isPRMuted(reference: pr.reference)
+    }
+
+    func setActivityMuted(_ muted: Bool, pr: MonitoredPR) {
+        prManager.setPRMuted(muted, reference: pr.reference)
+    }
+
+    func retryActivityDigest(_ batch: DigestBatch) {
+        prManager.activityMonitor.retryDigestBatch(id: batch.id)
     }
 
     func markReviewCommentsRead(_ pr: PullRequest) {

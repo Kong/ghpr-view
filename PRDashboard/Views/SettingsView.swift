@@ -33,6 +33,22 @@ struct SettingsView: View {
     @State private var newPATToken = ""
     @State private var showClearCacheConfirmation = false
     @State private var isDeveloperOptionsExpanded = false
+    @State private var monitorEnabled: Bool = true
+    @State private var notificationTargets: Set<DigestChannel> = [.macOS]
+    @State private var notificationEventKinds: Set<PRActivityEventKind> = []
+    @State private var notificationRepositories: String = ""
+    @State private var slackBotToken: String = ""
+    @State private var slackUserID: String = ""
+    @State private var slackState: SlackSetupState = .idle
+    @State private var slackTask: Task<Void, Never>?
+    @State private var commentShortcuts: [CommentShortcut] = []
+
+    private enum SlackSetupState: Equatable {
+        case idle
+        case verifying
+        case connected(String)
+        case failure(String)
+    }
 
     private let refreshIntervalOptions: [(LocalizedStringKey, Double)] = [
         ("1 minute", 60),
@@ -205,8 +221,100 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
+                Section("Activity Monitoring") {
+                    Toggle("Monitor PR activity in the background", isOn: $monitorEnabled)
+                    Text("Collects reviews, comments, thread state, review requests and CI for PRs you author, review or comment on. It only runs while PR Dashboard is running; nothing is stored outside this Mac.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Deliver digests to")
+                            .font(.caption)
+                        ForEach(DigestChannel.allCases, id: \.self) { channel in
+                            Toggle(digestChannelTitle(channel), isOn: digestChannelBinding(channel))
+                                .toggleStyle(.checkbox)
+                        }
+                    }
+
+                    Text("At most one digest every 30 minutes, and only when there is new work. Muting a PR or turning notifications off affects delivery only; activity keeps being collected.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    DisclosureGroup("Event categories") {
+                        ForEach(PRActivityEventKind.allCases, id: \.self) { kind in
+                            Toggle(PRActivityDigestFormatter.changeLabel(kind), isOn: eventKindBinding(kind))
+                                .toggleStyle(.checkbox)
+                        }
+                    }
+
+                    TextField(
+                        "Repositories (comma separated, empty = all)",
+                        text: $notificationRepositories,
+                        prompt: Text("owner/repo")
+                    )
+                    .textFieldStyle(.roundedBorder)
+                }
+
+                Section("Slack Direct Message") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Create a Slack app in your workspace with the chat:write, im:write and users:read scopes, install it, then paste its bot token and your own Slack user ID. ghpr only sends a direct message to you; it never posts to a channel.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        SecureField("Bot token", text: $slackBotToken, prompt: Text("xoxb-…"))
+                            .textFieldStyle(.roundedBorder)
+                            .autocorrectionDisabled(true)
+                        TextField("Your Slack user ID", text: $slackUserID, prompt: Text("U0123ABCDEF"))
+                            .textFieldStyle(.roundedBorder)
+                            .autocorrectionDisabled(true)
+
+                        HStack(spacing: 8) {
+                            Button {
+                                verifySlackConnection()
+                            } label: {
+                                Label("Verify and Connect", systemImage: "checkmark.seal")
+                            }
+                            .disabled(slackState == .verifying
+                                      || slackBotToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                      || slackUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                            Button {
+                                sendSlackTestMessage()
+                            } label: {
+                                Label("Send test DM", systemImage: "paperplane")
+                            }
+                            .disabled(slackState == .verifying || !viewModel.configuration.isSlackDeliveryConfigured)
+
+                            if slackState == .verifying {
+                                ProgressView().controlSize(.small)
+                            }
+                            Spacer()
+                        }
+
+                        slackStatusView
+
+                        if viewModel.configuration.isSlackDeliveryConfigured {
+                            HStack {
+                                Text("Connected workspace")
+                                    .font(.caption)
+                                Spacer()
+                                Text("\(viewModel.configuration.slackWorkspaceName) · \(viewModel.configuration.slackUserID)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                }
+
+                Section("Comment Shortcuts") {
+                    CommentShortcutSettingsSection(shortcuts: $commentShortcuts)
+                }
+
                 Section("Notifications") {
-                    Toggle("Enable notifications for unresolved comments and CI status changes", isOn: $notificationsEnabled)
+                    Toggle("Enable notifications", isOn: $notificationsEnabled)
+                    Text("Notifications are digests of activity that needs your attention, not one alert per event.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
 
 
@@ -686,6 +794,158 @@ struct SettingsView: View {
         httpProxyUsername = config.httpProxyUsername
         httpProxyPassword = Keychain.loadProxyPassword()
         jiraServerURL = config.jiraServerURL
+        monitorEnabled = config.monitorEnabled
+        notificationTargets = Set(config.digestChannels)
+        notificationEventKinds = config.notificationEventKindFilter
+        notificationRepositories = config.notificationRepositories.joined(separator: ", ")
+        slackBotToken = Keychain.loadSlackBotToken()
+        slackUserID = config.slackUserID
+        commentShortcuts = config.commentShortcuts
+        slackState = config.isSlackDeliveryConfigured
+            ? .connected(config.slackWorkspaceName)
+            : .idle
+    }
+
+    private func digestChannelTitle(_ channel: DigestChannel) -> String {
+        switch channel {
+        case .macOS: return String(localized: "macOS notification")
+        case .slack: return String(localized: "Slack direct message")
+        }
+    }
+
+    private func digestChannelBinding(_ channel: DigestChannel) -> Binding<Bool> {
+        Binding(
+            get: { notificationTargets.contains(channel) },
+            set: { isOn in
+                var updated = notificationTargets
+                if isOn {
+                    updated.insert(channel)
+                } else {
+                    // At least one delivery target has to stay selected, otherwise a
+                    // digest could never be delivered.
+                    guard updated.count > 1 else { return }
+                    updated.remove(channel)
+                }
+                notificationTargets = updated
+            }
+        )
+    }
+
+    private func eventKindBinding(_ kind: PRActivityEventKind) -> Binding<Bool> {
+        Binding(
+            get: {
+                let filter = notificationEventKinds
+                return filter.isEmpty || filter.contains(kind)
+            },
+            set: { isOn in
+                var filter = notificationEventKinds
+                if filter.isEmpty {
+                    // Empty means "all categories"; materialize it before removing one.
+                    filter = Set(PRActivityEventKind.allCases)
+                }
+                if isOn {
+                    filter.insert(kind)
+                } else {
+                    guard filter.count > 1 else { return }
+                    filter.remove(kind)
+                }
+                notificationEventKinds = filter == Set(PRActivityEventKind.allCases) ? [] : filter
+            }
+        )
+    }
+
+    private var slackStatusView: some View {
+        Group {
+            switch slackState {
+            case .idle:
+                EmptyView()
+            case .verifying:
+                Text("Checking the token and the DM target…")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            case .connected(let workspace):
+                Label("Connected to \(workspace)", systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundColor(.green)
+            case .failure(let message):
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func verifySlackConnection() {
+        let token = slackBotToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        let userID = slackUserID.trimmingCharacters(in: .whitespacesAndNewlines)
+        slackTask?.cancel()
+        slackState = .verifying
+        slackTask = Task { @MainActor in
+            let client = SlackNotificationClient(
+                proxy: GitHubAPIClient.resolvedProxyConfig(
+                    urlString: viewModel.configuration.httpProxyURL,
+                    username: viewModel.configuration.httpProxyUsername,
+                    password: Keychain.loadProxyPassword()
+                )
+            )
+            do {
+                let connection = try await client.verifyAndConnect(token: token, userID: userID)
+                Keychain.saveSlackBotToken(token)
+                var config = viewModel.configuration
+                config.slackEnabled = true
+                config.slackWorkspaceID = connection.workspaceID
+                config.slackWorkspaceName = connection.workspaceName
+                config.slackUserID = connection.userID
+                config.slackDMChannelID = connection.channelID
+                viewModel.configuration = config
+                slackState = .connected(connection.workspaceName)
+            } catch {
+                Keychain.deleteSlackBotToken()
+                var config = viewModel.configuration
+                config.slackEnabled = false
+                config.slackWorkspaceID = ""
+                config.slackWorkspaceName = ""
+                config.slackDMChannelID = ""
+                viewModel.configuration = config
+                slackState = .failure((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+            }
+        }
+    }
+
+    private func sendSlackTestMessage() {
+        let token = Keychain.loadSlackBotToken()
+        let configuration = viewModel.configuration
+        guard configuration.isSlackDeliveryConfigured, !token.isEmpty else {
+            slackState = .failure(String(localized: "Connect Slack before sending a test message."))
+            return
+        }
+        slackTask?.cancel()
+        slackState = .verifying
+        slackTask = Task { @MainActor in
+            let client = SlackNotificationClient(
+                proxy: GitHubAPIClient.resolvedProxyConfig(
+                    urlString: configuration.httpProxyURL,
+                    username: configuration.httpProxyUsername,
+                    password: Keychain.loadProxyPassword()
+                )
+            )
+            let connection = SlackConnection(
+                workspaceID: configuration.slackWorkspaceID,
+                workspaceName: configuration.slackWorkspaceName,
+                botUserID: "",
+                botName: "",
+                channelID: configuration.slackDMChannelID,
+                channelName: nil,
+                userID: configuration.slackUserID
+            )
+            do {
+                _ = try await client.sendTestMessage(token: token, connection: connection)
+                slackState = .connected(configuration.slackWorkspaceName)
+            } catch {
+                slackState = .failure((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+            }
+        }
     }
 
 
@@ -761,7 +1021,20 @@ struct SettingsView: View {
             httpProxyUsername: trimmedProxyUsername,
             jiraServerURL: existingJira.jiraServerURL,
             jiraEmail: existingJira.jiraEmail,
-            jiraRefreshInterval: existingJira.jiraRefreshInterval
+            jiraRefreshInterval: existingJira.jiraRefreshInterval,
+            monitorEnabled: monitorEnabled,
+            notificationTargets: notificationTargets.map(\.rawValue).sorted(),
+            notificationEventKinds: notificationEventKinds.map(\.rawValue).sorted(),
+            notificationRepositories: notificationRepositories
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty },
+            slackEnabled: existingJira.slackEnabled,
+            slackWorkspaceName: existingJira.slackWorkspaceName,
+            slackWorkspaceID: existingJira.slackWorkspaceID,
+            slackUserID: existingJira.slackUserID,
+            slackDMChannelID: existingJira.slackDMChannelID,
+            commentShortcuts: commentShortcuts
         )
 
         if trimmedProxyURL.isEmpty {

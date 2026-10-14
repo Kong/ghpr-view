@@ -19,6 +19,7 @@ final class Keychain {
     private let authStateKey = "github_auth_state"
     private let proxyPasswordKey = "http_proxy_password"
     private let jiraAPITokenKey = "jira_api_token"
+    private let slackBotTokenKey = "slack_bot_token"
 
     // Legacy keys for migration
     private let legacyTokenKey = "github_token"
@@ -95,6 +96,26 @@ final class Keychain {
 
     static func deleteJiraAPIToken() {
         shared.deleteJiraAPITokenValue()
+    }
+
+    // MARK: - Slack Bot Token
+
+    static func saveSlackBotToken(_ token: String) {
+        shared.saveSlackBotTokenValue(token)
+    }
+
+    static func loadSlackBotToken() -> String {
+        shared.loadSlackBotTokenValue()
+    }
+
+    /// Drops only the process-local cache for a token the server rejected, so the next
+    /// read goes back to the credential store instead of reusing a known-bad value.
+    static func invalidateSlackBotTokenCache(rejectedToken: String) {
+        shared.invalidateCachedValue(key: shared.slackBotTokenKey, ifMatching: rejectedToken)
+    }
+
+    static func deleteSlackBotToken() {
+        shared.deleteSlackBotTokenValue()
     }
 
     // MARK: - Private value operations
@@ -183,6 +204,23 @@ final class Keychain {
 
     private func deleteJiraAPITokenValue() {
         deleteCachedValue(key: jiraAPITokenKey)
+    }
+
+    private func saveSlackBotTokenValue(_ token: String) {
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            deleteCachedValue(key: slackBotTokenKey)
+            return
+        }
+        try? saveCachedValue(trimmed, key: slackBotTokenKey)
+    }
+
+    private func loadSlackBotTokenValue() -> String {
+        (try? loadCachedValue(key: slackBotTokenKey)) ?? ""
+    }
+
+    private func deleteSlackBotTokenValue() {
+        deleteCachedValue(key: slackBotTokenKey)
     }
 
     private func invalidateCachedValue(key: String, ifMatching value: String) {
@@ -473,6 +511,22 @@ final class Keychain {
 
     func deleteJiraAPITokenForTesting() {
         deleteJiraAPITokenValue()
+    }
+
+    func saveSlackBotTokenForTesting(_ token: String) {
+        saveSlackBotTokenValue(token)
+    }
+
+    func loadSlackBotTokenForTesting() -> String {
+        loadSlackBotTokenValue()
+    }
+
+    func invalidateSlackBotTokenCacheForTesting(rejectedToken: String) {
+        invalidateCachedValue(key: slackBotTokenKey, ifMatching: rejectedToken)
+    }
+
+    func deleteSlackBotTokenForTesting() {
+        deleteSlackBotTokenValue()
     }
     #endif
 }

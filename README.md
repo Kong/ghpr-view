@@ -37,7 +37,9 @@ brew install xiaocang/tap/prdashboard
 - **Approval Count** - Badge shows approval count on PR rows
 - **Review Status** - Shows your review status (approved, changes requested, etc.) on review-requested PRs
 - **Jira Integration** - Enrich detected Jira tickets with titles, statuses, and labels
-- **Notifications** - Desktop alerts for new unresolved comments, CI status changes, and important changes on pinned PRs
+- **Activity Monitoring** - Background monitoring of PRs you author, review or comment on: reviews, review comments, thread state, review requests, and CI, with per-PR "why this concerns me" reasons and a native **Activity** window
+- **Digest Notifications** - At most one digest every 30 minutes, delivered to macOS notifications, a Slack direct message, or both, and only when something actually needs you
+- **Comment Shortcuts** - Your own comment templates with `{{repository}}`, `{{pr_number}}`, `{{head_sha}}` and related variables, prepared against canonical PR context
 - **Rate Limit Display** - Shows GitHub API rate limit in footer
 - **Local Integrations** - Query the running app over a local Unix socket with `ghpr` (read-only) or the bundled MCP server (read-only tools plus `import_review` to persist an externally produced code review)
 - **GitHub Browser Integration** - Official `ghpr for GitHub` userscript adds CI analysis, Skill actions, tags, and local detail views to GitHub PR and Actions pages
@@ -55,7 +57,7 @@ brew install xiaocang/tap/prdashboard
 
 ### Option 2: Personal Access Token (PAT)
 
-1. Create a [Personal Access Token](https://github.com/settings/tokens) with `["repo", "read:user", "workflow"]` scope
+1. Create a [Personal Access Token](https://github.com/settings/tokens) with `repo`, `read:user`, `workflow`, and `read:org` scopes
 2. Click the menu bar icon to open the dashboard
 3. Click "Sign in with GitHub", then "Use Personal Access Token"
 4. Paste your token and click "Sign In"
@@ -66,6 +68,34 @@ brew install xiaocang/tap/prdashboard
 - **Right-click** menu bar icon - Show context menu (version info, quit)
 - **Cmd+R** - Refresh PR list
 - **Settings** (gear icon) - Configure the account, refresh behavior, filters, integrations, notifications, and updates
+
+### Activity Monitoring and Digests
+
+PR Dashboard remembers which PRs you author, are asked to review, have reviewed, or have commented on, and keeps observing them locally while the app is running. Observation starts with the app, not with the popover, and runs no more often than every five minutes (or your Refresh Interval when that is longer).
+
+- The **Activity** button in the dashboard header (tray icon) opens the activity window. It groups what needs your attention per PR, shows why each item concerns you, links to the evidence, and offers **Handled**, **Snooze**, **Mute notifications**, and **Track**/**Stop tracking**. Muting or snoozing affects delivery only: collection and the existing unread counts are unchanged.
+- The first complete observation of each PR is recorded silently as a baseline, so an existing backlog is never replayed as new notifications. After that, each real change (new review, review comment, thread reply, resolved or reopened thread, review request, new revision, new failing check on the current revision) becomes an event with a stable identity; re-reading an unchanged PR creates nothing.
+- A digest is built at most once every 30 minutes, only when at least one item is newly actionable and not muted or filtered out, and at most five PRs are listed per digest (the remainder stay in the Activity window). Delivery goes to the targets you chose in Settings; nothing is sent while there is nothing new.
+- Delivery receipts are kept per target: a delivered channel is marked delivered, a failure stays retryable from the Activity window, and a request whose outcome is unknown (timeout or a crash while sending) is marked unknown and is never retried automatically, because Slack offers no verified cross-crash idempotency.
+- Monitoring is local: it only runs while this Mac, its network, and PR Dashboard are available. Activity that appears and disappears while the app is offline cannot be reconstructed. The app never writes to GitHub on your behalf — reviewing, commenting, re-requesting review and rerunning CI stay manual actions.
+- Monitored history lives in `~/Library/Application Support/ghpr/activity/v1/<account>.json`, one file per GitHub account (endpoint plus viewer node ID). Signing out or switching accounts never deletes another account's history. If a history file is damaged it is kept untouched and the error is shown in the Activity window instead of silently restarting.
+
+### Slack Direct Message
+
+Digests can be delivered to your own Slack DM through a Slack app you create and install in your workspace:
+
+1. Create a Slack app in your workspace and add the `chat:write`, `im:write` and `users:read` scopes. No event subscriptions, no bot channels, no hosted OAuth are needed.
+2. Install the app to the workspace and copy its bot token (`xoxb-…`).
+3. In **Settings → Slack Direct Message**, paste the token and your own Slack user ID (for example `U0123ABCDEF`), then click **Verify and Connect**. ghpr checks the token and workspace with `auth.test`, confirms your user with `users.info`, and opens the DM with `conversations.open`.
+4. Use **Send test DM** for a manual connection test; it is clearly labelled and is not a PR digest.
+
+The token is stored in the macOS credential store (Keychain in Release builds), never in configuration, saved history, logs, browser snapshots or exports. Digests only contain short summaries and links: never full diffs, whole reviews, logs or secrets, and GitHub text is escaped so mentions and links cannot ping or unfurl.
+
+### Comment Shortcuts
+
+Comment shortcuts are your own templates, empty by default. Add them in **Settings → Comment Shortcuts**, for example `Please add a test for {{pr_path}}` style text using the supported variables `{{repository}}`, `{{pr_number}}`, `{{pr_url}}`, `{{head_sha}}`, `{{diff_url}}`, and — only when you are replying to a comment — `{{comment_url}}` and `{{comment_body}}`. Each shortcut can be limited to a context (PR comment, conversation reply, review comment reply), to specific repositories, and can be enabled or disabled.
+
+When the userscript is installed, the compact ghpr menu lists the shortcuts that apply to the current PR and comment. Selecting one asks the app to prepare a draft from **canonical** PR data fetched with your own account (the page's repository, comment body and revision are treated as hints only): a revision change, a comment that belongs to another PR, a missing context or a missing permission aborts the preparation with an error instead of inserting something wrong. The draft is plain text that you review and submit yourself.
 
 ### Local CLI
 
@@ -95,12 +125,10 @@ Available `prs` sections are `authored`, `review`, `mentioned`, `direct-mentions
 
 1. Open **Settings → Browser Integration** and confirm that the loopback Browser Bridge is running.
 2. Click **Install Userscript** and install `ghpr for GitHub` in Tampermonkey.
-3. Open a GitHub PR or an Actions job. With **Use GitHub-native surfaces** enabled, `ghpr` renders agent Reviewers and expandable review details in Conversation's right sidebar, CI Annotations in the main timeline, an independent verdict and CI Insight for each Checks job, the same CI Insight on the matching Actions job, and line-level findings in Files changed. The former Header menu and standalone card remain available only through the rollback toggle.
+3. Open a GitHub PR or an Actions job and click the compact `ghpr` entry. Nothing is mounted before that click: the menu shows connection state (Connect/Update/Retry), **Open in ghpr**, the manual actions available on that page, comment shortcuts, and **Review results**, which stays collapsed until you expand it. GitHub's own reviewer, check and comment UI is never replaced.
 4. If the userscript is not paired, choose **Connect ghpr** from the Tampermonkey userscript menu, then review the requested scopes in the native ghpr window. Read-only scopes are selected by default; running Skills, cancelling runs, dismissing findings, writing local ghpr tags, and reading artifacts require explicit approval. Local ghpr tags are stored only by ghpr and never change GitHub labels.
 
-In Conversation, request reviews from the agent rows rather than a second Review PR card. Review details contains finding navigation, copying, and reviewed-revision links; Annotations contains failed-check navigation and CI actions. Other PR Skills are available in the sidebar's **Run Skill** menu, and active review logs appear below Reviewers. Connect and Retry recovery controls remain available when the local app is disconnected or unavailable.
-
-The Checks page always shows a CI summary and failed-check navigation, even before any explanation exists. **Find failed checks** expands native check suites without running a Skill; links from **Failed checks** start that discovery automatically. The summary distinguishes reported failures from jobs currently available for navigation.
+Review results only render when expanded, keep their expanded state while you stay on the same PR, and reset when you move to another PR. Inside the expanded panel, findings keep exact-revision matching, show staleness and dismissal, and `ghpr_finding` links scroll and highlight the target line; code annotations appear only when you ask for them. Polling and MCP imports never expand the menu or the results, never start AI work, and never overwrite text you are typing. Connect and Retry recovery controls remain available when the local app is disconnected or unavailable.
 
 For cmux's built-in browser, run the installer from this checkout instead of using Tampermonkey:
 
@@ -116,9 +144,9 @@ Without `--surface`, open pages are left untouched; reload or navigate a GitHub 
 
 The bridge listens only on `127.0.0.1` within discovery ports `48120...48129`. Browser clients use individual revocable bearer capabilities—never cookies—and cannot obtain the GitHub token, local workspace paths, agent credentials, raw repository access, or shell execution. Third-party userscripts register declarative UI contributions through the bridge; the official userscript remains the only GitHub-page UI host.
 
-Bridge discovery reports the version of the official userscript currently served by the app. When that version is newer than the installed script, the v2 Conversation Review Summary shows **Update ghpr userscript**; the rollback card shows its existing **Update** notice. Both open the local Tampermonkey install route.
+Bridge discovery reports the version of the official userscript currently served by the app. When that version is newer than the installed script, the compact ghpr menu offers **Update ghpr userscript**, which opens the local Tampermonkey install route.
 
-Installed Skill packages can use the strict Browser Contract v2 allowlist to bind structured results to GitHub-native surfaces; arbitrary selectors, scripts, HTML, iframes, and external URLs are rejected. Existing v1 `browser/contributions.yaml` contracts remain supported by the rollback UI. Active runs show on the exact subject surface. Raw run logs and artifacts open in the local diagnostics UI and remain capability-scoped; raw Agent output and credentials are never exposed.
+Installed Skill packages can use the strict Browser Contract v2 allowlist to bind structured results to GitHub pages; arbitrary selectors, scripts, HTML, iframes, and external URLs are rejected. Active runs show on the exact subject surface. Raw run logs and artifacts open in the local diagnostics UI and remain capability-scoped; raw Agent output and credentials are never exposed.
 
 Use **Open Browser Test Page** to verify bridge isolation and contract support. **Open Skill Workbench** provides Create, Migrate, and Enhance flows with fixture and permission gates. The equivalent contract-driven CLI workflow is:
 
@@ -155,7 +183,10 @@ A GitHub PR page never submits the same Skill twice: while a run for that Skill 
 - **Repositories** - Filter to specific repos, case-insensitive (e.g., `owner/repo` or `owner/` for all repos)
 - **Show Drafts** - Include/exclude draft PRs
 - **CI Status Exclude Filter** - Exclude status checks by keyword (e.g., "review")
-- **Notifications** - Enable/disable desktop notifications for unresolved comments and CI status changes
+- **Activity Monitoring** - Monitor PR activity in the background, choose which event categories and repositories feed digests, and pick the delivery targets (macOS notification, Slack direct message, or both)
+- **Slack Direct Message** - Paste a workspace-approved Slack app bot token and your own Slack user ID, verify the connection, and send a manual test DM
+- **Comment Shortcuts** - Add, edit, reorder or remove your own comment templates and preview the rendered draft
+- **Notifications** - Master switch for digest delivery
 - **Pause in Low Power Mode** - Pause background refresh when macOS Low Power Mode is active
 - **Pause on Cellular/Hotspot** - Pause background refresh on expensive networks (iPhone hotspot, etc.)
 - **Launch at Login** - Start PRDashboard automatically when you log in
