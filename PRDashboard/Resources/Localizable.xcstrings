@@ -33,6 +33,36 @@
         }
       }
     },
+    "No longer applies.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已不再适用。"
+          }
+        }
+      }
+    },
+    "no longer applies": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已不再适用"
+          }
+        }
+      }
+    },
+    "%lld other changes on this reminder": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这条提醒里还有 %1$lld 项变化"
+          }
+        }
+      }
+    },
     "%lld new unresolved comments on \"%@\"": {
       "localizations": {
         "en": {
@@ -416,6 +446,26 @@
         }
       }
     },
+    "Advanced": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "高级"
+          }
+        }
+      }
+    },
+    "Alerts": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "提醒"
+          }
+        }
+      }
+    },
     "After creating the token, click \"Configure SSO\" on GitHub to authorize it for your organization.": {
       "localizations": {
         "zh-Hans": {
@@ -472,6 +522,376 @@
           "stringUnit": {
             "state": "translated",
             "value": "关闭提示"
+          }
+        }
+      }
+    },
+    "Dismiss reminder": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "收起提醒"
+          }
+        }
+      }
+    },
+    "Dismiss reminder only hides that row here. It does not reply, resolve, rerun CI, or change GitHub.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "收起提醒只在这里隐藏这一行，不会回复、解决评论、重跑 CI，也不会改 GitHub。"
+          }
+        }
+      }
+    },
+    "Suggested: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "建议：%1$@"
+          }
+        }
+      }
+    },
+    "A suggestion only. ghpr does not do this on GitHub.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这只是建议。ghpr 不会在 GitHub 上执行。"
+          }
+        }
+      }
+    },
+    "Opens this on GitHub. ghpr does not reply, resolve, or rerun anything.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在 GitHub 打开。ghpr 不会代为回复、解决或重跑。"
+          }
+        }
+      }
+    },
+    "More links": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "更多链接"
+          }
+        }
+      }
+    },
+    "Hide tab names": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "隐藏分页名称"
+          }
+        }
+      }
+    },
+    "Hides this reminder in ghpr only. It does not reply, resolve a thread, rerun CI, or change GitHub. New activity shows it again.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "只在 ghpr 里隐藏这条提醒，不会回复、解决评论、重跑 CI，也不会改 GitHub。有新动态会再出现。"
+          }
+        }
+      }
+    },
+    "Hides this reminder until then. New activity shows it again immediately.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在此之前隐藏这条提醒。有新动态会立刻再出现。"
+          }
+        }
+      }
+    },
+    "Open review": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打开评审"
+          }
+        }
+      }
+    },
+    "Open failing check": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打开失败的检查"
+          }
+        }
+      }
+    },
+    "Open mention": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打开提及"
+          }
+        }
+      }
+    },
+    "Open to review again": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打开并再次评审"
+          }
+        }
+      }
+    },
+    "Open thread": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打开评论线程"
+          }
+        }
+      }
+    },
+    "Open CI": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打开 CI"
+          }
+        }
+      }
+    },
+    "Open review request": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打开评审请求"
+          }
+        }
+      }
+    },
+    "Open on GitHub": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在 GitHub 打开"
+          }
+        }
+      }
+    },
+    "respond to review": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "回复评审"
+          }
+        }
+      }
+    },
+    "fix CI": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "修复 CI"
+          }
+        }
+      }
+    },
+    "review again": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "再次评审"
+          }
+        }
+      }
+    },
+    "close the thread": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "关闭评论线程"
+          }
+        }
+      }
+    },
+    "confirm CI": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "确认 CI"
+          }
+        }
+      }
+    },
+    "Snooze": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "稍后"
+          }
+        }
+      }
+    },
+    "1 hour": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 小时"
+          }
+        }
+      }
+    },
+    "Tomorrow": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "明天"
+          }
+        }
+      }
+    },
+    "Next week": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下周"
+          }
+        }
+      }
+    },
+    "reply": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "回复"
+          }
+        }
+      }
+    },
+    "review": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "去评审"
+          }
+        }
+      }
+    },
+    "review feedback on your PR": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你的 PR 收到评审意见"
+          }
+        }
+      }
+    },
+    "CI failure on your PR": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你的 PR 上 CI 失败"
+          }
+        }
+      }
+    },
+    "you were mentioned": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "有人提到了你"
+          }
+        }
+      }
+    },
+    "your approval was dismissed": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你的 approval 被撤销"
+          }
+        }
+      }
+    },
+    "reply in your thread": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你的评论线程有回复"
+          }
+        }
+      }
+    },
+    "your thread was resolved": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你的评论线程被解决"
+          }
+        }
+      }
+    },
+    "new revision after your review": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你评审后又有新提交"
+          }
+        }
+      }
+    },
+    "you were asked to review": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "有人请你评审"
+          }
+        }
+      }
+    },
+    "tracked by you": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你正在跟踪"
           }
         }
       }
@@ -1044,6 +1464,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "若组织启用了 SAML SSO，请在创建后为该令牌授权。"
+          }
+        }
+      }
+    },
+    "Integrations": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "集成"
+          }
+        }
+      }
+    },
+    "Settings tabs": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "设置分页"
           }
         }
       }
@@ -1686,6 +2126,16 @@
         }
       }
     },
+    "Show tab names": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "显示分页名称"
+          }
+        }
+      }
+    },
     "Showing data updated %@.": {
       "localizations": {
         "zh-Hans": {
@@ -1965,6 +2415,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "正在更新..."
+          }
+        }
+      }
+    },
+    "Updates": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "更新"
           }
         }
       }

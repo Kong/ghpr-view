@@ -98,6 +98,14 @@ final class NotificationManager: NSObject, ObservableObject {
         )
     }
 
+    /// Drops a digest that was already shown. A recovered CI failure must not keep
+    /// sitting in Notification Center as if it still needs attention.
+    func withdrawDigest(id: String) {
+        let identifier = "digest-\(id)"
+        notificationCenter?.removeDeliveredNotifications(withIdentifiers: [identifier])
+        notificationCenter?.removePendingNotificationRequests(withIdentifiers: [identifier])
+    }
+
     private func add(_ request: UNNotificationRequest, to center: UNUserNotificationCenter) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             center.add(request) { error in
@@ -237,5 +245,9 @@ final class MacOSActivityDigestChannel: PRActivityDigestChannel {
 
     func deliver(_ batch: DigestBatch) async throws -> DigestReceipt {
         try await notificationManager.deliverDigest(batch)
+    }
+
+    func withdrawDeliveredDigest(id: String) {
+        notificationManager.withdrawDigest(id: id)
     }
 }

@@ -699,6 +699,8 @@ enum DigestDeliveryStatus: String, Codable {
     case failed
     /// Request may or may not have been received (timeout / crash during send).
     case unknown
+    /// The events no longer need attention, so this delivery must not be sent or retried.
+    case superseded
 }
 
 struct DigestReceipt: Codable, Equatable {

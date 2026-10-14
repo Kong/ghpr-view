@@ -511,6 +511,244 @@ final class PRActivityMonitorTests: XCTestCase {
         XCTAssertFalse(state?.actionItems.first?.isActionable(now: now) ?? true)
     }
 
+    func testRecoveredCIFailureIsNotSentOnTheNextWindow() async {
+        let channel = FakeDigestChannel(isAvailable: true, binding: [:], failure: SlackClientError.rateLimited(retryAfter: 30))
+        let (monitor, fake) = makeMonitor(configuration: .default, channels: [channel])
+        discoveredPR(fake)
+        setObservation(fake, [
+            observation(source: .header, payload: header()),
+            observation(source: .ci, payload: MonitorSourcePayload(ci: MonitorCISnapshot(headOID: "sha1", checks: [
+                check(id: "job-1", headOID: "sha1", conclusion: "SUCCESS")
+            ]))),
+        ])
+        await monitor.runPassForTesting()
+        setObservation(fake, [
+            observation(source: .header, payload: header()),
+            observation(source: .ci, payload: MonitorSourcePayload(ci: MonitorCISnapshot(headOID: "sha1", checks: [
+                check(id: "job-1", headOID: "sha1", conclusion: "FAILURE")
+            ]))),
+        ])
+        await monitor.runPassForTesting()
+
+        monitor.runDigestForTesting()
+        await waitForDelivery(channel)
+        XCTAssertEqual(monitor.currentStateForTesting()?.digest.batches.first?.deliveries.first?.status, .failed)
+
+        channel.failure = nil
+        setObservation(fake, [
+            observation(source: .header, payload: header()),
+            observation(source: .ci, payload: MonitorSourcePayload(ci: MonitorCISnapshot(headOID: "sha1", checks: [
+                check(id: "job-1", headOID: "sha1", conclusion: "SUCCESS")
+            ]))),
+        ])
+        await monitor.runPassForTesting()
+        now = now.addingTimeInterval(PRActivityMonitor.digestWindow + 60)
+        let attempts = channel.attemptCount
+        monitor.runDigestForTesting()
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertEqual(channel.attemptCount, attempts, "A CI failure that later passed must not be sent")
+        XCTAssertTrue(channel.deliveredBatches.isEmpty)
+        XCTAssertEqual(monitor.currentStateForTesting()?.actionItems.first?.state, .recovered)
+        XCTAssertEqual(
+            monitor.currentStateForTesting()?.digest.batches.first?.deliveries.first?.status,
+            .superseded
+        )
+    }
+
+    func testSuccessfulRerunInvalidatesTheEarlierFailure() async {
+        let (monitor, fake) = makeMonitor()
+        discoveredPR(fake)
+        setObservation(fake, [
+            observation(source: .header, payload: header()),
+            observation(source: .ci, payload: MonitorSourcePayload(ci: MonitorCISnapshot(headOID: "sha1", checks: []))),
+        ])
+        await monitor.runPassForTesting()
+        setObservation(fake, [
+            observation(source: .header, payload: header()),
+            observation(source: .ci, payload: MonitorSourcePayload(ci: MonitorCISnapshot(headOID: "sha1", checks: [
+                check(id: "job-1", headOID: "sha1", conclusion: "FAILURE")
+            ]))),
+        ])
+        await monitor.runPassForTesting()
+        XCTAssertEqual(monitor.currentStateForTesting()?.actionItems.first?.reasons, [.authoredPRCIFailure])
+
+        setObservation(fake, [
+            observation(source: .header, payload: header()),
+            observation(source: .ci, payload: MonitorSourcePayload(ci: MonitorCISnapshot(headOID: "sha1", checks: [
+                check(id: "job-2", headOID: "sha1", conclusion: "SUCCESS")
+            ]))),
+        ])
+        await monitor.runPassForTesting()
+
+        let item = monitor.currentStateForTesting()?.actionItems.first
+        XCTAssertEqual(item?.state, .recovered, "A later successful attempt invalidates the earlier failure")
+        XCTAssertFalse(item?.isActionable(now: now) ?? true)
+    }
+
+    func testOneJobPassingDoesNotInvalidateADifferentFailingJob() async {
+        let (monitor, fake) = makeMonitor()
+        discoveredPR(fake)
+        setObservation(fake, [
+            observation(source: .header, payload: header()),
+            observation(source: .ci, payload: MonitorSourcePayload(ci: MonitorCISnapshot(headOID: "sha1", checks: []))),
+        ])
+        await monitor.runPassForTesting()
+        setObservation(fake, [
+            observation(source: .header, payload: header()),
+            observation(source: .ci, payload: MonitorSourcePayload(ci: MonitorCISnapshot(headOID: "sha1", checks: [
+                check(id: "job-build", headOID: "sha1", conclusion: "FAILURE", name: "build", runID: "run-build"),
+                check(id: "job-lint", headOID: "sha1", conclusion: "FAILURE", name: "lint", runID: "run-lint"),
+            ]))),
+        ])
+        await monitor.runPassForTesting()
+
+        setObservation(fake, [
+            observation(source: .header, payload: header()),
+            observation(source: .ci, payload: MonitorSourcePayload(ci: MonitorCISnapshot(headOID: "sha1", checks: [
+                check(id: "job-build", headOID: "sha1", conclusion: "SUCCESS", name: "build", runID: "run-build"),
+                check(id: "job-lint", headOID: "sha1", conclusion: "FAILURE", name: "lint", runID: "run-lint"),
+            ]))),
+        ])
+        await monitor.runPassForTesting()
+
+        let item = monitor.currentStateForTesting()?.actionItems.first
+        XCTAssertEqual(item?.state, .open, "A different job that is still failing stays a reminder")
+        XCTAssertEqual(item?.pendingEventIDs.count, 1)
+    }
+
+    func testUnwatchedRepositoryIsNotMonitoredOrNotified() async {
+        var configuration = Configuration.default
+        configuration.repositories = ["owner/repo", "kong-konnect/"]
+        let channel = deliveredChannel()
+        let (monitor, fake) = makeMonitor(configuration: configuration, channels: [channel])
+        fake.discoveryOutcome = MonitorDiscoveryOutcome(
+            discovered: [
+                MonitorDiscoveryOutcome.DiscoveredReference(
+                    prNodeID: "PR_42",
+                    reference: reference,
+                    title: "Add feature",
+                    url: URL(string: "https://github.com/owner/repo/pull/42"),
+                    lifecycle: .open,
+                    headOID: "sha1",
+                    updatedAt: now,
+                    origins: [.authored]
+                ),
+                MonitorDiscoveryOutcome.DiscoveredReference(
+                    prNodeID: "PR_WIN",
+                    reference: PullRequestReference(owner: "xiaocang", repo: "easydict_win32", number: 234),
+                    title: "Side project",
+                    url: URL(string: "https://github.com/xiaocang/easydict_win32/pull/234"),
+                    lifecycle: .open,
+                    headOID: "sha1",
+                    updatedAt: now,
+                    origins: [.authored]
+                )
+            ],
+            coverage: MonitorDiscoveryCoverage(queries: [], attemptedAt: now)
+        )
+        setObservation(fake, [observation(source: .header, payload: header())])
+        await monitor.runPassForTesting()
+
+        let repos = Set(monitor.currentStateForTesting()?.monitoredPRs.map(\.reference.repoFullName) ?? [])
+        XCTAssertEqual(repos, ["owner/repo"], "An authored PR outside the PR list filter is not activity")
+        XCTAssertFalse(configuration.isRepositoryNotified("xiaocang/easydict_win32"))
+        XCTAssertTrue(configuration.isRepositoryNotified("kong-konnect/khcp"))
+        XCTAssertTrue(configuration.collectsActivity(for: "xiaocang/easydict_win32", explicitlyTracked: true))
+    }
+
+    func testNarrowingRepositoryFilterCancelsAnUnsentDigestWithoutAnotherPass() async {
+        let channel = deliveredChannel()
+        let (monitor, _) = makeMonitor(configuration: .default, channels: [channel])
+        let side = PullRequestReference(owner: "xiaocang", repo: "easydict_win32", number: 234)
+        let event = PRActivityEvent(
+            id: "event-side",
+            identityKey: "review:R_side:COMMENTED",
+            kind: .reviewSubmitted,
+            prNodeID: "PR_WIN",
+            reference: side,
+            actor: "codex",
+            actorNodeID: "U_CODEX",
+            isFromViewer: false,
+            subjectIsViewer: false,
+            isBotActor: true,
+            containsDirectMention: false,
+            occurredAt: now,
+            url: nil,
+            revision: PRActivityRevision(headOID: "sha1", reviewID: "R_side"),
+            sourceChangeSequence: 1
+        )
+        var state = PRActivityAccountState(
+            account: MonitorAccountKey(endpoint: "", viewerNodeID: viewer.nodeID, login: viewer.login),
+            updatedAt: now
+        )
+        state.events = [event]
+        state.monitoredPRs = [
+            MonitoredPR(
+                prNodeID: "PR_WIN",
+                reference: side,
+                origins: [.authored],
+                lifecycle: .open,
+                title: "Side project",
+                discoveredAt: now,
+                lastObservedAt: now
+            )
+        ]
+        state.actionItems = [
+            PRActionItem(
+                id: "item-side",
+                prNodeID: "PR_WIN",
+                reference: side,
+                reasons: [.authoredPRReviewFeedback],
+                actionKinds: [.reviewFeedback],
+                eventIDs: [event.id],
+                revision: event.revision,
+                state: .open,
+                createdAt: now,
+                stateUpdatedAt: now,
+                snoozedUntil: nil,
+                coveredEventIDs: [],
+                evidenceURLs: []
+            )
+        ]
+        state.digest.batches = [
+            DigestBatch(
+                id: "digest-side",
+                createdAt: now,
+                entries: [],
+                coveredEventIDs: [event.id],
+                coveredActionItemIDs: ["item-side"],
+                omittedEntryCount: 0,
+                deliveries: [
+                    DigestDelivery(
+                        channel: .macOS,
+                        status: .failed,
+                        attemptedAt: now,
+                        completedAt: now,
+                        receipt: nil,
+                        failureMessage: "rate limited",
+                        targetWorkspace: nil,
+                        targetUserID: nil
+                    )
+                ]
+            )
+        ]
+        monitor.setStateForTesting(state, viewer: viewer)
+
+        var narrowed = Configuration.default
+        narrowed.repositories = ["kong/kong-ee"]
+        monitor.applyConfiguration(narrowed)
+        monitor.retryDigestBatch(id: "digest-side")
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertTrue(channel.deliveredBatches.isEmpty, "Retrying after the filter changes must not send the excluded repository")
+        XCTAssertEqual(channel.attemptCount, 0)
+        XCTAssertEqual(
+            monitor.currentStateForTesting()?.digest.batches.first?.deliveries.first?.status,
+            .superseded
+        )
+    }
+
     func testHandledItemReopensOnlyForNewActivity() async {
         let (monitor, fake) = makeMonitor()
         discoveredPR(fake)
@@ -629,10 +867,119 @@ final class PRActivityMonitorTests: XCTestCase {
         channel.failure = nil
         now = now.addingTimeInterval(PRActivityMonitor.digestWindow + 60)
         monitor.runDigestForTesting()
-        await waitForDelivery(channel)
+        let deadline = Date().addingTimeInterval(2)
+        while channel.deliveredBatches.isEmpty, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
 
         XCTAssertEqual(channel.deliveredBatches.count, 1, "The retried batch must reach the channel")
-        XCTAssertFalse(monitor.currentStateForTesting()?.digest.announcedEventIDs.isEmpty ?? true)
+        XCTAssertEqual(monitor.currentStateForTesting()?.digest.batches.count, 1, "A failed delivery is retried in place, not cloned into a second reminder")
+    }
+
+    func testExplicitTrackingDoesNotDuplicateAnAlreadyActionableEvent() async {
+        let (monitor, fake) = makeMonitor()
+        discoveredPR(fake, origins: [.authored])
+        setObservation(fake, [
+            observation(source: .header, payload: header()),
+            observation(source: .reviews, payload: MonitorSourcePayload(reviews: [])),
+        ])
+        await monitor.runPassForTesting()
+        monitor.setExplicitTracking(prNodeID: "PR_42", eventKinds: nil)
+
+        setObservation(fake, [
+            observation(source: .header, payload: header()),
+            observation(source: .reviews, payload: MonitorSourcePayload(reviews: [review()])),
+        ])
+        await monitor.runPassForTesting()
+
+        let items = monitor.currentStateForTesting()?.actionItems ?? []
+        XCTAssertEqual(items.count, 1, "Tracking must not add a second reminder for an event that is already actionable")
+        XCTAssertEqual(items.first?.reasons, [.authoredPRReviewFeedback])
+        XCTAssertEqual(items.first?.eventIDs.count, 1)
+    }
+
+    func testExplicitTrackingStillRemindsWhenNothingElseMatches() async {
+        let (monitor, fake) = makeMonitor()
+        discoveredPR(fake, origins: [.reviewed])
+        setObservation(fake, [
+            observation(source: .header, payload: header()),
+            observation(source: .reviews, payload: MonitorSourcePayload(reviews: [])),
+        ])
+        await monitor.runPassForTesting()
+        monitor.setExplicitTracking(prNodeID: "PR_42", eventKinds: nil)
+
+        setObservation(fake, [
+            observation(source: .header, payload: header()),
+            observation(source: .reviews, payload: MonitorSourcePayload(reviews: [review()])),
+        ])
+        await monitor.runPassForTesting()
+
+        let items = monitor.currentStateForTesting()?.actionItems ?? []
+        XCTAssertEqual(items.count, 1, "A tracked PR still gets one reminder when no more specific reason matches")
+        XCTAssertEqual(items.first?.reasons, [.explicitlyTracked])
+    }
+
+    func testDigestDoesNotCloneAnEventAlreadyOwnedByABatch() {
+        let event = makeStoredEvent(id: "event-1")
+        let shared = makeItem(id: "item-review", reason: .authoredPRReviewFeedback, action: .reviewFeedback, eventIDs: [event.id])
+        let duplicate = makeItem(id: "item-tracked", reason: .explicitlyTracked, action: .reviewFeedback, eventIDs: [event.id])
+        var state = PRActivityAccountState(
+            account: MonitorAccountKey(endpoint: "", viewerNodeID: viewer.nodeID, login: viewer.login),
+            updatedAt: now
+        )
+        state.events = [event]
+        state.actionItems = [shared, duplicate]
+        state.monitoredPRs = [makeMonitoredPR()]
+
+        let digest = PRActivityEngine.makeDigest(
+            state: state,
+            configuration: .default,
+            now: now,
+            mutedNodeIDs: []
+        )
+        XCTAssertEqual(digest?.entries.first?.eventCount, 1, "One event cited by two items is still one change")
+        XCTAssertEqual(digest?.coveredEventIDs, [event.id])
+
+        state.digest.batches = [
+            DigestBatch(
+                id: "digest-old",
+                createdAt: now,
+                entries: [],
+                coveredEventIDs: [event.id],
+                coveredActionItemIDs: [shared.id],
+                omittedEntryCount: 0,
+                deliveries: [
+                    DigestDelivery(
+                        channel: .macOS,
+                        status: .failed,
+                        attemptedAt: now,
+                        completedAt: now,
+                        receipt: nil,
+                        failureMessage: "rate limited",
+                        targetWorkspace: nil,
+                        targetUserID: nil
+                    )
+                ]
+            )
+        ]
+        XCTAssertNil(
+            PRActivityEngine.makeDigest(state: state, configuration: .default, now: now, mutedNodeIDs: []),
+            "An event already owned by a batch must not be cloned into another notification"
+        )
+    }
+
+    func testRemindersCollapseItemsThatShareAnEventAndKeepDistinctEventsSeparate() {
+        let shared = makeItem(id: "item-review", reason: .authoredPRReviewFeedback, action: .reviewFeedback, eventIDs: ["event-1"])
+        let duplicate = makeItem(id: "item-tracked", reason: .explicitlyTracked, action: .reviewFeedback, eventIDs: ["event-1"])
+        let other = makeItem(id: "item-ci", reason: .authoredPRCIFailure, action: .fixCI, eventIDs: ["event-2"])
+
+        let collapsed = PRActivityEngine.reminders(from: [shared, duplicate])
+        XCTAssertEqual(collapsed.count, 1, "Two items citing the same event are one reminder")
+        XCTAssertEqual(Set(collapsed[0].itemIDs), Set([shared.id, duplicate.id]))
+        XCTAssertEqual(collapsed[0].eventIDs, ["event-1"])
+
+        let separate = PRActivityEngine.reminders(from: [shared, other])
+        XCTAssertEqual(separate.count, 2, "A review and a CI failure stay separate reminders")
     }
 
     func testUnknownDeliveryOutcomeIsNotRetriedAutomatically() async {
@@ -807,13 +1154,19 @@ final class PRActivityMonitorTests: XCTestCase {
 
     // MARK: - Helpers
 
-    private func check(id: String, headOID: String?, conclusion: String?) -> MonitorCheckRun {
+    private func check(
+        id: String,
+        headOID: String?,
+        conclusion: String?,
+        name: String = "build",
+        runID: String = "run-1"
+    ) -> MonitorCheckRun {
         MonitorCheckRun(
             id: id,
             origin: .actionsJob,
-            name: "build",
+            name: name,
             workflowName: "CI",
-            runID: "run-1",
+            runID: runID,
             runAttempt: headOID == "sha2" ? 2 : 1,
             headOID: headOID,
             status: "COMPLETED",
@@ -821,6 +1174,61 @@ final class PRActivityMonitorTests: XCTestCase {
             url: nil,
             startedAt: now,
             completedAt: now
+        )
+    }
+
+    private func makeStoredEvent(id: String) -> PRActivityEvent {
+        PRActivityEvent(
+            id: id,
+            identityKey: "review:R_1:CHANGES_REQUESTED",
+            kind: .reviewSubmitted,
+            prNodeID: "PR_42",
+            reference: reference,
+            actor: "alice",
+            actorNodeID: "U_ALICE",
+            isFromViewer: false,
+            subjectIsViewer: false,
+            isBotActor: false,
+            containsDirectMention: false,
+            occurredAt: now,
+            url: nil,
+            revision: PRActivityRevision(headOID: "sha1", reviewID: "R_1"),
+            sourceChangeSequence: 1
+        )
+    }
+
+    private func makeItem(
+        id: String,
+        reason: PRActionReason,
+        action: PRActionKind,
+        eventIDs: [String]
+    ) -> PRActionItem {
+        PRActionItem(
+            id: id,
+            prNodeID: "PR_42",
+            reference: reference,
+            reasons: [reason],
+            actionKinds: [action],
+            eventIDs: eventIDs,
+            revision: .empty,
+            state: .open,
+            createdAt: now,
+            stateUpdatedAt: now,
+            snoozedUntil: nil,
+            coveredEventIDs: [],
+            evidenceURLs: []
+        )
+    }
+
+    private func makeMonitoredPR() -> MonitoredPR {
+        MonitoredPR(
+            prNodeID: "PR_42",
+            reference: reference,
+            origins: [.authored],
+            lifecycle: .open,
+            title: "Add feature",
+            discoveredAt: now,
+            lastObservedAt: now
         )
     }
 

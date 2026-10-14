@@ -16,9 +16,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var updateWindow: NSWindow?
     var jiraSetupWindow: NSWindow?
     var activityWindow: NSWindow?
+    /// Activity or Settings switched this menu-bar app to a regular Dock icon.
+    /// Closing the last of those windows restores the menu-bar-only policy.
+    private var promotedDockIcon = false
+    /// Bumped when a Dock window opens, so an earlier close cannot hide the icon after a reopen.
+    private var dockPromotionGeneration = 0
     var viewModel: PRListViewModel?
     var jiraSetupCoordinator: JiraSetupCoordinator?
     var presentationCoordinator: AppPresentationCoordinator?
+    let settingsNavigation = SettingsNavigation()
     var extensionPlatformController: ExtensionPlatformController?
     var browserPairingWindow: NSWindow?
     var extensionPlatformUITestWindow: NSWindow?
@@ -94,15 +100,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         presentationCoordinator = AppPresentationCoordinator { [weak self, weak viewModel] presentation in
             guard let self, let viewModel else { return }
             switch presentation {
-            case .settings:
-                self.openSettingsWindow(viewModel: viewModel)
+            case .settings(let tab):
+                self.openSettingsWindow(viewModel: viewModel, tab: tab)
             case .jiraSetup(let context):
                 self.openJiraSetupWindow(context: context, viewModel: viewModel)
             }
         }
 
         viewModel.openSettings = { [weak self] in
-            self?.presentationCoordinator?.present(.settings)
+            self?.presentationCoordinator?.present(.settings(.general))
         }
 
         viewModel.openActivity = { [weak self] in
@@ -283,7 +289,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             browserPairingWindow?.close()
             browserPairingWindow = nil
-            presentationCoordinator?.present(.settings)
+            presentationCoordinator?.present(.settings(.integrations))
         } else if CommandLine.arguments.contains("--ui-testing-browser-pairing") ||
             CommandLine.arguments.contains("--ui-testing-browser-permission-upgrade") {
             let isUpgrade = CommandLine.arguments.contains("--ui-testing-browser-permission-upgrade")
@@ -429,20 +435,60 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func openActivityWindow() {
         guard let viewModel else { return }
+        promoteDockIcon()
 
         if activityWindow == nil {
             let hostingController = NSHostingController(rootView: PRActivityView(viewModel: viewModel))
             let window = NSWindow(contentViewController: hostingController)
             window.title = String(localized: "Activity")
-            window.styleMask = [.titled, .closable]
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             window.setContentSize(NSSize(width: 560, height: 560))
+            window.minSize = NSSize(width: 520, height: 420)
             window.center()
             window.isReleasedWhenClosed = false
+            window.delegate = self
             activityWindow = window
         }
 
+        if activityWindow?.isMiniaturized == true {
+            activityWindow?.deminiaturize(nil)
+        }
         activityWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Menu-bar apps have no Dock icon. Activity and Settings are real windows, so they share one until the last closes.
+    private func promoteDockIcon() {
+        if CommandLine.arguments.contains(where: { $0.hasPrefix("--ui-testing-browser-") }) {
+            return
+        }
+        dockPromotionGeneration &+= 1
+        guard NSApp.activationPolicy() != .regular else { return }
+        guard NSApp.setActivationPolicy(.regular) else { return }
+        promotedDockIcon = true
+        NSApp.unhide(nil)
+    }
+
+    private func scheduleDockIconRestore() {
+        let generation = dockPromotionGeneration
+        // Let the close finish before dropping the Dock icon; changing policy mid-close can cancel it.
+        DispatchQueue.main.async { [weak self] in
+            self?.restoreMenuBarIfIdle(generation: generation)
+        }
+    }
+
+    private func restoreMenuBarIfIdle(generation: Int) {
+        guard promotedDockIcon, generation == dockPromotionGeneration else { return }
+        if keepsDockIcon(activityWindow) || keepsDockIcon(settingsWindow) {
+            return
+        }
+        promotedDockIcon = false
+        NSApp.setActivationPolicy(.accessory)
+    }
+
+    private func keepsDockIcon(_ window: NSWindow?) -> Bool {
+        guard let window else { return false }
+        return window.isVisible || window.isMiniaturized
     }
 
     /// Installs the digest channels. Rebuilt on configuration changes so the Slack
@@ -473,12 +519,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ])
     }
 
-    private func openSettingsWindow(viewModel: PRListViewModel) {
+    private func openSettingsWindow(viewModel: PRListViewModel, tab: SettingsTab) {
         guard let onboardingManager,
               let updateManager,
               let extensionPlatformController else {
             return
         }
+
+        promoteDockIcon()
 
         if settingsWindow == nil {
             let settingsView = SettingsView(
@@ -486,6 +534,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 onboardingManager: onboardingManager,
                 updateManager: updateManager,
                 extensionPlatformController: extensionPlatformController,
+                navigation: settingsNavigation,
                 presentationCoordinator: presentationCoordinator
             )
             let hostingController = NSHostingController(rootView: settingsView)
@@ -493,8 +542,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let window = NSWindow(contentViewController: hostingController)
             window.title = String(localized: "Settings")
             window.styleMask = [.titled, .closable]
-            window.setContentSize(NSSize(width: 520, height: 720))
+            window.setContentSize(NSSize(width: 688, height: 720))
             window.center()
+            window.isReleasedWhenClosed = false
+            window.delegate = self
             settingsWindow = window
         }
 
@@ -591,6 +642,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private static func appInfoValue(_ key: String) -> String {
         Bundle.main.object(forInfoDictionaryKey: key) as? String ?? "unknown"
+    }
+}
+
+@MainActor
+extension AppDelegate: NSWindowDelegate {
+    func windowWillClose(_ notification: Notification) {
+        let window = notification.object as? NSWindow
+        if window === activityWindow {
+            activityWindow = nil
+        } else if window === settingsWindow {
+            settingsWindow = nil
+        } else {
+            return
+        }
+        // Do not treat isMiniaturized here as still-open. This callback can run while that flag is still true.
+        scheduleDockIconRestore()
+    }
+
+    @objc func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        guard promotedDockIcon else { return true }
+        if activityWindow != nil {
+            openActivityWindow()
+        } else if settingsWindow != nil, let viewModel {
+            openSettingsWindow(viewModel: viewModel, tab: settingsNavigation.tab)
+        } else {
+            openActivityWindow()
+        }
+        return false
     }
 }
 

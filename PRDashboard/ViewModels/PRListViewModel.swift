@@ -826,6 +826,10 @@ final class PRListViewModel: ObservableObject {
         return grouped
             .compactMap { nodeID, items -> (MonitoredPR, [PRActionItem])? in
                 guard let pr = activity.pr(nodeID) else { return nil }
+                guard configuration.collectsActivity(
+                    for: pr.reference.repoFullName,
+                    explicitlyTracked: pr.isExplicitlyTracked
+                ) else { return nil }
                 return (pr, items.sorted { $0.stateUpdatedAt > $1.stateUpdatedAt })
             }
             .sorted { lhs, rhs in
@@ -834,16 +838,25 @@ final class PRListViewModel: ObservableObject {
     }
 
     var actionableActivityCount: Int {
-        let now = Date()
-        return activity.actionItems.filter { $0.isActionable(now: now) }.count
+        activityItemsByPR.reduce(0) { count, group in
+            count + PRActivityEngine.reminders(from: group.items).count
+        }
     }
 
     func markActivityHandled(_ item: PRActionItem) {
-        prManager.activityMonitor.markHandled(itemID: item.id)
+        markActivityHandled([item.id])
+    }
+
+    func markActivityHandled(_ itemIDs: [String]) {
+        prManager.activityMonitor.markHandled(itemIDs: itemIDs)
     }
 
     func snoozeActivity(_ item: PRActionItem, until: Date) {
-        prManager.activityMonitor.snooze(itemID: item.id, until: until)
+        snoozeActivity([item.id], until: until)
+    }
+
+    func snoozeActivity(_ itemIDs: [String], until: Date) {
+        prManager.activityMonitor.snooze(itemIDs: itemIDs, until: until)
     }
 
     func reopenActivity(_ item: PRActionItem) {

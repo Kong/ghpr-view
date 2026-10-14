@@ -1,12 +1,12 @@
 import Foundation
 
 enum AppPresentation: Identifiable {
-    case settings
+    case settings(SettingsTab)
     case jiraSetup(JiraSetupContext)
 
     var id: UUID {
         switch self {
-        case .settings:
+        case .settings(_):
             return UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
         case .jiraSetup(let context):
             return context.id
