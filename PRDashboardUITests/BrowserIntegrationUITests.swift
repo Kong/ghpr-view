@@ -9,6 +9,7 @@ final class BrowserIntegrationUITests: XCTestCase {
         let app = launch(with: "--ui-testing-browser-settings")
         let settings = app.windows["Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: 8), "Settings window should open in UI test mode")
+        showIntegrationsTab(in: app)
         XCTAssertTrue(
             app.staticTexts["Browser Integration"].waitForExistence(timeout: 3),
             "Settings must expose Browser Integration"
@@ -89,6 +90,7 @@ final class BrowserIntegrationUITests: XCTestCase {
         let app = launch(with: "--ui-testing-browser-settings")
         let settings = app.windows["Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: 8), "Settings window should open in UI test mode")
+        showIntegrationsTab(in: app)
         XCTAssertTrue(
             app.buttons["browser-integration-coding-agent-toggle"].waitForExistence(timeout: 3),
             "Settings must expose Coding Agent Integration"
@@ -254,6 +256,7 @@ final class BrowserIntegrationUITests: XCTestCase {
         let app = launch(with: "--ui-testing-browser-settings")
         let settings = app.windows["Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: 8), "Settings window should open in UI test mode")
+        showIntegrationsTab(in: app)
 
         let browserDetails = app.buttons["browser-integration-details-toggle"]
         XCTAssertTrue(browserDetails.waitForExistence(timeout: 3))
@@ -302,6 +305,7 @@ final class BrowserIntegrationUITests: XCTestCase {
         let app = launch(with: "--ui-testing-browser-settings")
         let settings = app.windows["Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: 8), "Settings window should open in UI test mode")
+        showIntegrationsTab(in: app)
 
         let browserDetails = app.buttons["browser-integration-details-toggle"]
         XCTAssertTrue(browserDetails.waitForExistence(timeout: 3))
@@ -329,6 +333,12 @@ final class BrowserIntegrationUITests: XCTestCase {
 
     }
 
+
+    private func showIntegrationsTab(in app: XCUIApplication) {
+        let tab = app.buttons["settings-tab-integrations"]
+        XCTAssertTrue(tab.waitForExistence(timeout: 3), "Settings must expose an Integrations tab")
+        tab.click()
+    }
 
     private func launch(with argument: String) -> XCUIApplication {
         let app = XCUIApplication()

@@ -178,25 +178,14 @@ A GitHub PR page never submits the same Skill twice: while a run for that Skill 
 
 ### Settings
 
-- **Refresh Interval** - How often to fetch updates (1min to 30min)
-- **Refresh on Open** - Refresh immediately when opening the popover
-- **Repositories** - Filter to specific repos, case-insensitive (e.g., `owner/repo` or `owner/` for all repos)
-- **Show Drafts** - Include/exclude draft PRs
-- **CI Status Exclude Filter** - Exclude status checks by keyword (e.g., "review")
-- **Activity Monitoring** - Monitor PR activity in the background, choose which event categories and repositories feed digests, and pick the delivery targets (macOS notification, Slack direct message, or both)
-- **Slack Direct Message** - Paste a workspace-approved Slack app bot token and your own Slack user ID, verify the connection, and send a manual test DM
-- **Comment Shortcuts** - Add, edit, reorder or remove your own comment templates and preview the rendered draft
-- **Notifications** - Master switch for digest delivery
-- **Pause in Low Power Mode** - Pause background refresh when macOS Low Power Mode is active
-- **Pause on Cellular/Hotspot** - Pause background refresh on expensive networks (iPhone hotspot, etc.)
-- **Launch at Login** - Start PRDashboard automatically when you log in
-- **Show Review Status** - Show/hide review status badges on review-requested PRs
-- **Open PRs in cmux First** - Reuse a matching cmux PR tab before falling back to the default browser
-- **Jira** - Configure Jira Cloud credentials, metadata refresh interval, and connection testing
-- **Browser Integration** - Install the official userscript, inspect bridge and GitHub-page health, test the local connection, and revoke paired clients
-- **Coding Agent Integration** - Install the Skill Builder and review-import MCP for Claude Code, Codex, and OMP, then open the local Workbench or current contracts
-- **Updates** - Enable automatic update checks or check manually
-- **Developer Options** - Replay onboarding, clear caches, override the GraphQL endpoint, or configure an HTTP proxy
+Settings are split into five tabs. Save and Done write every tab, not only the one on screen.
+
+- **General** — account, launch at login, open PRs in cmux first, refresh interval, refresh on open, pause in Low Power Mode, pause on cellular/hotspot, updates
+- **Pull Requests** — repository filter, draft PRs, review-status badges, minimum approvals for ready to merge, CI status exclude filter
+- **Alerts** — notification master switch, background activity monitoring, digest targets, event categories, Slack direct message. Activity uses the Pull Requests repository filter; an optional repository list here narrows delivery further. Explicitly tracked PRs stay included.
+- **Integrations** — Jira, browser integration, coding agent integration, comment shortcuts
+- **Advanced** — replay onboarding, clear caches, GraphQL endpoint override, HTTP proxy
+
 
 ## Requirements
 
