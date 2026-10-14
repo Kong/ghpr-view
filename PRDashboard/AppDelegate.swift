@@ -549,6 +549,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             settingsWindow = window
         }
 
+        settingsNavigation.tab = tab
         settingsWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
