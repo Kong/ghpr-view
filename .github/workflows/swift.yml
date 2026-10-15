@@ -147,6 +147,19 @@ jobs:
         files: PRDashboard-${{ steps.version.outputs.version }}.zip
         generate_release_notes: true
 
+    - name: Publish release package
+      if: steps.version.outputs.is_release == 'true'
+      uses: softprops/action-gh-release@v2
+      with:
+        repository: xiaocang/ghpr-view
+        token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        tag_name: ${{ github.ref_name }}
+        target_commitish: main
+        name: ${{ github.ref_name }}
+        body: PR Dashboard ${{ steps.version.outputs.version }}
+        files: PRDashboard-${{ steps.version.outputs.version }}.zip
+        fail_on_unmatched_files: true
+
     - name: Update Homebrew Tap
       if: steps.version.outputs.is_release == 'true'
       env:
@@ -172,22 +185,15 @@ jobs:
         sed -i '' "s/version \".*\"/version \"${VERSION}\"/" Casks/prdashboard.rb
         sed -i '' "s/sha256 \".*\"/sha256 \"${SHA256}\"/" Casks/prdashboard.rb
 
-        # Commit and push
+        # Commit and push. An unchanged cask must not fail the release.
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
         git add Casks/prdashboard.rb
+        if git diff --cached --quiet; then
+          echo "Homebrew cask already matches ${VERSION}"
+          exit 0
+        fi
         git commit -m "Update prdashboard to ${VERSION}"
+        branch=$(git rev-parse --abbrev-ref HEAD)
+        git pull --rebase origin "$branch"
         git push
-
-    - name: Publish release package
-      if: steps.version.outputs.is_release == 'true'
-      uses: softprops/action-gh-release@v2
-      with:
-        repository: xiaocang/ghpr-view
-        token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-        tag_name: ${{ github.ref_name }}
-        target_commitish: main
-        name: ${{ github.ref_name }}
-        body: PR Dashboard ${{ steps.version.outputs.version }}
-        files: PRDashboard-${{ steps.version.outputs.version }}.zip
-        fail_on_unmatched_files: true
