@@ -47,9 +47,13 @@ final class PRActivityModelsTests: XCTestCase {
         XCTAssertTrue(configuration.notificationEventKindFilter.isEmpty, "An empty filter means the built-in defaults")
         XCTAssertFalse(configuration.isSlackDeliveryConfigured, "Slack must stay unconfigured until a DM binding is verified")
         XCTAssertTrue(configuration.commentShortcuts.isEmpty, "Comment shortcuts must default to empty")
-        XCTAssertTrue(
+        XCTAssertFalse(
             configuration.isRepositoryNotified("someone/else"),
-            "The digest repository filter is separate from the display filter and defaults to every repository"
+            "Activity follows the PR list repository filter when the digest filter is empty"
+        )
+        XCTAssertTrue(
+            configuration.isRepositoryNotified("owner/repo"),
+            "An empty digest filter follows the PR list filter"
         )
     }
 
