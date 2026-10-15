@@ -11,13 +11,17 @@ The app is **PR Dashboard**. This repository is [`kong/ghpr-view`](https://githu
 ![macOS](https://img.shields.io/badge/macOS-13.0+-blue)
 ![Swift](https://img.shields.io/badge/Swift-5.0-orange)
 
-![Menu bar list of your pull requests](assets/screenshot.png)
+![Menu bar list of your pull requests](assets/menu-bar.png)
 
 ## Highlights
 
 **Your PRs, next to the clock.** Authored PRs, review requests, and mentions in one popover. CI and unresolved comments show on the row.
 
 **A reminder only when it matters.** The first look at a PR is silent, so an old backlog is not replayed as news. After that, at most one digest every 30 minutes, and only when something new needs you. It can go to a Mac notification, a Slack DM to yourself, or both. Activity says why each item concerns you. Dismiss, snooze, and mute affect the reminder only. The app does not review, comment, or rerun CI for you, and it only watches while this Mac is awake and the app is running.
+
+![A digest notification](assets/digest.png)
+
+![Activity window](assets/activity.png)
 
 **It stays on this Mac.** There is no account on our side. If you want the same list somewhere else, a userscript can add a small ghpr menu on a GitHub PR page, and the local `ghpr` command can answer a coding agent. Neither one submits a review to GitHub.
 
@@ -37,7 +41,7 @@ Click the menu bar icon, then **Sign in with GitHub**, and enter the code at [gi
 
 If that is blocked, use a [personal access token](https://github.com/settings/tokens) with `repo`, `read:user`, `workflow`, and `read:org`. A release build keeps it in the Keychain.
 
-Left-click opens the list. Right-click quits. **Cmd+R** refreshes. The gear is Settings.
+Left-click opens the list. Right-click opens the menu, including Quit. **Cmd+R** refreshes. The gear is Settings.
 
 ## Requirements
 
