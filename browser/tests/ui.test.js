@@ -398,20 +398,31 @@ test("a repeated run click submits the Skill once", async () => {
 });
 
 
-test("prompts for a userscript update reported by the Browser Bridge", async () => {
+test("prompts for a userscript update reported by the Browser Bridge", async (t) => {
   const window = createWindow();
-  const gm = new FakeGM({ latestVersion: "2.1.0" });
+  const latestVersion = `${Number(CLIENT.version.split(".")[0]) + 1}.0.0`;
+  const gm = new FakeGM({ latestVersion });
   const app = createGhprApp({ window, document: window.document, gm });
+  t.after(() => {
+    try {
+      app.stop();
+    } finally {
+      window.close();
+    }
+  });
   await app.start();
 
   const menu = openHeaderMenu(window);
   const notice = menu.querySelector(".ghpr-update-notice");
-  assert.match(notice?.textContent || "", /Userscript update available.*2\.0\.14 → 2\.1\.0/s);
+  assert.ok(notice, "A newer bridge version must display an update notice");
+  assert.ok(notice.textContent.includes(CLIENT.version), "The notice must show the installed version");
+  assert.ok(notice.textContent.includes(latestVersion), "The notice must show the available version");
   notice.querySelector("button").click();
-  assert.deepEqual(gm.opened, ["http://127.0.0.1:48120/install/ghpr.user.js"]);
-
-  app.stop();
-  window.close();
+  assert.deepEqual(
+    gm.opened,
+    ["http://127.0.0.1:48120/install/ghpr.user.js"],
+    "Update must open the userscript served by the connected bridge"
+  );
 });
 
 test("classifies only PR conversation URLs as the expanded surface", () => {
