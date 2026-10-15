@@ -161,6 +161,13 @@ jobs:
         git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/xiaocang/homebrew-tap.git /tmp/homebrew-tap
         cd /tmp/homebrew-tap
 
+        current=$(sed -n 's/^[[:space:]]*version "\([^"]*\)".*/\1/p' Casks/prdashboard.rb | head -1)
+        smallest=$(printf '%s\n%s\n' "$VERSION" "$current" | sort -t. -k1,1n -k2,2n -k3,3n | head -1)
+        if [ -n "$current" ] && [ "$VERSION" != "$current" ] && [ "$smallest" = "$VERSION" ]; then
+          echo "Skip Homebrew downgrade from ${current} to ${VERSION}"
+          exit 0
+        fi
+
         # Update the cask file
         sed -i '' "s/version \".*\"/version \"${VERSION}\"/" Casks/prdashboard.rb
         sed -i '' "s/sha256 \".*\"/sha256 \"${SHA256}\"/" Casks/prdashboard.rb
@@ -171,3 +178,16 @@ jobs:
         git add Casks/prdashboard.rb
         git commit -m "Update prdashboard to ${VERSION}"
         git push
+
+    - name: Publish release package
+      if: steps.version.outputs.is_release == 'true'
+      uses: softprops/action-gh-release@v2
+      with:
+        repository: xiaocang/ghpr-view
+        token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        tag_name: ${{ github.ref_name }}
+        target_commitish: main
+        name: ${{ github.ref_name }}
+        body: PR Dashboard ${{ steps.version.outputs.version }}
+        files: PRDashboard-${{ steps.version.outputs.version }}.zip
+        fail_on_unmatched_files: true
