@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ghpr for GitHub
 // @namespace    https://github.com/xiaocang/ghpr-view
-// @version      2.0.14
+// @version      2.0.15
 // @description  Run local ghpr Skills and render their results on GitHub pull requests.
 // @match        https://github.com/*/*/pull/*
 // @match        https://github.com/*/*/actions/runs/*
@@ -3036,7 +3036,7 @@
   const CLIENT = {
     id: "dev.ghpr.official-userscript",
     name: "ghpr for GitHub",
-    version: "2.0.14",
+    version: "2.0.15",
     requested_scopes: [
       "pr:read",
       "ci:read",
