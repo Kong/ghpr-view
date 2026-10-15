@@ -318,9 +318,9 @@ test("compares server userscript versions without false update prompts", () => {
   assert.equal(isVersionNewer("1.1.0", "1.1.1"), false);
   assert.equal(isVersionNewer("not-a-version", "1.1.1"), false);
 });
-test("publishes the client and update metadata as userscript v2.0.14", () => {
+test("publishes the client and update metadata as userscript v2.0.15", () => {
   const metadataVersion = userscriptSource.match(/^\/\/ @version\s+(\S+)$/m)?.[1];
-  assert.equal(metadataVersion, "2.0.14");
+  assert.equal(metadataVersion, "2.0.15");
   assert.equal(CLIENT.version, metadataVersion);
   assert.equal(CLIENT.requested_scopes.includes("tag:read"), true);
   assert.equal(CLIENT.requested_scopes.includes("tag:write"), true);
