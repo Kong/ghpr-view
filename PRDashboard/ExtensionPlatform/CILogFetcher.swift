@@ -534,7 +534,7 @@ enum CILogFetcher {
     }
 
     /// Keeps the last `byteLimit` bytes, dropping a possibly mangled first line
-    /// at the cut boundary. Mirrors flaky-analyzer's `tailTruncate`.
+    /// at the cut boundary.
     static func tailTruncate(_ input: String, byteLimit: Int) -> String {
         let data = Data(input.utf8)
         guard data.count > byteLimit else { return input }
@@ -549,10 +549,10 @@ enum CILogFetcher {
     /// Locates the failure anchor for `sliceAroundFailure`. Tiered to avoid false
     /// positives: `##[error]` GitHub annotations are definitive; strong uppercase
     /// failure words (`FAILED`, `FATAL`, …) come next; a case-insensitive
-    /// `Error`/`fatal` scan is the last resort. flaky-analyzer's single loose
-    /// pattern anchors on package names like `libgpg-error` or env vars like
-    /// `FAILED_TEST_FILES_FILE`, which would slice the wrong region of a real
-    /// CI logs (the `##[error]` annotation sits at line ~11662 of ~22600).
+    /// `Error`/`fatal` scan is the last resort. A single loose `Error`/`fatal`
+    /// pattern would anchor on package names like `libgpg-error` or env vars
+    /// like `FAILED_TEST_FILES_FILE`, slicing the wrong region of a real CI log
+    /// (the `##[error]` annotation sits at line ~11662 of ~22600).
     static func failureAnchor(in text: String) -> Range<String.Index>? {
         if let range = text.range(
             of: "##\\[error\\]",
@@ -577,8 +577,7 @@ enum CILogFetcher {
 
     /// Keeps a window around the first failure-like line when the log exceeds
     /// `byteLimit`, falling back to `tailTruncate` when no failure line matches.
-    /// Mirrors flaky-analyzer's `sliceAroundFailure` (window math, elision
-    /// markers, and tail fallback). The anchor uses a tiered search:
+    /// The anchor uses a tiered search:
     /// `##[error]` annotations, strong uppercase failure words, then a
     /// case-insensitive `Error`/`fatal` scan. Failure markers in real CI logs
     /// (e.g. `##[error]Unable to download artifact(s)…`) can sit past the
