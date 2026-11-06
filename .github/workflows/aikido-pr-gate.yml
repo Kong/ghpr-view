@@ -1,0 +1,41 @@
+name: Aikido PR Gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aikido-pr-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # Values controlled by a pull request reach the shell only through these variables.
+      AIKIDO_CLIENT_API_KEY: ${{ secrets.AIKIDO_CLIENT_API_KEY }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      PR_URL: ${{ github.event.pull_request.html_url }}
+      PR_TITLE: ${{ github.event.pull_request.title }}
+    steps:
+      - name: Skip when the Aikido CI token is unavailable
+        if: env.AIKIDO_CLIENT_API_KEY == ''
+        run: |
+          echo "::notice::AIKIDO_CLIENT_API_KEY is not available, so the Aikido gate did not run."
+
+      - name: Scan the pull request
+        if: env.AIKIDO_CLIENT_API_KEY != ''
+        run: |
+          npm install --global @aikidosec/ci-api-client@1.0.25
+          aikido-api-client scan 1125156052 "$BASE_SHA" "$HEAD_SHA" "$HEAD_REF" \
+            --apikey "$AIKIDO_CLIENT_API_KEY" \
+            --pull-request-url "$PR_URL" \
+            --pull-request-title "$PR_TITLE" \
+            --fail-on-secrets-scan \
+            --minimum-severity-level HIGH
