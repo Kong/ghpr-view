@@ -57,6 +57,10 @@ cd ghpr-view
 
 `make build-cli` builds `ghpr`. `make install-mcp` is optional and needs Node.js. See [`mcp-ghpr/README.md`](mcp-ghpr/README.md).
 
+## Security
+
+Credential storage, the local socket, and the browser bridge are described in [SECURITY.md](SECURITY.md). Report a vulnerability there, not in a public issue.
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).

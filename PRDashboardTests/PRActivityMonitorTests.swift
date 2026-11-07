@@ -619,7 +619,7 @@ final class PRActivityMonitorTests: XCTestCase {
 
     func testUnwatchedRepositoryIsNotMonitoredOrNotified() async {
         var configuration = Configuration.default
-        configuration.repositories = ["owner/repo", "kong-konnect/"]
+        configuration.repositories = ["owner/repo", "example-org/"]
         let channel = deliveredChannel()
         let (monitor, fake) = makeMonitor(configuration: configuration, channels: [channel])
         fake.discoveryOutcome = MonitorDiscoveryOutcome(
@@ -653,7 +653,7 @@ final class PRActivityMonitorTests: XCTestCase {
         let repos = Set(monitor.currentStateForTesting()?.monitoredPRs.map(\.reference.repoFullName) ?? [])
         XCTAssertEqual(repos, ["owner/repo"], "An authored PR outside the PR list filter is not activity")
         XCTAssertFalse(configuration.isRepositoryNotified("xiaocang/easydict_win32"))
-        XCTAssertTrue(configuration.isRepositoryNotified("kong-konnect/khcp"))
+        XCTAssertTrue(configuration.isRepositoryNotified("example-org/example-repo"))
         XCTAssertTrue(configuration.collectsActivity(for: "xiaocang/easydict_win32", explicitlyTracked: true))
     }
 
@@ -736,7 +736,7 @@ final class PRActivityMonitorTests: XCTestCase {
         monitor.setStateForTesting(state, viewer: viewer)
 
         var narrowed = Configuration.default
-        narrowed.repositories = ["kong/kong-ee"]
+        narrowed.repositories = ["example-org/other-repo"]
         monitor.applyConfiguration(narrowed)
         monitor.retryDigestBatch(id: "digest-side")
         try? await Task.sleep(nanoseconds: 200_000_000)
