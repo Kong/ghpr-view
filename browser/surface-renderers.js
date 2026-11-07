@@ -1253,7 +1253,6 @@
     const element = document.createElement(tag);
     if (options.className) element.className = options.className;
     if (options.text !== undefined) element.textContent = options.text;
-    if (options.html !== undefined) element.innerHTML = options.html;
     if (options.attrs) {
       for (const [key, value] of Object.entries(options.attrs)) {
         if (value === undefined || value === null || value === false) continue;

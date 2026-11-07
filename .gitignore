@@ -47,3 +47,11 @@ GitVersion.generated.swift
 browser/node_modules/
 browser/playwright-report/
 browser/test-results/
+
+# Local logs, built apps, release zips, and audit output
+err.log
+*.profraw
+.claude/
+.omp/
+*.zip
+*.app

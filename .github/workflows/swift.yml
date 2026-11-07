@@ -8,11 +8,14 @@ on:
     branches: [ master ]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
     runs-on: macos-latest
+    permissions:
+      contents: read
+      actions: write
 
     steps:
     - uses: actions/checkout@v4
@@ -34,6 +37,14 @@ jobs:
         npm ci
         npm test
         npm run check:userscript
+
+    - name: Test mcp-ghpr bundle
+      run: |
+        cd mcp-ghpr
+        npm ci
+        npm test
+        node scripts/generate-notice.mjs --check
+        git diff --exit-code -- ../mcp-ghpr-bundle/index.mjs ../NOTICE
 
     - name: Install Playwright browsers
       working-directory: browser
@@ -118,6 +129,11 @@ jobs:
           echo "Error: PRDashboard.app not found"
           exit 1
         fi
+        # Ship the license with the app. The zip below is a build output and is not committed.
+        cp "$GITHUB_WORKSPACE/LICENSE" "$APP_PATH/Contents/Resources/LICENSE"
+        cp "$GITHUB_WORKSPACE/NOTICE" "$APP_PATH/Contents/Resources/NOTICE"
+        test -s "$APP_PATH/Contents/Resources/LICENSE"
+        test -s "$APP_PATH/Contents/Resources/NOTICE"
         REQ_FILE="$(mktemp)"
         echo 'designated => identifier "com.xiaocang.PRDashboard"' > "$REQ_FILE"
         codesign --force --sign - \
@@ -140,15 +156,30 @@ jobs:
         name: PRDashboard-${{ steps.version.outputs.version }}
         path: PRDashboard-${{ steps.version.outputs.version }}.zip
 
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+    - name: Get version from tag
+      id: version
+      run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+    - name: Download release zip
+      uses: actions/download-artifact@v4
+      with:
+        name: PRDashboard-${{ steps.version.outputs.version }}
+
     - name: Create GitHub Release
-      if: steps.version.outputs.is_release == 'true'
       uses: softprops/action-gh-release@v2
       with:
         files: PRDashboard-${{ steps.version.outputs.version }}.zip
         generate_release_notes: true
 
     - name: Publish release package
-      if: steps.version.outputs.is_release == 'true'
       uses: softprops/action-gh-release@v2
       with:
         repository: xiaocang/ghpr-view
@@ -161,7 +192,6 @@ jobs:
         fail_on_unmatched_files: true
 
     - name: Update Homebrew Tap
-      if: steps.version.outputs.is_release == 'true'
       env:
         HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         VERSION: ${{ steps.version.outputs.version }}
