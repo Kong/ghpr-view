@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
 import { createConnection, type Socket } from "node:net";
-import { userInfo } from "node:os";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -129,7 +130,7 @@ class GhCommandError extends Error {
 function resolveSocketPath(): string {
   const override = process.env.GHPR_SOCKET_PATH?.trim();
   if (override) return override;
-  return `/tmp/com.xiaocang.PRDashboard.${userInfo().uid}.sock`;
+  return join(homedir(), "Library", "Application Support", "ghpr", "cli.sock");
 }
 
 function sendRequest(request: SocketRequest): Promise<SocketResponse> {

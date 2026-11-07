@@ -757,4 +757,43 @@ final class LocalAPITests: XCTestCase {
             ciExtendedInfo: ciExtendedInfo
         )
     }
+
+    func testDefaultSocketPathLivesInApplicationSupport() {
+        XCTAssertEqual(
+            LocalSocketPath.defaultPath(home: URL(fileURLWithPath: "/Users/tester")),
+            "/Users/tester/Library/Application Support/ghpr/cli.sock"
+        )
+    }
+
+    func testSocketStartRefusesToReplaceARegularFile() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ghpr-socket-\(UUID().uuidString)", isDirectory: true)
+        let socketURL = directory.appendingPathComponent("cli.sock")
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: socketURL.path, contents: Data("not a socket".utf8))
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let server = LocalSocketServer(
+            socketPath: socketURL.path,
+            snapshotProvider: { preconditionFailure("unused") },
+            reviewImporter: { _, _, _ in preconditionFailure("unused") }
+        )
+        server.start()
+
+        let deadline = Date().addingTimeInterval(2)
+        var error: Error?
+        while error == nil, Date() < deadline {
+            error = server.lastStartErrorForTesting()
+            if error == nil {
+                Thread.sleep(forTimeInterval: 0.02)
+            }
+        }
+
+        guard case .refusingForeignSocket(let path) = error as? LocalSocketServerError else {
+            return XCTFail("Expected refusingForeignSocket, got \(String(describing: error))")
+        }
+        XCTAssertEqual(path, socketURL.path)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: socketURL.path), "A regular file must not be unlinked")
+        withExtendedLifetime(server) {}
+    }
 }

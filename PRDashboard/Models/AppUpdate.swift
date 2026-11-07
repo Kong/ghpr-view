@@ -120,7 +120,19 @@ struct ReleaseInfo: Decodable, Equatable {
 
         switch matches.count {
         case 1:
-            return matches[0]
+            let asset = matches[0]
+            let trustedHosts: Set<String> = [
+                "github.com",
+                "release-assets.githubusercontent.com",
+                "objects.githubusercontent.com",
+                "github-releases.githubusercontent.com"
+            ]
+            guard asset.browserDownloadURL.scheme?.lowercased() == "https",
+                  let host = asset.browserDownloadURL.host?.lowercased(),
+                  trustedHosts.contains(host) else {
+                throw ReleaseAssetSelectionError.untrustedDownloadURL
+            }
+            return asset
         case 0:
             throw ReleaseAssetSelectionError.missingZipAsset
         default:
@@ -132,6 +144,7 @@ struct ReleaseInfo: Decodable, Equatable {
 enum ReleaseAssetSelectionError: LocalizedError, Equatable {
     case missingZipAsset
     case multipleZipAssets
+    case untrustedDownloadURL
 
     var errorDescription: String? {
         switch self {
@@ -139,6 +152,8 @@ enum ReleaseAssetSelectionError: LocalizedError, Equatable {
             return "The latest release does not contain a PRDashboard zip asset."
         case .multipleZipAssets:
             return "The latest release contains multiple PRDashboard zip assets."
+        case .untrustedDownloadURL:
+            return "The release zip URL is not on a trusted GitHub host."
         }
     }
 }

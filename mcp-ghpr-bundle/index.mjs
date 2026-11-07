@@ -7258,7 +7258,8 @@ var require_dist = __commonJS({
 // src/index.ts
 import { execFile } from "node:child_process";
 import { createConnection } from "node:net";
-import { userInfo } from "node:os";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 // node_modules/zod/v3/helpers/util.js
 var util;
@@ -36806,7 +36807,7 @@ var GhCommandError = class extends Error {
 function resolveSocketPath() {
   const override = process.env.GHPR_SOCKET_PATH?.trim();
   if (override) return override;
-  return `/tmp/com.xiaocang.PRDashboard.${userInfo().uid}.sock`;
+  return join(homedir(), "Library", "Application Support", "ghpr", "cli.sock");
 }
 function sendRequest(request) {
   return new Promise((resolve, reject) => {

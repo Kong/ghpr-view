@@ -1,7 +1,7 @@
 # mcp-ghpr
 
 MCP server that talks **directly** to PRDashboard's local Unix socket
-(`/tmp/com.xiaocang.PRDashboard.<uid>.sock`). No `ghpr` CLI binary required.
+(`~/Library/Application Support/ghpr/cli.sock`). No `ghpr` CLI binary required.
 
 For normal reads it uses the snapshot PRDashboard already maintains, so it
 inherits whatever data is in the app: auth, refresh interval, rate-limit
@@ -104,7 +104,7 @@ authenticated for the requested repository. Fallback results include
 `source: "gh"` and do not include PRDashboard-only enrichment such as local pin
 state, Jira metadata, or unresolved review-thread tracking.
 
-The socket path defaults to `/tmp/com.xiaocang.PRDashboard.<uid>.sock` and can
+The socket path defaults to `~/Library/Application Support/ghpr/cli.sock` and can
 be overridden via `GHPR_SOCKET_PATH`.
 
 ## Install / run

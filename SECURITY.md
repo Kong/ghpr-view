@@ -24,7 +24,7 @@ The app calls GitHub, and, only when you configure them, Jira Cloud and Slack. I
 While it is running it listens on:
 
 - `127.0.0.1` ports 48120–48129 for the browser bridge. A userscript gets a capability token only after the app approves the pairing.
-- a Unix socket at `/tmp/com.xiaocang.PRDashboard.<uid>.sock`, mode `0600`. The server accepts only a peer with the same uid. `import_review` writes a local review record and does not submit a GitHub review.
+- a Unix socket at `~/Library/Application Support/ghpr/cli.sock`, mode `0600`. The server accepts only a peer with the same uid. `import_review` writes a local review record and does not submit a GitHub review.
 
 `GHPR_SOCKET_PATH` selects the socket a client connects to. The server listens on the default path.
 

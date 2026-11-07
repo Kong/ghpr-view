@@ -1029,14 +1029,20 @@ struct SettingsView: View {
                 viewModel.configuration = config
                 slackState = .connected(connection.workspaceName)
             } catch {
-                Keychain.deleteSlackBotToken()
-                var config = viewModel.configuration
-                config.slackEnabled = false
-                config.slackWorkspaceID = ""
-                config.slackWorkspaceName = ""
-                config.slackDMChannelID = ""
-                viewModel.configuration = config
-                slackState = .failure((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+                let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                switch SlackVerificationFailurePolicy.policy(for: error) {
+                case .clearStoredConnection:
+                    Keychain.deleteSlackBotToken()
+                    var config = viewModel.configuration
+                    config.slackEnabled = false
+                    config.slackWorkspaceID = ""
+                    config.slackWorkspaceName = ""
+                    config.slackDMChannelID = ""
+                    viewModel.configuration = config
+                    slackState = .failure(message)
+                case .keepExistingConnection:
+                    slackState = .failure(message)
+                }
             }
         }
     }

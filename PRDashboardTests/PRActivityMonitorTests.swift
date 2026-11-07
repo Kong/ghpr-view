@@ -876,6 +876,98 @@ final class PRActivityMonitorTests: XCTestCase {
         XCTAssertEqual(monitor.currentStateForTesting()?.digest.batches.count, 1, "A failed delivery is retried in place, not cloned into a second reminder")
     }
 
+    func testAbandonedSendingDeliveryBecomesUnknownWithoutResending() async throws {
+        let channel = FakeDigestChannel(isAvailable: true, binding: [:])
+        let store = PRActivityStore(directoryURL: directory)
+        try seedDigestBatch(store: store, status: .sending)
+        let (monitor, _) = makeMonitor(store: store, channels: [channel])
+
+        await monitor.runPassForTesting()
+
+        XCTAssertEqual(channel.attemptCount, 0, "An interrupted send must not be delivered again on startup")
+        let delivery = monitor.currentStateForTesting()?.digest.batches.first?.deliveries.first
+        XCTAssertEqual(delivery?.status, .unknown, "A sending delivery without a receipt must become unknown")
+        XCTAssertEqual(
+            delivery?.failureMessage,
+            "Delivery was interrupted before a receipt was saved."
+        )
+    }
+
+    func testSuccessfulSendStaysDeliveredWhenPausedDuringDelivery() async throws {
+        let channel = SuspendingDigestChannel()
+        let store = PRActivityStore(directoryURL: directory)
+        try seedDigestBatch(store: store, status: .pending, coveredEventIDs: ["E_1"])
+        let (monitor, _) = makeMonitor(store: store, channels: [channel])
+
+        await monitor.runPassForTesting()
+        let started = Date().addingTimeInterval(2)
+        while channel.attemptCount == 0, Date() < started {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertEqual(channel.attemptCount, 1, "The pending delivery should be in flight")
+        monitor.setPaused(true)
+        channel.resume(with: DigestReceipt(channelID: "C_TEST", workspace: nil, messageTimestamp: "1.0", recipientUserID: nil))
+
+        let deadline = Date().addingTimeInterval(2)
+        while monitor.currentStateForTesting()?.digest.batches.first?.deliveries.first?.status != .delivered,
+              Date() < deadline {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+
+        let state = monitor.currentStateForTesting()
+        XCTAssertEqual(state?.digest.batches.first?.deliveries.first?.status, .delivered, "A receipt must be kept even if the pass generation changed")
+        XCTAssertTrue(
+            state?.digest.announcedEventIDs.contains("E_1") ?? false,
+            "The covered events must be recorded as announced"
+        )
+    }
+
+    func testDiscoveryFailureStaysVisible() async {
+        let (monitor, fake) = makeMonitor()
+        fake.discoveryError = MonitorTransportError.unauthorized
+
+        await monitor.runPassForTesting()
+
+        let coverage = monitor.currentStateForTesting()?.discoveryCoverage
+        XCTAssertEqual(coverage?.isComplete, false, "A failed discovery pass must show the incomplete banner")
+        let incomplete = Set(coverage?.incompleteOrigins ?? [])
+        for origin in MonitorOrigin.allCases {
+            XCTAssertTrue(incomplete.contains(origin), "\(origin.rawValue) must be reported incomplete")
+        }
+    }
+
+    private func seedDigestBatch(
+        store: PRActivityStore,
+        status: DigestDeliveryStatus,
+        coveredEventIDs: [String] = ["E_1"]
+    ) throws {
+        let account = MonitorAccountKey(endpoint: "", viewerNodeID: viewer.nodeID, login: viewer.login)
+        var state = PRActivityAccountState(account: account, updatedAt: now)
+        state.digest.batches = [
+            DigestBatch(
+                id: "batch-1",
+                createdAt: now,
+                entries: [],
+                coveredEventIDs: coveredEventIDs,
+                coveredActionItemIDs: [],
+                omittedEntryCount: 0,
+                deliveries: [
+                    DigestDelivery(
+                        channel: .macOS,
+                        status: status,
+                        attemptedAt: status == .sending ? now : nil,
+                        completedAt: nil,
+                        receipt: nil,
+                        failureMessage: nil,
+                        targetWorkspace: nil,
+                        targetUserID: nil
+                    )
+                ]
+            )
+        ]
+        try store.persist(state)
+    }
+
     func testExplicitTrackingDoesNotDuplicateAnAlreadyActionableEvent() async {
         let (monitor, fake) = makeMonitor()
         discoveredPR(fake, origins: [.authored])
@@ -1252,6 +1344,7 @@ private final class FakeMonitorAcquisition: MonitorAcquisitionProviding {
         coverage: MonitorDiscoveryCoverage(queries: [], attemptedAt: Date())
     )
     var observationOutcome: MonitorSnapshotOutcome = .empty
+    var discoveryError: Error?
 
     init(viewer: MonitorViewerIdentity) {
         viewerIdentity = viewer
@@ -1263,7 +1356,8 @@ private final class FakeMonitorAcquisition: MonitorAcquisitionProviding {
     }
 
     func fetchMonitorDiscovery(scope: MonitorDiscoveryScope) async throws -> MonitorDiscoveryOutcome {
-        discoveryOutcome
+        if let discoveryError { throw discoveryError }
+        return discoveryOutcome
     }
 
     func fetchMonitorObservations(
@@ -1297,5 +1391,28 @@ private final class FakeDigestChannel: PRActivityDigestChannel {
         if let failure { throw failure }
         deliveredBatches.append(batch)
         return DigestReceipt(channelID: "C_TEST", workspace: "T_TEST", messageTimestamp: "1.0", recipientUserID: "U_TEST")
+    }
+}
+
+@MainActor
+private final class SuspendingDigestChannel: PRActivityDigestChannel {
+    let channel: DigestChannel = .macOS
+    var isAvailable = true
+    var binding: [String: String] = [:]
+    private(set) var attemptCount = 0
+    private var continuation: CheckedContinuation<DigestReceipt, Never>?
+
+    var targetBinding: [String: String] { binding }
+
+    func deliver(_ batch: DigestBatch) async throws -> DigestReceipt {
+        attemptCount += 1
+        return await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func resume(with receipt: DigestReceipt) {
+        continuation?.resume(returning: receipt)
+        continuation = nil
     }
 }

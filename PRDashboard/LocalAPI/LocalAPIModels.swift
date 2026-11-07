@@ -249,8 +249,12 @@ enum LocalAPIJSON {
 enum LocalSocketPath {
     static let environmentVariable = "GHPR_SOCKET_PATH"
 
-    static func defaultPath(uid: uid_t = getuid()) -> String {
-        "/tmp/com.xiaocang.PRDashboard.\(uid).sock"
+    static func defaultDirectory(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
+        home.appendingPathComponent("Library/Application Support/ghpr", isDirectory: true)
+    }
+
+    static func defaultPath(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String {
+        defaultDirectory(home: home).appendingPathComponent("cli.sock").path
     }
 
     static func resolvedPath(environment: [String: String]) -> String {

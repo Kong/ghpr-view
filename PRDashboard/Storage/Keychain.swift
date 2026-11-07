@@ -266,12 +266,24 @@ final class Keychain {
         guard let obfuscatedFileURL else {
             throw KeychainError.invalidData
         }
+        let directory = obfuscatedFileURL.deletingLastPathComponent()
+        let directoryExisted = FileManager.default.fileExists(atPath: directory.path)
         try FileManager.default.createDirectory(
-            at: obfuscatedFileURL.deletingLastPathComponent(),
+            at: directory,
             withIntermediateDirectories: true
         )
+        if !directoryExisted {
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: directory.path
+            )
+        }
         let data = try JSONEncoder().encode(store)
         try data.write(to: obfuscatedFileURL, options: .atomic)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: obfuscatedFileURL.path
+        )
     }
 
     private func obfuscate(_ data: Data) -> String {

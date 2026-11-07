@@ -12,7 +12,7 @@ PRDashboard 在运行期间会监听一个 Unix Domain Socket，外部进程可�
 
 | 来源 | 取值 |
 |------|------|
-| 默认路径 | `/tmp/com.xiaocang.PRDashboard.<uid>.sock`，其中 `<uid>` 为运行 PRDashboard 用户的 `getuid()` |
+| 默认路径 | `~/Library/Application Support/ghpr/cli.sock` |
 | 环境变量覆盖 | `GHPR_SOCKET_PATH`（client 端读取；server 端在启动时使用默认路径，不读取该变量） |
 
 > server 当前不读取 `GHPR_SOCKET_PATH`，始终监听默认路径。该环境变量仅供 client/CLI 指定要连接到的 socket。
@@ -395,13 +395,13 @@ schemaVersion = 2
 ### 7.1 shell（`socat` 或 `nc`）
 
 ```bash
-# 路径基于 uid，按需替换
-SOCKET="/tmp/com.xiaocang.PRDashboard.$(id -u).sock"
+# 默认路径含空格，调用时要加引号
+SOCKET="$HOME/Library/Application Support/ghpr/cli.sock"
 
-printf '{"command":"ping"}\n' | socat - UNIX-CONNECT:$SOCKET
-printf '{"command":"snapshot"}\n' | socat - UNIX-CONNECT:$SOCKET | jq .
+printf '{"command":"ping"}\n' | socat - UNIX-CONNECT:"$SOCKET"
+printf '{"command":"snapshot"}\n' | socat - UNIX-CONNECT:"$SOCKET" | jq .
 printf '{"command":"pr","repository":"example-org/example-repo","number":1234}\n' \
-  | socat - UNIX-CONNECT:$SOCKET | jq .
+  | socat - UNIX-CONNECT:"$SOCKET" | jq .
 ```
 
 注意：BSD `nc` 在写完后不会主动 half-close，可能导致 server 收不到结束标志而永远等下去。优先用 `socat`，或显式让 client 写完 `\n` 后调用 `shutdown(SHUT_WR)`。
@@ -414,7 +414,7 @@ import json, os, socket
 def call(req):
     sock_path = os.environ.get(
         "GHPR_SOCKET_PATH",
-        f"/tmp/com.xiaocang.PRDashboard.{os.getuid()}.sock",
+        os.path.join(os.path.expanduser("~"), "Library", "Application Support", "ghpr", "cli.sock"),
     )
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
         s.connect(sock_path)
@@ -437,12 +437,14 @@ print(call({"command": "pr", "repository": "example-org/example-repo", "number":
 
 ```js
 const net = require("net");
+const os = require("os");
+const nodePath = require("path");
 
 function call(req) {
-  const path = process.env.GHPR_SOCKET_PATH
-    || `/tmp/com.xiaocang.PRDashboard.${process.getuid()}.sock`;
+  const socketPath = process.env.GHPR_SOCKET_PATH
+    || nodePath.join(os.homedir(), "Library", "Application Support", "ghpr", "cli.sock");
   return new Promise((resolve, reject) => {
-    const sock = net.createConnection(path);
+    const sock = net.createConnection(socketPath);
     const buffers = [];
     sock.on("data", (b) => buffers.push(b));
     sock.on("end", () => {

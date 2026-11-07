@@ -26,6 +26,18 @@ final class MenuTracker: ObservableObject {
                 self?.endTracking(menu)
             }
             .store(in: &cancellables)
+
+        notificationCenter.publisher(for: NSApplication.didResignActiveNotification)
+            .sink { [weak self] _ in
+                self?.resetTracking()
+            }
+            .store(in: &cancellables)
+
+        notificationCenter.publisher(for: NSApplication.didHideNotification)
+            .sink { [weak self] _ in
+                self?.resetTracking()
+            }
+            .store(in: &cancellables)
     }
 
     func beginTracking(_ menu: NSMenu) {
@@ -36,6 +48,13 @@ final class MenuTracker: ObservableObject {
     func endTracking(_ menu: NSMenu) {
         trackedMenus.remove(ObjectIdentifier(menu))
         updateTrackingState()
+    }
+
+    private func resetTracking() {
+        trackedMenus.removeAll()
+        if isTracking {
+            isTracking = false
+        }
     }
 
     private func updateTrackingState() {

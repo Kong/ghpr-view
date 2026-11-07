@@ -526,6 +526,7 @@ final class UpdateManager: ObservableObject {
             throw UpdateManagerError.codeSignatureInvalid(stagedStatus)
         }
 
+        // Official builds are ad-hoc signed, so a Team ID requirement would reject them; the download host check is the publisher boundary this build can enforce.
         let validity = SecStaticCodeCheckValidity(stagedStaticCode, [], nil)
         guard validity == errSecSuccess else {
             throw UpdateManagerError.codeSignatureInvalid(validity)

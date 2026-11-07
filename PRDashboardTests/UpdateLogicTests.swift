@@ -33,6 +33,29 @@ final class UpdateLogicTests: XCTestCase {
         XCTAssertEqual(configuration.jiraRefreshInterval, 1800)
     }
 
+    func testSlackVerificationFailurePolicyClearsOnlyInvalidAuth() {
+        XCTAssertEqual(
+            SlackVerificationFailurePolicy.policy(for: SlackClientError.invalidAuth),
+            .clearStoredConnection,
+            "A rejected Slack token must clear the stored connection"
+        )
+        XCTAssertEqual(
+            SlackVerificationFailurePolicy.policy(for: SlackClientError.transportUnavailable("offline")),
+            .keepExistingConnection,
+            "A transport failure must keep the stored Slack connection"
+        )
+        XCTAssertEqual(
+            SlackVerificationFailurePolicy.policy(for: SlackClientError.rateLimited(retryAfter: nil)),
+            .keepExistingConnection,
+            "Rate limiting must keep the stored Slack connection"
+        )
+        XCTAssertEqual(
+            SlackVerificationFailurePolicy.policy(for: NSError(domain: "test", code: 1)),
+            .keepExistingConnection,
+            "An unknown error must keep the stored Slack connection"
+        )
+    }
+
     func testKeychainCachesSensitiveValuesAndClearsCacheOnDelete() throws {
         let service = "com.xiaocang.PRDashboard.Tests.\(UUID().uuidString)"
         let writer = Keychain(serviceForTesting: service)
@@ -132,6 +155,13 @@ final class UpdateLogicTests: XCTestCase {
         let raw = try String(contentsOf: fileURL, encoding: .utf8)
         XCTAssertFalse(raw.contains("debug-github-token"))
         XCTAssertFalse(raw.contains("debug-proxy-password"))
+        let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let permissions = try XCTUnwrap(attributes[.posixPermissions] as? NSNumber)
+        XCTAssertEqual(
+            permissions.uint16Value & 0o777,
+            0o600,
+            "Debug credential files must not be group- or world-readable"
+        )
         XCTAssertEqual(store.loadAuthStateForTesting().accessToken, "debug-github-token")
         XCTAssertEqual(store.loadProxyPasswordForTesting(), "debug-proxy-password")
 
@@ -155,9 +185,11 @@ final class UpdateLogicTests: XCTestCase {
         )
         var persistedState = rejectedState
         var invalidationCount = 0
+        var deleteCount = 0
         let manager = GitHubOAuthManager(
             loadPersistedAuthState: { persistedState },
-            invalidatePersistedAuthCache: { invalidationCount += 1 }
+            invalidatePersistedAuthCache: { invalidationCount += 1 },
+            deletePersistedAuthState: { deleteCount += 1 }
         )
         XCTAssertEqual(manager.authState, rejectedState)
 
@@ -169,7 +201,7 @@ final class UpdateLogicTests: XCTestCase {
 
         manager.handleRejectedToken("rejected-token")
         XCTAssertEqual(manager.authState, replacementState)
-        XCTAssertEqual(invalidationCount, 1)
+        XCTAssertEqual(deleteCount, 0, "A replaced token must stay in the credential store")
     }
 
     @MainActor
@@ -180,15 +212,18 @@ final class UpdateLogicTests: XCTestCase {
             authMethod: .pat
         )
         var invalidationCount = 0
+        var deleteCount = 0
         let manager = GitHubOAuthManager(
             loadPersistedAuthState: { rejectedState },
-            invalidatePersistedAuthCache: { invalidationCount += 1 }
+            invalidatePersistedAuthCache: { invalidationCount += 1 },
+            deletePersistedAuthState: { deleteCount += 1 }
         )
 
         manager.handleRejectedToken("rejected-token")
 
         XCTAssertEqual(manager.authState, .empty)
         XCTAssertEqual(invalidationCount, 2)
+        XCTAssertEqual(deleteCount, 1, "An unchanged rejected token must be removed from the credential store")
     }
 
     @MainActor
@@ -271,6 +306,138 @@ final class UpdateLogicTests: XCTestCase {
             category: .authored
         )
         XCTAssertTrue(pullRequests.isEmpty)
+        withExtendedLifetime(manager) {}
+    }
+
+    @MainActor
+    func testCancelledForegroundRefreshDoesNotRepublishAfterSignOut() async throws {
+        let fileManager = FileManager.default
+        let cacheDirectory = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("com.prdashboard", isDirectory: true)
+        let credentialsURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("ghpr", isDirectory: true)
+            .appendingPathComponent("debug-credentials.json")
+        let defaults = UserDefaults.standard
+        let defaultsKeys = [
+            "PRDashboard.Configuration",
+            "PRDashboard.LastDirectMentionDiscoveryAt",
+            "PRDashboard.LastMentionedRefreshSucceededAt",
+            "PRDashboard.LastAuthoredMentionReferenceCoverageAt",
+            "PRDashboard.LastAuthoredMentionReferenceCoverageUsername",
+        ]
+        let savedDefaults = defaultsKeys.map { ($0, defaults.object(forKey: $0)) }
+        func snapshot(_ url: URL, name: String) throws -> URL? {
+            guard fileManager.fileExists(atPath: url.path) else { return nil }
+            let destination = fileManager.temporaryDirectory
+                .appendingPathComponent("ghpr-f1-\(UUID().uuidString)", isDirectory: true)
+                .appendingPathComponent(name)
+            try fileManager.createDirectory(
+                at: destination.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try fileManager.copyItem(at: url, to: destination)
+            return destination
+        }
+        func restore(_ snapshotURL: URL?, to url: URL) {
+            guard let snapshotURL else {
+                if fileManager.fileExists(atPath: url.path) {
+                    try? fileManager.removeItem(at: url)
+                }
+                return
+            }
+            if fileManager.fileExists(atPath: url.path) {
+                try? fileManager.removeItem(at: url)
+            }
+            do {
+                try fileManager.createDirectory(
+                    at: url.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try fileManager.copyItem(at: snapshotURL, to: url)
+                try? fileManager.removeItem(at: snapshotURL.deletingLastPathComponent())
+            } catch {
+                XCTFail("Failed to restore \(url.path): \(error)")
+            }
+        }
+        let cacheSnapshot = try snapshot(cacheDirectory, name: "com.prdashboard")
+        let credentialSnapshot = try snapshot(credentialsURL, name: "debug-credentials.json")
+        defer {
+            restore(cacheSnapshot, to: cacheDirectory)
+            restore(credentialSnapshot, to: credentialsURL)
+            for (key, value) in savedDefaults {
+                if let value {
+                    defaults.set(value, forKey: key)
+                } else {
+                    defaults.removeObject(forKey: key)
+                }
+            }
+        }
+
+        let emptyIndex = """
+        {
+          "data": {
+            "search": { "nodes": [] },
+            "rateLimit": {
+              "cost": 1,
+              "remaining": 4999,
+              "resetAt": "2026-01-02T01:00:00Z"
+            }
+          }
+        }
+        """.data(using: .utf8)!
+        let session = makeMockGitHubGraphQLSession()
+        MockGitHubGraphQLURLProtocol.reset { request in
+            (Self.httpResponse(for: request, statusCode: 200), emptyIndex)
+        }
+        defer { MockGitHubGraphQLURLProtocol.reset() }
+
+        let provider = BlockingCmuxStatusProvider()
+        defer { provider.release() }
+        let oauthManager = GitHubOAuthManager(
+            loadPersistedAuthState: {
+                AuthState(accessToken: "test-token", username: "tester", authMethod: .pat)
+            },
+            invalidatePersistedAuthCache: {}
+        )
+        let apiClient = GitHubAPIClient(
+            token: "test-token",
+            graphQLEndpoint: "https://example.test/graphql",
+            session: session
+        )
+        let manager = PRManager(
+            apiClient: apiClient,
+            notificationManager: NotificationManager(useSystemNotificationCenter: false),
+            oauthManager: oauthManager,
+            cmuxStatusProvider: provider,
+            loadKeychainSecrets: false
+        )
+        var configuration = manager.configuration
+        configuration.openAtCmuxFirst = true
+        manager.updateConfiguration(configuration)
+        manager.refresh()
+
+        await waitForCondition(timeout: 10) {
+            provider.isEntered
+        }
+        XCTAssertTrue(provider.isEntered, "Refresh should reach the cmux probe before sign-out")
+        oauthManager.signOut()
+        provider.release()
+        await waitForCondition(timeout: 5) {
+            provider.isFinished
+        }
+        for _ in 0..<20 {
+            await Task.yield()
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+
+        XCTAssertFalse(
+            manager.prList.hasUsableData,
+            "A cancelled foreground refresh must not republish PRs after sign-out"
+        )
+        XCTAssertNil(
+            PRCache.shared.load(),
+            "A cancelled foreground refresh must not write the PR cache after sign-out"
+        )
         withExtendedLifetime(manager) {}
     }
 
@@ -700,6 +867,40 @@ final class UpdateLogicTests: XCTestCase {
         XCTAssertEqual(summary.blockingFailureLikeCount, 0)
     }
 
+    func testRerunFailedWorkflowsThrowsWhenEveryRerunFails() async throws {
+        let runs = #"{"total_count":1,"workflow_runs":[{"id":7,"conclusion":"failure"}]}"#
+        func install(rerunStatus: Int) -> URLSession {
+            let session = makeMockGitHubActionsSession()
+            MockGitHubActionsURLProtocol.reset { request in
+                let url = try XCTUnwrap(request.url)
+                let isRerun = url.path.contains("rerun-failed-jobs")
+                let status = isRerun ? rerunStatus : 200
+                let body = isRerun ? Data() : Data(runs.utf8)
+                return (Self.httpResponse(for: request, statusCode: status), body)
+            }
+            return session
+        }
+
+        let failingClient = GitHubAPIClient(token: "token", session: install(rerunStatus: 500))
+        defer { MockGitHubActionsURLProtocol.reset() }
+        do {
+            _ = try await failingClient.rerunFailedWorkflows(owner: "owner", repo: "repo", headSHA: "abc")
+            XCTFail("A total rerun failure must throw instead of returning zero")
+        } catch let error as APIError {
+            guard case .unknown(let message) = error else {
+                return XCTFail("Expected APIError.unknown, got \(error)")
+            }
+            XCTAssertTrue(message.contains("run 7: HTTP 500"), "The thrown error should name the failed run")
+        } catch {
+            XCTFail("Expected APIError.unknown, got \(error)")
+        }
+
+        let succeedingClient = GitHubAPIClient(token: "token", session: install(rerunStatus: 201))
+        let result = try await succeedingClient.rerunFailedWorkflows(owner: "owner", repo: "repo", headSHA: "abc")
+        XCTAssertEqual(result.rerunCount, 1, "A 201 rerun is one success")
+        XCTAssertEqual(result.failures, [], "A successful rerun has no failures")
+    }
+
     @MainActor
     func testPRLinkOpenerWithoutCmuxFirstOpensDefaultAndSkipsCmuxRouter() async {
         var configuration = Configuration.default
@@ -787,14 +988,14 @@ final class UpdateLogicTests: XCTestCase {
                 """
                 {
                   "name": "PRDashboard-1.2.2.zip",
-                  "browser_download_url": "https://example.com/PRDashboard-1.2.2.zip",
+                  "browser_download_url": "https://github.com/xiaocang/ghpr-view/releases/download/v1.2.2/PRDashboard-1.2.2.zip",
                   "size": 42
                 }
                 """,
                 """
                 {
                   "name": "checksums.txt",
-                  "browser_download_url": "https://example.com/checksums.txt",
+                  "browser_download_url": "https://github.com/xiaocang/ghpr-view/releases/download/v1.2.2/checksums.txt",
                   "size": 12
                 }
                 """
@@ -843,6 +1044,24 @@ final class UpdateLogicTests: XCTestCase {
 
         XCTAssertThrowsError(try duplicateAssetRelease.preferredZipAsset()) { error in
             XCTAssertEqual(error as? ReleaseAssetSelectionError, .multipleZipAssets)
+        }
+    }
+
+    func testReleaseInfoRejectsUntrustedZipHost() throws {
+        let release = try makeRelease(
+            assets: [
+                """
+                {
+                  "name": "PRDashboard-1.2.2.zip",
+                  "browser_download_url": "https://example.com/PRDashboard-1.2.2.zip",
+                  "size": 42
+                }
+                """
+            ]
+        )
+
+        XCTAssertThrowsError(try release.preferredZipAsset()) { error in
+            XCTAssertEqual(error as? ReleaseAssetSelectionError, .untrustedDownloadURL)
         }
     }
 
@@ -2865,7 +3084,8 @@ final class UpdateLogicTests: XCTestCase {
 
     @MainActor
     func testMenuTrackerRemainsActiveAcrossNestedSubmenuTracking() {
-        let tracker = MenuTracker(notificationCenter: NotificationCenter())
+        let center = NotificationCenter()
+        let tracker = MenuTracker(notificationCenter: center)
         let rootMenu = NSMenu(title: "PR Actions")
         let skillMenu = NSMenu(title: "Run Skill")
 
@@ -2884,6 +3104,16 @@ final class UpdateLogicTests: XCTestCase {
             tracker.isTracking,
             "Tracking must end after the complete context-menu hierarchy closes."
         )
+
+        tracker.beginTracking(rootMenu)
+        center.post(name: NSApplication.didResignActiveNotification, object: nil)
+        XCTAssertFalse(tracker.isTracking, "Resigning the app must not leave menu tracking stuck.")
+
+        let hiddenCenter = NotificationCenter()
+        let hiddenTracker = MenuTracker(notificationCenter: hiddenCenter)
+        hiddenTracker.beginTracking(rootMenu)
+        hiddenCenter.post(name: NSApplication.didHideNotification, object: nil)
+        XCTAssertFalse(hiddenTracker.isTracking, "Hiding the app must not leave menu tracking stuck.")
     }
 
     @MainActor
@@ -3037,8 +3267,9 @@ final class UpdateLogicTests: XCTestCase {
         let oauthManager = GitHubOAuthManager(loadSavedAuth: false)
         let prManager = PRManager(
             apiClient: GitHubAPIClient(token: ""),
-            notificationManager: NotificationManager(),
-            oauthManager: oauthManager
+            notificationManager: NotificationManager(useSystemNotificationCenter: false),
+            oauthManager: oauthManager,
+            loadKeychainSecrets: false
         )
         let viewModel = PRListViewModel(
             prManager: prManager,
@@ -3095,8 +3326,9 @@ final class UpdateLogicTests: XCTestCase {
         let oauthManager = GitHubOAuthManager(loadSavedAuth: false)
         let prManager = PRManager(
             apiClient: GitHubAPIClient(token: ""),
-            notificationManager: NotificationManager(),
-            oauthManager: oauthManager
+            notificationManager: NotificationManager(useSystemNotificationCenter: false),
+            oauthManager: oauthManager,
+            loadKeychainSecrets: false
         )
         let viewModel = PRListViewModel(
             prManager: prManager,
@@ -4013,7 +4245,7 @@ final class UpdateLogicTests: XCTestCase {
               "assets": [
                 {
                   "name": "PRDashboard-\(version).zip",
-                  "browser_download_url": "https://example.com/PRDashboard-\(version).zip",
+                  "browser_download_url": "https://github.com/xiaocang/ghpr-view/releases/download/v\(version)/PRDashboard-\(version).zip",
                   "size": 42
                 }
               ]
@@ -4434,6 +4666,40 @@ private final class ControlledCmuxBrowserRouter: CmuxBrowserRouting, @unchecked 
 
     func release() {
         releaseSemaphore.signal()
+    }
+}
+
+private final class BlockingCmuxStatusProvider: CmuxPRStatusProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    private let releaseProbe = DispatchSemaphore(value: 0)
+    private var didEnter = false
+    private var didFinish = false
+
+    var isEntered: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return didEnter
+    }
+
+    var isFinished: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return didFinish
+    }
+
+    func openPRIdentities() -> Set<GitHubPRIdentity> {
+        lock.lock()
+        didEnter = true
+        lock.unlock()
+        releaseProbe.wait()
+        lock.lock()
+        didFinish = true
+        lock.unlock()
+        return []
+    }
+
+    func release() {
+        releaseProbe.signal()
     }
 }
 

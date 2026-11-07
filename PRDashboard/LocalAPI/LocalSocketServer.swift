@@ -7,12 +7,15 @@ private let localSocketLogger = Logger(subsystem: "com.prdashboard", category: "
 
 enum LocalSocketServerError: LocalizedError {
     case alreadyRunning(String)
+    case refusingForeignSocket(String)
     case posix(String)
 
     var errorDescription: String? {
         switch self {
         case .alreadyRunning(let path):
             return "Another PRDashboard local socket server is already listening at \(path)."
+        case .refusingForeignSocket(let path):
+            return "Refusing to replace \(path) because it is not a socket owned by this user."
         case .posix(let message):
             return message
         }
@@ -29,6 +32,9 @@ final class LocalSocketServer {
 
     private var listenFD: Int32 = -1
     private var acceptSource: DispatchSourceRead?
+    #if DEBUG
+    private var lastStartError: Error?
+    #endif
 
     init(
         socketPath: String = LocalSocketPath.defaultPath(),
@@ -60,6 +66,7 @@ final class LocalSocketServer {
         guard listenFD < 0 else { return }
 
         do {
+            try prepareSocketDirectory()
             try removeStaleSocketIfNeeded()
 
             let fd = socket(AF_UNIX, SOCK_STREAM, 0)
@@ -109,6 +116,9 @@ final class LocalSocketServer {
                 throw error
             }
         } catch {
+            #if DEBUG
+            lastStartError = error
+            #endif
             localSocketLogger.error("Failed to start local CLI socket: \(error.localizedDescription, privacy: .public)")
         }
     }
@@ -144,8 +154,27 @@ final class LocalSocketServer {
         }
     }
 
+    private func prepareSocketDirectory() throws {
+        let parent = (socketPath as NSString).deletingLastPathComponent
+        try FileManager.default.createDirectory(atPath: parent, withIntermediateDirectories: true)
+        if parent == LocalSocketPath.defaultDirectory().path {
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: parent)
+        }
+    }
+
     private func removeStaleSocketIfNeeded() throws {
-        guard FileManager.default.fileExists(atPath: socketPath) else { return }
+        var info = stat()
+        if lstat(socketPath, &info) != 0 {
+            if errno == ENOENT { return }
+            throw LocalSocketServerError.posix(
+                POSIXErrorFormatter.message(function: "lstat")
+            )
+        }
+
+        let isSocket = (info.st_mode & S_IFMT) == S_IFSOCK
+        if info.st_uid != getuid() || !isSocket {
+            throw LocalSocketServerError.refusingForeignSocket(socketPath)
+        }
 
         if socketAcceptsConnections(at: socketPath) {
             throw LocalSocketServerError.alreadyRunning(socketPath)
@@ -157,6 +186,12 @@ final class LocalSocketServer {
             )
         }
     }
+
+    #if DEBUG
+    func lastStartErrorForTesting() -> Error? {
+        queue.sync { lastStartError }
+    }
+    #endif
 
     private func socketAcceptsConnections(at path: String) -> Bool {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)

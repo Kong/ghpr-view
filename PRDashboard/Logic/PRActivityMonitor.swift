@@ -1539,11 +1539,27 @@ final class PRActivityMonitor: ObservableObject {
 
         let now = clock()
 
-        if let discovery = try? await acquisition.fetchMonitorDiscovery(scope: .all) {
+        do {
+            let discovery = try await acquisition.fetchMonitorDiscovery(scope: .all)
             guard passGeneration == generation else { return }
             applyDiscovery(discovery, to: &candidate, now: now)
-        } else {
-            candidate.discoveryCoverage = nil
+        } catch {
+            guard passGeneration == generation else { return }
+            candidate.discoveryCoverage = MonitorDiscoveryCoverage(
+                queries: MonitorOrigin.allCases.map { origin in
+                    MonitorDiscoveryCoverage.QueryResult(
+                        origin: origin,
+                        isComplete: false,
+                        incompleteReason: MonitorIncompleteReason(
+                            kind: .unavailable,
+                            statusCode: nil,
+                            detail: error.localizedDescription
+                        ),
+                        referenceCount: 0
+                    )
+                },
+                attemptedAt: now
+            )
         }
 
         let targets = observationTargets(from: candidate.monitoredPRs, now: now)
@@ -1639,6 +1655,7 @@ final class PRActivityMonitor: ObservableObject {
                 state = PRActivityAccountState(account: account, updatedAt: clock())
             }
             storeErrorMessage = nil
+            reconcileAbandonedSendingDeliveries()
             return true
         } catch {
             storeErrorMessage = describe(error)
@@ -1649,6 +1666,26 @@ final class PRActivityMonitor: ObservableObject {
             logger.error("Monitor history unreadable: \(error.localizedDescription, privacy: .public)")
             return false
         }
+    }
+
+    /// A crash between the `.sending` mark and the saved receipt must not leave a
+    /// delivery that startup would either resend or ignore forever.
+    private func reconcileAbandonedSendingDeliveries() {
+        guard var candidate = state else { return }
+        let now = clock()
+        var changed = false
+        for batchIndex in candidate.digest.batches.indices {
+            for deliveryIndex in candidate.digest.batches[batchIndex].deliveries.indices {
+                guard candidate.digest.batches[batchIndex].deliveries[deliveryIndex].status == .sending else { continue }
+                candidate.digest.batches[batchIndex].deliveries[deliveryIndex].status = .unknown
+                candidate.digest.batches[batchIndex].deliveries[deliveryIndex].failureMessage = "Delivery was interrupted before a receipt was saved."
+                candidate.digest.batches[batchIndex].deliveries[deliveryIndex].completedAt = now
+                changed = true
+            }
+        }
+        guard changed else { return }
+        candidate.updatedAt = now
+        _ = commit(candidate)
     }
 
     // MARK: Applying results
@@ -1990,11 +2027,13 @@ final class PRActivityMonitor: ObservableObject {
             }
 
             mark(delivery: pendingIndex, in: batchID, status: .sending, message: nil, receipt: nil)
-            guard passGeneration == generation else { return }
+            if passGeneration != generation {
+                mark(delivery: pendingIndex, in: batchID, status: .pending, message: nil, receipt: nil)
+                return
+            }
 
             do {
                 let receipt = try await channel.deliver(sendable)
-                guard passGeneration == generation else { return }
                 let resolvedDuringSend = undeliverableEventIDs(in: state ?? current)
                 if sendable.coveredEventIDs.allSatisfy({ resolvedDuringSend.contains($0) }) {
                     channel.withdrawDeliveredDigest(id: batchID)
@@ -2002,7 +2041,12 @@ final class PRActivityMonitor: ObservableObject {
                     continue
                 }
                 mark(delivery: pendingIndex, in: batchID, status: .delivered, message: nil, receipt: receipt)
-                recordAnnouncedEvents(sendable.coveredEventIDs, batchID: batchID)
+                if state != nil {
+                    recordAnnouncedEvents(sendable.coveredEventIDs, batchID: batchID)
+                }
+                if passGeneration != generation {
+                    return
+                }
             } catch let error as SlackClientError {
                 switch error {
                 case .rateLimited(let retryAfter):
