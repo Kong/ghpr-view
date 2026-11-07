@@ -15,11 +15,18 @@ typealias PRReviewCommandRunner = @Sendable (PRReviewCommandRequest) async throw
 private final class PRReviewProcessController: @unchecked Sendable {
     private let lock = NSLock()
     private var process: Process?
+    private var pid: pid_t?
+    private var terminationRequested = false
 
     func install(_ process: Process) {
         lock.lock()
         self.process = process
+        pid = process.processIdentifier
+        let shouldTerminate = terminationRequested
         lock.unlock()
+        if shouldTerminate {
+            terminate()
+        }
     }
 
     func clear() {
@@ -30,15 +37,19 @@ private final class PRReviewProcessController: @unchecked Sendable {
 
     func terminate() {
         lock.lock()
-        let process = self.process
+        terminationRequested = true
+        let pid = self.pid
         lock.unlock()
-        guard let process, process.isRunning else { return }
-        let pid = process.processIdentifier
+        guard let pid, pid > 0 else { return }
         Darwin.kill(-pid, SIGTERM)
-        usleep(250_000)
-        if process.isRunning {
-            Darwin.kill(-pid, SIGKILL)
-        }
+        Darwin.kill(pid, SIGKILL)
+        Darwin.kill(-pid, SIGKILL)
+    }
+
+    var terminationWasRequested: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return terminationRequested
     }
 }
 
@@ -76,45 +87,60 @@ enum PRReviewCommand {
         _ request: PRReviewCommandRequest,
         controller: PRReviewProcessController
     ) async throws -> ExtensionCommandResult {
-        try await Task.detached(priority: .utility) {
-            let fileManager = FileManager.default
-            let captureRoot = fileManager.temporaryDirectory
-                .appendingPathComponent("ghpr-review-command-\(UUID().uuidString)", isDirectory: true)
-            try fileManager.createDirectory(at: captureRoot, withIntermediateDirectories: true)
-            defer { try? fileManager.removeItem(at: captureRoot) }
-
-            let stdoutURL = captureRoot.appendingPathComponent("stdout")
-            let stderrURL = captureRoot.appendingPathComponent("stderr")
-            fileManager.createFile(atPath: stdoutURL.path, contents: nil)
-            fileManager.createFile(atPath: stderrURL.path, contents: nil)
-            let stdoutHandle = try FileHandle(forWritingTo: stdoutURL)
-            let stderrHandle = try FileHandle(forWritingTo: stderrURL)
-            defer {
-                try? stdoutHandle.close()
-                try? stderrHandle.close()
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                do {
+                    continuation.resume(returning: try blockingRun(request, controller: controller))
+                } catch {
+                    continuation.resume(throwing: error)
+                }
             }
+        }
+    }
 
-            let process = Process()
-            process.executableURL = request.executable
-            process.arguments = request.arguments
-            process.currentDirectoryURL = request.currentDirectoryURL
-            process.standardOutput = stdoutHandle
-            process.standardError = stderrHandle
-            try process.run()
-            _ = Darwin.setpgid(process.processIdentifier, process.processIdentifier)
-            controller.install(process)
-            defer { controller.clear() }
-            process.waitUntilExit()
-            try stdoutHandle.synchronize()
-            try stderrHandle.synchronize()
-            try Task.checkCancellation()
+    private static func blockingRun(
+        _ request: PRReviewCommandRequest,
+        controller: PRReviewProcessController
+    ) throws -> ExtensionCommandResult {
+        let fileManager = FileManager.default
+        let captureRoot = fileManager.temporaryDirectory
+            .appendingPathComponent("ghpr-review-command-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: captureRoot, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: captureRoot) }
 
-            return ExtensionCommandResult(
-                exitCode: process.terminationStatus,
-                stdout: try capturedString(at: stdoutURL, limit: request.maximumStdoutBytes),
-                stderr: try capturedString(at: stderrURL, limit: request.maximumStderrBytes)
-            )
-        }.value
+        let stdoutURL = captureRoot.appendingPathComponent("stdout")
+        let stderrURL = captureRoot.appendingPathComponent("stderr")
+        fileManager.createFile(atPath: stdoutURL.path, contents: nil)
+        fileManager.createFile(atPath: stderrURL.path, contents: nil)
+        let stdoutHandle = try FileHandle(forWritingTo: stdoutURL)
+        let stderrHandle = try FileHandle(forWritingTo: stderrURL)
+        defer {
+            try? stdoutHandle.close()
+            try? stderrHandle.close()
+        }
+
+        let process = Process()
+        process.executableURL = request.executable
+        process.arguments = request.arguments
+        process.currentDirectoryURL = request.currentDirectoryURL
+        process.standardOutput = stdoutHandle
+        process.standardError = stderrHandle
+        try process.run()
+        _ = Darwin.setpgid(process.processIdentifier, process.processIdentifier)
+        controller.install(process)
+        defer { controller.clear() }
+        process.waitUntilExit()
+        if controller.terminationWasRequested {
+            throw CancellationError()
+        }
+        try stdoutHandle.synchronize()
+        try stderrHandle.synchronize()
+
+        return ExtensionCommandResult(
+            exitCode: process.terminationStatus,
+            stdout: try capturedString(at: stdoutURL, limit: request.maximumStdoutBytes),
+            stderr: try capturedString(at: stderrURL, limit: request.maximumStderrBytes)
+        )
     }
 
     private static func capturedString(at url: URL, limit: Int) throws -> String {

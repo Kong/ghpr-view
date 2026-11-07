@@ -29,7 +29,7 @@ final class JiraSetupTests: XCTestCase {
             connectionState: .configured,
             savedServerURL: "https://example.atlassian.net/",
             savedEmail: "user@example.com",
-            savedTokenAvailable: true,
+            savedAPIToken: "saved-token",
             testConnection: { _, _, _ in
                 JiraConnectionTestResult(displayName: nil, emailAddress: nil)
             },
@@ -50,7 +50,7 @@ final class JiraSetupTests: XCTestCase {
             connectionState: .unauthorized,
             savedServerURL: "https://example.atlassian.net",
             savedEmail: "user@example.com",
-            savedTokenAvailable: true,
+            savedAPIToken: "saved-token",
             testConnection: { _, _, _ in
                 JiraConnectionTestResult(displayName: nil, emailAddress: nil)
             },
@@ -72,7 +72,7 @@ final class JiraSetupTests: XCTestCase {
             context: JiraSetupContext(source: .jiraIssue(key: "ACME-123")),
             savedServerURL: "",
             savedEmail: "",
-            savedTokenAvailable: false,
+            savedAPIToken: "",
             testConnection: { _, _, _ in JiraConnectionTestResult(displayName: "User", emailAddress: nil) },
             commit: { _, _, _ in commits += 1 },
             openExternalURL: { opened.append($0) },
@@ -90,5 +90,35 @@ final class JiraSetupTests: XCTestCase {
         coordinator.finish()
         XCTAssertEqual(commits, 1)
         XCTAssertEqual(opened, [URL(string: "https://example.atlassian.net/browse/ACME-123")!])
+    }
+
+    @MainActor
+    func testBlankTokenFieldUsesSavedTokenWithoutRevealingIt() async {
+        var testedToken: String?
+        let coordinator = JiraSetupCoordinator(
+            context: JiraSetupContext(source: .settings),
+            connectionState: .configured,
+            savedServerURL: "https://example.atlassian.net",
+            savedEmail: "user@example.com",
+            savedAPIToken: "saved-token",
+            testConnection: { _, _, token in
+                testedToken = token
+                return JiraConnectionTestResult(displayName: "User", emailAddress: "user@example.com")
+            },
+            commit: { _, _, _ in },
+            openExternalURL: { _ in },
+            dismiss: {}
+        )
+
+        XCTAssertTrue(coordinator.savedTokenAvailable, "A non-empty saved token should be treated as present")
+        XCTAssertTrue(coordinator.apiToken.isEmpty)
+        XCTAssertTrue(coordinator.canTest, "A blank field should still be testable when a token is saved")
+        coordinator.test()
+        for _ in 0..<20 where coordinator.isTesting {
+            await Task.yield()
+        }
+
+        XCTAssertEqual(testedToken, "saved-token", "The saved token should be sent without being copied into the field")
+        XCTAssertTrue(coordinator.apiToken.isEmpty, "Testing must not reveal the saved token in the field")
     }
 }

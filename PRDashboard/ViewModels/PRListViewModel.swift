@@ -894,8 +894,11 @@ final class PRListViewModel: ObservableObject {
     func rerunFailedCI(_ pr: PullRequest) {
         Task {
             do {
-                let count = try await prManager.rerunFailedCI(for: pr)
-                logger.info("Re-triggered \(count) failed workflow(s) for PR #\(pr.number)")
+                let result = try await prManager.rerunFailedCI(for: pr)
+                if !result.failures.isEmpty {
+                    logger.error("\(result.failures.joined(separator: "; "))")
+                }
+                logger.info("Re-triggered \(result.rerunCount) failed workflow(s) for PR #\(pr.number)")
             } catch {
                 logger.error("Failed to rerun CI for PR #\(pr.number): \(error.localizedDescription)")
             }

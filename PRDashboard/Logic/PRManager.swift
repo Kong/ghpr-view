@@ -222,6 +222,7 @@ final class PRManager: PRManagerType, ObservableObject {
     private var queuedRefresh = false
     private var consecutiveTransientFailures = 0
     private var backgroundRefreshGeneration = 0
+    private var foregroundRefreshGeneration = 0
     private var lastDirectMentionDiscoveryAt: Date?
     private var lastMentionedRefreshStartedAt: Date?
     private var lastMentionedRefreshSucceededAt: Date?
@@ -475,6 +476,9 @@ final class PRManager: PRManagerType, ObservableObject {
         apiClient.updateToken(authState.accessToken ?? "")
 
         if authState.isAuthenticated {
+            foregroundRefreshGeneration += 1
+            activeRefreshTask = nil
+            queuedRefresh = false
             cancelRecoveryRetry(resetFailureCount: true)
             enablePolling(true, refreshTrigger: .auth, refreshIfNeeded: false)
             requestRefresh(trigger: .auth)
@@ -665,6 +669,7 @@ final class PRManager: PRManagerType, ObservableObject {
     }
 
     private func startRefresh(username: String, trigger: RefreshTrigger) {
+        let refreshGeneration = foregroundRefreshGeneration
         let hadUsableData = prList.hasUsableData
         let visiblePRs = prList.allPRs
         refreshState = .loading
@@ -678,17 +683,25 @@ final class PRManager: PRManagerType, ObservableObject {
         activeRefreshTask = Task { @MainActor [weak self] in
             guard let self else { return }
             defer {
-                self.activeRefreshTask = nil
-                if self.queuedRefresh {
-                    self.queuedRefresh = false
-                    self.requestRefresh(trigger: .queued)
+                if self.foregroundRefreshGeneration == refreshGeneration {
+                    self.activeRefreshTask = nil
+                    if self.queuedRefresh {
+                        self.queuedRefresh = false
+                        self.requestRefresh(trigger: .queued)
+                    }
                 }
             }
 
             do {
                 let onProgress: @Sendable ([PullRequest], [PullRequest], GitHubAPIClient.IncrementalStage) async -> Void = { [weak self] openPRs, mergedPRs, stage in
                     guard let self else { return }
-                    await self.applyIncrementalProgress(openPRs: openPRs, mergedPRs: mergedPRs, stage: stage)
+                    await self.applyIncrementalProgress(
+                        openPRs: openPRs,
+                        mergedPRs: mergedPRs,
+                        stage: stage,
+                        generation: refreshGeneration,
+                        username: username
+                    )
                 }
 
                 let result = try await self.apiClient.fetchIncremental(
@@ -696,6 +709,12 @@ final class PRManager: PRManagerType, ObservableObject {
                     existingPRs: visiblePRs,
                     onProgress: onProgress
                 )
+                guard self.canPublishForegroundRefresh(
+                    generation: refreshGeneration,
+                    username: username
+                ) else {
+                    return
+                }
                 let mentionedRefreshPublishVersion = self.mentionedRefreshPublishVersion
                 let unfilteredOpenPRs = result.openPRs
                 let unfilteredMergedPRs = result.mergedPRs
@@ -708,9 +727,21 @@ final class PRManager: PRManagerType, ObservableObject {
                     self.prList.directMentionPullRequests
                 )
                 mentionedPRs = await self.apiClient.refreshMentionedCIStatuses(mentionedPRs)
+                guard self.canPublishForegroundRefresh(
+                    generation: refreshGeneration,
+                    username: username
+                ) else {
+                    return
+                }
                 directMentionPRs = await self.apiClient.refreshMentionedCIStatuses(
                     directMentionPRs
                 )
+                guard self.canPublishForegroundRefresh(
+                    generation: refreshGeneration,
+                    username: username
+                ) else {
+                    return
+                }
                 mentionedPRs = self.filterByConfiguration(mentionedPRs)
                 directMentionPRs = self.filterByConfiguration(directMentionPRs)
 
@@ -728,11 +759,23 @@ final class PRManager: PRManagerType, ObservableObject {
                     let jiraCache = try await apiClient.fetchJiraTickets(
                         for: prs + directMentionPRs + mergedPRs
                     )
+                    guard self.canPublishForegroundRefresh(
+                        generation: refreshGeneration,
+                        username: username
+                    ) else {
+                        return
+                    }
                     GitHubAPIClient.applyJiraTickets(to: &prs, cache: jiraCache)
                     GitHubAPIClient.applyJiraTickets(to: &directMentionPRs, cache: jiraCache)
                     GitHubAPIClient.applyJiraTickets(to: &mergedPRs, cache: jiraCache)
                 } catch {
                     logger.error("Failed to enrich Jira tickets: \(error.localizedDescription)")
+                }
+                guard self.canPublishForegroundRefresh(
+                    generation: refreshGeneration,
+                    username: username
+                ) else {
+                    return
                 }
 
                 await enrichJiraMetadata(
@@ -741,14 +784,32 @@ final class PRManager: PRManagerType, ObservableObject {
                     directMentionPRs: &directMentionPRs,
                     mergedPRs: &mergedPRs
                 )
+                guard self.canPublishForegroundRefresh(
+                    generation: refreshGeneration,
+                    username: username
+                ) else {
+                    return
+                }
 
                 await refreshBaseUpdateStatuses(prs: &prs)
+                guard self.canPublishForegroundRefresh(
+                    generation: refreshGeneration,
+                    username: username
+                ) else {
+                    return
+                }
                 await refreshCmuxOpenStatuses(
                     openPRs: &prs,
                     mentionedPRs: &mentionedPRs,
                     directMentionPRs: &directMentionPRs,
                     mergedPRs: &mergedPRs
                 )
+                guard self.canPublishForegroundRefresh(
+                    generation: refreshGeneration,
+                    username: username
+                ) else {
+                    return
+                }
                 if self.mentionedRefreshPublishVersion != mentionedRefreshPublishVersion {
                     mentionedPRs = self.filterByConfiguration(
                         self.prList.mentionedPullRequests
@@ -775,6 +836,12 @@ final class PRManager: PRManagerType, ObservableObject {
                     isLoading: false,
                     error: nil
                 )
+                guard self.canPublishForegroundRefresh(
+                    generation: refreshGeneration,
+                    username: username
+                ) else {
+                    return
+                }
                 self.prList = newPRList
                 self.applyReadState(to: &self.prList)
                 self.refreshState = .idle
@@ -841,8 +908,13 @@ final class PRManager: PRManagerType, ObservableObject {
     private func applyIncrementalProgress(
         openPRs: [PullRequest],
         mergedPRs: [PullRequest],
-        stage: GitHubAPIClient.IncrementalStage
+        stage: GitHubAPIClient.IncrementalStage,
+        generation: Int,
+        username: String
     ) {
+        guard canPublishForegroundRefresh(generation: generation, username: username) else {
+            return
+        }
         let filteredOpen = filterByConfiguration(openPRs)
         let filteredMerged = filterByConfiguration(mergedPRs)
         let projection = projectDirectMentions(
@@ -1452,6 +1524,7 @@ final class PRManager: PRManagerType, ObservableObject {
     }
 
     private func cancelRefreshWork(reason: String) {
+        foregroundRefreshGeneration += 1
         activeRefreshTask?.cancel()
         activeRefreshTask = nil
         queuedRefresh = false
@@ -1462,6 +1535,13 @@ final class PRManager: PRManagerType, ObservableObject {
         cancelRecoveryRetry(resetFailureCount: true)
         refreshState = .idle
         logger.info("Cancelled refresh work: reason=\(reason, privacy: .public)")
+    }
+
+    private func canPublishForegroundRefresh(generation: Int, username: String) -> Bool {
+        foregroundRefreshGeneration == generation &&
+            oauthManager.authState.isAuthenticated &&
+            oauthManager.authState.username == username &&
+            !Task.isCancelled
     }
 
     private func invalidateBackgroundRefreshWork(reason: String) {
@@ -1475,7 +1555,6 @@ final class PRManager: PRManagerType, ObservableObject {
         mentionedRefreshTask = nil
         logger.debug("Invalidated background refresh work: reason=\(reason, privacy: .public)")
     }
-
     private func cancelRecoveryRetry(resetFailureCount: Bool = false) {
         recoveryRetryTask?.cancel()
         recoveryRetryTask = nil
@@ -1589,21 +1668,21 @@ final class PRManager: PRManagerType, ObservableObject {
         (isOnExpensiveNetwork && configuration.pausePollingOnExpensiveNetwork)
     }
 
-    func rerunFailedCI(for pr: PullRequest) async throws -> Int {
+    func rerunFailedCI(for pr: PullRequest) async throws -> GitHubAPIClient.WorkflowRerunResult {
         guard let headSHA = pr.headCommitOid else {
             throw APIError.unknown(String(localized: "No head commit SHA available for PR #\(pr.number)"))
         }
-        let count = try await apiClient.rerunFailedWorkflows(
+        let result = try await apiClient.rerunFailedWorkflows(
             owner: pr.repositoryOwner, repo: pr.repositoryName, headSHA: headSHA
         )
-        if count > 0 {
+        if result.rerunCount > 0 {
             // Delay then refresh just this PR's CI status instead of all PRs
             Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
                 await self?.refreshSinglePRCI(for: pr)
             }
         }
-        return count
+        return result
     }
 
     func updateBranchWithRebase(for pr: PullRequest) async throws {

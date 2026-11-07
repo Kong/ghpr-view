@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 
 struct ExtensionCommandResult: Sendable, Equatable {
@@ -15,56 +16,157 @@ typealias ExtensionCommandRunner = @Sendable (
     URL?
 ) async throws -> ExtensionCommandResult
 
+private final class ExtensionCommandProcessController: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    private var pid: pid_t?
+    private var terminationRequested = false
+
+    func install(_ process: Process) {
+        lock.lock()
+        self.process = process
+        pid = process.processIdentifier
+        let shouldTerminate = terminationRequested
+        lock.unlock()
+        if shouldTerminate {
+            terminate()
+        }
+    }
+
+    func terminate() {
+        lock.lock()
+        terminationRequested = true
+        let pid = self.pid
+        lock.unlock()
+        guard let pid, pid > 0 else { return }
+        Darwin.kill(-pid, SIGTERM)
+        Darwin.kill(pid, SIGKILL)
+        Darwin.kill(-pid, SIGKILL)
+    }
+
+    var terminationWasRequested: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return terminationRequested
+    }
+}
+
 enum ExtensionCommand {
     static func run(
         executable: URL,
         arguments: [String],
-        currentDirectoryURL: URL? = nil
+        currentDirectoryURL: URL? = nil,
+        timeoutSeconds: TimeInterval = 30
     ) async throws -> ExtensionCommandResult {
-        try await Task.detached(priority: .utility) {
-            let fileManager = FileManager.default
-            let captureRoot = fileManager.temporaryDirectory
-                .appendingPathComponent("ghpr-command-\(UUID().uuidString)", isDirectory: true)
-            try fileManager.createDirectory(at: captureRoot, withIntermediateDirectories: true)
-            defer { try? fileManager.removeItem(at: captureRoot) }
-
-            let stdoutURL = captureRoot.appendingPathComponent("stdout")
-            let stderrURL = captureRoot.appendingPathComponent("stderr")
-            fileManager.createFile(atPath: stdoutURL.path, contents: nil)
-            fileManager.createFile(atPath: stderrURL.path, contents: nil)
-            let stdoutHandle = try FileHandle(forWritingTo: stdoutURL)
-            let stderrHandle = try FileHandle(forWritingTo: stderrURL)
-            defer {
-                try? stdoutHandle.close()
-                try? stderrHandle.close()
-            }
-
-            let process = Process()
-            process.executableURL = executable
-            process.arguments = arguments
-            process.currentDirectoryURL = currentDirectoryURL
-            process.standardOutput = stdoutHandle
-            process.standardError = stderrHandle
-            try process.run()
-            process.waitUntilExit()
-            try stdoutHandle.synchronize()
-            try stderrHandle.synchronize()
-
-            let maximumCaptureBytes = 2 * 1_024 * 1_024
-            func capturedString(at url: URL) throws -> String {
-                let data = try Data(contentsOf: url, options: [.mappedIfSafe])
-                guard data.count <= maximumCaptureBytes else {
-                    throw GitHubSubjectResolverError.commandOutputTooLarge
+        let controller = ExtensionCommandProcessController()
+        let gate = CommandResumeGate()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let timeout = DispatchWorkItem {
+                    guard gate.claim() else { return }
+                    controller.terminate()
+                    DispatchQueue.global().async {
+                        continuation.resume(throwing: GitHubSubjectResolverError.commandTimedOut)
+                    }
                 }
-                return String(decoding: data, as: UTF8.self)
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                gate.timeout = timeout
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeoutSeconds, execute: timeout)
+                DispatchQueue.global(qos: .utility).async {
+                    do {
+                        let result = try blockingRun(
+                            executable: executable,
+                            arguments: arguments,
+                            currentDirectoryURL: currentDirectoryURL,
+                            controller: controller
+                        )
+                        timeout.cancel()
+                        guard gate.claim() else { return }
+                        DispatchQueue.global().async {
+                            continuation.resume(returning: result)
+                        }
+                    } catch {
+                        timeout.cancel()
+                        guard gate.claim() else { return }
+                        DispatchQueue.global().async {
+                            continuation.resume(throwing: error)
+                        }
+                    }
+                }
             }
-            return try ExtensionCommandResult(
-                exitCode: process.terminationStatus,
-                stdout: capturedString(at: stdoutURL),
-                stderr: capturedString(at: stderrURL)
-            )
-        }.value
+        } onCancel: {
+            gate.timeout?.cancel()
+            controller.terminate()
+        }
+    }
+
+private final class CommandResumeGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var finished = false
+    var timeout: DispatchWorkItem?
+    func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if finished { return false }
+        finished = true
+        return true
+    }
+}
+
+    private static func blockingRun(
+        executable: URL,
+        arguments: [String],
+        currentDirectoryURL: URL?,
+        controller: ExtensionCommandProcessController
+    ) throws -> ExtensionCommandResult {
+        let fileManager = FileManager.default
+        let captureRoot = fileManager.temporaryDirectory
+            .appendingPathComponent("ghpr-command-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: captureRoot, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: captureRoot) }
+
+        let stdoutURL = captureRoot.appendingPathComponent("stdout")
+        let stderrURL = captureRoot.appendingPathComponent("stderr")
+        fileManager.createFile(atPath: stdoutURL.path, contents: nil)
+        fileManager.createFile(atPath: stderrURL.path, contents: nil)
+        let stdoutHandle = try FileHandle(forWritingTo: stdoutURL)
+        let stderrHandle = try FileHandle(forWritingTo: stderrURL)
+        defer {
+            try? stdoutHandle.close()
+            try? stderrHandle.close()
+        }
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = arguments
+        process.currentDirectoryURL = currentDirectoryURL
+        process.standardOutput = stdoutHandle
+        process.standardError = stderrHandle
+        try process.run()
+        let pid = process.processIdentifier
+        _ = Darwin.setpgid(pid, pid)
+        controller.install(process)
+        var status: Int32 = 0
+        while waitpid(pid, &status, 0) < 0 && errno == EINTR {}
+        if controller.terminationWasRequested {
+            throw CancellationError()
+        }
+        try stdoutHandle.synchronize()
+        try stderrHandle.synchronize()
+
+        let maximumCaptureBytes = 2 * 1_024 * 1_024
+        func capturedString(at url: URL) throws -> String {
+            let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+            guard data.count <= maximumCaptureBytes else {
+                throw GitHubSubjectResolverError.commandOutputTooLarge
+            }
+            return String(decoding: data, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let exitCode: Int32 = (status & 0x7f) == 0 ? (status >> 8) & 0xff : status & 0x7f
+        return try ExtensionCommandResult(
+            exitCode: exitCode,
+            stdout: capturedString(at: stdoutURL),
+            stderr: capturedString(at: stderrURL)
+        )
     }
 }
 

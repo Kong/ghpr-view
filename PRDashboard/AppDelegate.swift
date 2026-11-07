@@ -151,7 +151,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                       let prManager = self.prManager else {
                     throw BrowserBridgeActionError.pullRequestUnavailable
                 }
-                return try await prManager.rerunFailedCI(for: pr)
+                return try await prManager.rerunFailedCI(for: pr).rerunCount
             },
             commentShortcut: { [weak self] request in
                 guard let prManager = self?.prManager else {
@@ -391,7 +391,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             connectionState: viewModel.jiraConnectionState,
             savedServerURL: initialServerURL,
             savedEmail: config.jiraEmail,
-            savedTokenAvailable: !Keychain.loadJiraAPIToken().isEmpty,
+            savedAPIToken: Keychain.loadJiraAPIToken(),
             testConnection: { serverURL, email, token in
                 try await jiraClient.testConnection(serverURL: serverURL, email: email, apiToken: token)
             },
@@ -421,6 +421,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.setContentSize(NSSize(width: 480, height: 360))
         window.center()
         window.isReleasedWhenClosed = false
+        window.delegate = self
         jiraSetupWindow = window
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -650,6 +651,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 extension AppDelegate: NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         let window = notification.object as? NSWindow
+        if window === jiraSetupWindow {
+            jiraSetupWindow = nil
+            jiraSetupCoordinator = nil
+            // The red button must not reuse the coordinator.
+            return
+        }
         if window === activityWindow {
             activityWindow = nil
         } else if window === settingsWindow {

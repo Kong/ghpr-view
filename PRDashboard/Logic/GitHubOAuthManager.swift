@@ -33,15 +33,17 @@ class GitHubOAuthManager: NSObject, ObservableObject {
     private var pollingTask: Task<Void, Never>?
     private let loadPersistedAuthState: () -> AuthState
     private let invalidatePersistedAuthCache: () -> Void
-
+    private let deletePersistedAuthState: () -> Void
 
     init(
         loadSavedAuth: Bool = true,
         loadPersistedAuthState: @escaping () -> AuthState = { KeychainHelper.loadAuthState() },
-        invalidatePersistedAuthCache: @escaping () -> Void = { KeychainHelper.invalidateAuthStateCache() }
+        invalidatePersistedAuthCache: @escaping () -> Void = { KeychainHelper.invalidateAuthStateCache() },
+        deletePersistedAuthState: @escaping () -> Void = { KeychainHelper.deleteAuthState() }
     ) {
         self.loadPersistedAuthState = loadPersistedAuthState
         self.invalidatePersistedAuthCache = invalidatePersistedAuthCache
+        self.deletePersistedAuthState = deletePersistedAuthState
         super.init()
         if loadSavedAuth {
             self.loadSavedAuth()
@@ -206,6 +208,7 @@ class GitHubOAuthManager: NSObject, ObservableObject {
         // Do not retain the rejected value loaded from persistent Keychain.
         if refreshedState.accessToken == rejectedToken {
             invalidatePersistedAuthCache()
+            deletePersistedAuthState()
         }
         authState = .empty
         authError = APIError.unauthorized

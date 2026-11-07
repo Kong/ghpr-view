@@ -5407,9 +5407,15 @@ final class GitHubAPIClient: ObservableObject {
 
     // MARK: - Rerun Failed CI
 
+    struct WorkflowRerunResult: Equatable, Sendable {
+        var rerunCount: Int
+        var failures: [String]
+    }
+
     /// Re-run all failed workflow runs for a PR's head commit.
-    /// Returns the number of workflow runs that were re-triggered.
-    func rerunFailedWorkflows(owner: String, repo: String, headSHA: String) async throws -> Int {
+    /// A run that fails to rerun is reported in `failures`. When every failed run
+    /// fails to rerun, this throws instead of reporting zero successes.
+    func rerunFailedWorkflows(owner: String, repo: String, headSHA: String) async throws -> WorkflowRerunResult {
         // 1. Fetch workflow runs for this commit
         let runsURL = URL(string: "https://api.github.com/repos/\(owner)/\(repo)/actions/runs?head_sha=\(headSHA)")!
         var runsRequest = URLRequest(url: runsURL)
@@ -5448,11 +5454,12 @@ final class GitHubAPIClient: ObservableObject {
 
         if failedRuns.isEmpty {
             logger.info("No failed workflow runs found for SHA \(headSHA)")
-            return 0
+            return WorkflowRerunResult(rerunCount: 0, failures: [])
         }
 
         // 3. Rerun failed jobs for each failed workflow run
         var rerunCount = 0
+        var failures: [String] = []
         for run in failedRuns {
             guard let runId = run["id"] as? Int else { continue }
 
@@ -5473,16 +5480,21 @@ final class GitHubAPIClient: ObservableObject {
                         reportUnauthorized(rejectedToken: rerunRequestToken)
                         throw APIError.unauthorized
                     }
+                    failures.append("run \(runId): HTTP \(rerunHttp.statusCode)")
                     logger.warning("Failed to rerun workflow run \(runId): HTTP \(rerunHttp.statusCode)")
                 }
             } catch APIError.unauthorized {
                 throw APIError.unauthorized
             } catch {
+                failures.append("run \(runId): \(error.localizedDescription)")
                 logger.warning("Network error rerunning workflow run \(runId): \(error.localizedDescription)")
             }
         }
 
-        return rerunCount
+        if !failedRuns.isEmpty, rerunCount == 0, !failures.isEmpty {
+            throw APIError.unknown(failures.joined(separator: "; "))
+        }
+        return WorkflowRerunResult(rerunCount: rerunCount, failures: failures)
     }
 
     // MARK: - Jira Ticket Extraction

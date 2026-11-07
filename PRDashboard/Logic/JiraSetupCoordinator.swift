@@ -46,9 +46,10 @@ final class JiraSetupCoordinator: ObservableObject {
 
     let context: JiraSetupContext
     let connectionState: JiraConnectionState
-    let savedTokenAvailable: Bool
+    var savedTokenAvailable: Bool { !savedAPIToken.isEmpty }
     let savedServerURL: String
     let savedEmail: String
+    private let savedAPIToken: String
 
     @Published var serverURL: String
     @Published var email: String
@@ -78,7 +79,7 @@ final class JiraSetupCoordinator: ObservableObject {
         connectionState: JiraConnectionState = .notConfigured,
         savedServerURL: String,
         savedEmail: String,
-        savedTokenAvailable: Bool,
+        savedAPIToken: String,
         testConnection: @escaping TestConnection,
         commit: @escaping CommitCredentials,
         openExternalURL: @escaping URLHandler,
@@ -91,7 +92,7 @@ final class JiraSetupCoordinator: ObservableObject {
         self.connectionState = connectionState
         self.savedServerURL = savedServerURL
         self.savedEmail = savedEmail
-        self.savedTokenAvailable = savedTokenAvailable
+        self.savedAPIToken = savedAPIToken
         self.testConnection = testConnection
         self.commitCredentials = commit
         self.openExternalURL = openExternalURL
@@ -126,7 +127,9 @@ final class JiraSetupCoordinator: ObservableObject {
     }
 
     var canTest: Bool {
-        !isTesting && !normalizedCredentials.serverURL.isEmpty && !normalizedCredentials.email.isEmpty && !apiToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let typedToken = apiToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tokenPresent = !typedToken.isEmpty || savedTokenAvailable
+        return !isTesting && !normalizedCredentials.serverURL.isEmpty && !normalizedCredentials.email.isEmpty && tokenPresent
     }
 
     var canFinish: Bool {
@@ -142,10 +145,12 @@ final class JiraSetupCoordinator: ObservableObject {
     }
 
     private var normalizedCredentials: CredentialsTuple {
-        CredentialsTuple(
+        let typedToken = apiToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedToken = typedToken.isEmpty && savedTokenAvailable ? savedAPIToken : typedToken
+        return CredentialsTuple(
             serverURL: normalizedDraftServerURL ?? serverURL.trimmingCharacters(in: .whitespacesAndNewlines),
             email: email.trimmingCharacters(in: .whitespacesAndNewlines),
-            apiToken: apiToken.trimmingCharacters(in: .whitespacesAndNewlines)
+            apiToken: resolvedToken
         )
     }
 
@@ -208,7 +213,6 @@ final class JiraSetupCoordinator: ObservableObject {
         let tuple = normalizedCredentials
         serverURL = tuple.serverURL
         email = tuple.email
-        apiToken = tuple.apiToken
         testTask?.cancel()
         isTesting = true
         testState = .testing

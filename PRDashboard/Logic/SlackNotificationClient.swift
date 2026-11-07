@@ -73,6 +73,16 @@ enum SlackClientError: LocalizedError, Equatable {
     }
 }
 
+enum SlackVerificationFailurePolicy: Equatable {
+    case keepExistingConnection
+    case clearStoredConnection
+
+    static func policy(for error: Error) -> SlackVerificationFailurePolicy {
+        if case SlackClientError.invalidAuth = error { return .clearStoredConnection }
+        return .keepExistingConnection
+    }
+}
+
 private final class SlackProxyAuthDelegate: NSObject, URLSessionDelegate {
     var credential: URLCredential?
 

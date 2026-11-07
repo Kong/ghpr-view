@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import XCTest
 @testable import PRDashboard
 
@@ -992,4 +993,135 @@ final class GitHubSurfaceTests: XCTestCase {
             "A missing GitHub-native surface must count as a placement needing attention, not read as Ready"
         )
     }
+
+    nonisolated func testExtensionCommandTimeoutKillsSleep() async throws {
+        let argument = "3"
+        let started = Date()
+        let task = Task.detached {
+            try await ExtensionCommand.run(
+                executable: URL(fileURLWithPath: "/bin/sleep"),
+                arguments: [argument],
+                timeoutSeconds: 1
+            )
+        }
+        do {
+            let result = try await task.value
+            XCTFail("A timed out command must not return success, exit \(result.exitCode)")
+        } catch GitHubSubjectResolverError.commandTimedOut {
+            XCTAssertLessThan(
+                Date().timeIntervalSince(started),
+                5,
+                "The timeout must finish well before the sleep duration"
+            )
+        } catch {
+            XCTFail("Expected commandTimedOut, got \(error)")
+        }
+        if let pid = sleepPID(argument: argument) {
+            forceKill(pid)
+            XCTFail("The timed out sleep child was still alive")
+        }
+    }
+
+    func testExtensionCommandCancelKillsSleep() async throws {
+        let argument = "8"
+        let task = Task.detached {
+            try await ExtensionCommand.run(
+                executable: URL(fileURLWithPath: "/bin/sleep"),
+                arguments: [argument],
+                timeoutSeconds: 30
+            )
+        }
+        let pid = try await waitForSleepPID(argument)
+        defer { forceKill(pid) }
+        task.cancel()
+
+        do {
+            let result = try await task.value
+            XCTFail("A cancelled command must not return success, exit \(result.exitCode)")
+        } catch {
+            // The parent cancellation must stop the child.
+        }
+
+        try await waitUntilProcessGone(pid)
+        XCTAssertNotEqual(kill(pid, 0), 0, "The cancelled sleep child must be gone")
+    }
+
+    func testReviewCommandCancelKillsSleep() async throws {
+        let argument = "8"
+        let task = Task.detached {
+            try await PRReviewCommand.run(
+                PRReviewCommandRequest(
+                    executable: URL(fileURLWithPath: "/bin/sleep"),
+                    arguments: [argument],
+                    currentDirectoryURL: nil,
+                    timeoutSeconds: 30,
+                    maximumStdoutBytes: 1024,
+                    maximumStderrBytes: 1024
+                )
+            )
+        }
+        let pid = try await waitForSleepPID(argument)
+        defer { forceKill(pid) }
+        task.cancel()
+
+        do {
+            let result = try await task.value
+            XCTFail("A cancelled review command must not return success, exit \(result.exitCode)")
+        } catch {
+            // Cancellation before waitUntilExit returns must still kill the child.
+        }
+
+        try await waitUntilProcessGone(pid)
+        XCTAssertNotEqual(kill(pid, 0), 0, "The cancelled review sleep child must be gone")
+    }
+
+    private func uniqueSleepArgument() -> String {
+        String(45 + Int.random(in: 0..<60))
+    }
+
+    private func waitForSleepPID(_ argument: String) async throws -> pid_t {
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            if let pid = sleepPID(argument: argument) {
+                return pid
+            }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTFail("sleep \(argument) did not start")
+        throw GitHubSubjectResolverError.commandFailed("sleep did not start")
+    }
+
+    private func waitUntilProcessGone(_ pid: pid_t) async throws {
+        let deadline = Date().addingTimeInterval(2)
+        while kill(pid, 0) == 0, Date() < deadline {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+
+    private func forceKill(_ pid: pid_t) {
+        if kill(pid, 0) == 0 {
+            kill(pid, SIGKILL)
+        }
+    }
+
+    private func sleepPID(argument: String) -> pid_t? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = ["-axo", "pid=,command="]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return nil }
+        let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+        let needle = "sleep \(argument)"
+        for line in output.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.contains(needle) else { continue }
+            guard let pidText = trimmed.split(separator: " ").first, let pid = pid_t(pidText) else { continue }
+            return pid
+        }
+        return nil
+    }
 }
+
