@@ -626,6 +626,43 @@ final class UpdateLogicTests: XCTestCase {
         XCTAssertTrue(rejectedTokens.values.isEmpty)
     }
 
+
+    func testGraphQLAndRESTQuotaPoolsRemainIndependent() async throws {
+        let session = makeMockGitHubGraphQLSession()
+        let graphQLHeaders = [
+            "X-RateLimit-Limit": "5000",
+            "X-RateLimit-Remaining": "1234",
+            "X-RateLimit-Reset": "1893456000"
+        ]
+        MockGitHubGraphQLURLProtocol.reset { request in
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+                                           headerFields: graphQLHeaders)!
+            return (response, Data(#"{"data":{"viewer":{"login":"tester"}}}"#.utf8))
+        }
+        defer { MockGitHubGraphQLURLProtocol.reset() }
+
+        let client = GitHubAPIClient(token: "token", graphQLEndpoint: "https://example.test/graphql", session: session)
+        _ = try await client.monitorExecuteGraphQL(query: "query { viewer { login } }", operation: "QuotaPoolTest")
+        await MainActor.run {
+            XCTAssertEqual(client.rateLimitInfo.remaining, 1234)
+            XCTAssertTrue(client.rateLimitInfo.isAvailable)
+            let restResponse = HTTPURLResponse(
+                url: URL(string: "https://example.test/api/v3/rate_limit")!, statusCode: 200,
+                httpVersion: nil,
+                headerFields: [
+                    "X-RateLimit-Limit": "60",
+                    "X-RateLimit-Remaining": "42",
+                    "X-RateLimit-Reset": "1893456060"
+                ]
+            )!
+            client.monitorRecordRateLimit(from: restResponse)
+        }
+        await MainActor.run {
+            XCTAssertEqual(client.rateLimitInfo.remaining, 1234, "REST headers must not overwrite GraphQL quota")
+            XCTAssertEqual(client.restRateLimitInfo.remaining, 42, "REST quota remains independently observable")
+            XCTAssertEqual(client.restRateLimitInfo.limit, 60)
+        }
+    }
     func testConfigurationDecodesOpenAtCmuxFirst() throws {
         let json = """
         {

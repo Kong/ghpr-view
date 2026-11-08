@@ -1,10 +1,38 @@
 import AppKit
+import Combine
+import SwiftUI
 import XCTest
 @testable import PRDashboard
 
 @MainActor
 final class PanelInteractionCoordinatorTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+    func testCategorySelectionLimitsKeyboardRowsAndAllRestoresEveryRole() {
+        let authored = pr(1)
+        let review = pr(2, category: .reviewRequest)
+        let mention = pr(3)
+        let coordinator = PanelInteractionCoordinator()
+        coordinator.receive(snapshot: snapshot([authored, review], mentions: [mention], directMentions: [mention]), reason: .userIntent)
+
+        coordinator.selectCategory(.reviews)
+        coordinator.moveSelection(1)
+        XCTAssertEqual(coordinator.selectedRowID?.section, .reviewRequests)
+
+        coordinator.selectCategory(.mentions)
+        XCTAssertNil(coordinator.selectedRowID, "A row hidden by a category switch must lose keyboard selection")
+        coordinator.moveSelection(1)
+        XCTAssertEqual(coordinator.selectedRowID?.section, .mentioned)
+        coordinator.moveSelection(1)
+        XCTAssertEqual(coordinator.selectedRowID?.section, .directMentions)
+
+        coordinator.selectCategory(.myPRs)
+        coordinator.moveSelection(1)
+        XCTAssertEqual(coordinator.selectedRowID?.section, .authored)
+        coordinator.selectCategory(.all)
+        coordinator.moveSelection(1)
+        XCTAssertEqual(coordinator.selectedRowID?.section, .reviewRequests)
+    }
 
     func testEveryLockDefersUserIntentAndOnlyLatestSnapshotCommits() {
         for firstLock in [InteractionLock.pointer, .menu, .scroll, .composition] {
@@ -642,19 +670,27 @@ final class PanelInteractionCoordinatorTests: XCTestCase {
         coordinator.displayedStructure?.displayedRowIDs(for: .authored).map(\.prID) ?? []
     }
 
-    private func snapshot(_ prs: [PullRequest], pins: Set<String> = []) -> PRPanelSnapshot {
-        let list = PRList(lastUpdated: now, pullRequests: prs, isLoading: false, error: nil)
+    private func snapshot(
+        _ prs: [PullRequest],
+        pins: Set<String> = [],
+        mentions: [PullRequest] = [],
+        directMentions: [PullRequest] = []
+    ) -> PRPanelSnapshot {
+        var list = PRList(lastUpdated: now, pullRequests: prs, isLoading: false, error: nil)
+        list.mentionedPullRequests = mentions
+        list.directMentionPullRequests = directMentions
         let projection = PRPanelProjection.make(prList: list, searchText: "", selections: [:],
                                                 pinnedIdentifiers: pins, configuration: .default, now: now)
         return PRPanelSnapshot(prList: list, projection: projection, rateLimitInfo: .empty,
-                               configuration: .default, jiraConnectionState: .configured,
+                               restRateLimitInfo: .empty, configuration: .default, jiraConnectionState: .configured,
                                pinnedIdentifiers: pins, activeFacetSelections: [:], activityReminderCount: 0,
                                openingPRIDs: [], updatingBranchPRIDs: [], loadingHoverDetailPRIDs: [],
                                facetChips: [], facetOptions: projection.facetOptions, labelSuggestions: [],
                                savedViews: [], now: now, actionError: nil)
     }
 
-    private func pr(_ id: Int, title: String? = nil, age: TimeInterval = 0, body: String? = nil) -> PullRequest {
+    private func pr(_ id: Int, title: String? = nil, age: TimeInterval = 0, body: String? = nil,
+                    category: PRCategory = .authored) -> PullRequest {
         let date = now.addingTimeInterval(-age)
         return PullRequest(
             id: id, number: id, title: title ?? "PR \(id)", author: "example", authorAvatarURL: nil,
@@ -662,10 +698,141 @@ final class PanelInteractionCoordinatorTests: XCTestCase {
             url: URL(string: "https://github.com/example/project/pull/\(id)")!,
             state: .open, isDraft: false, createdAt: date, updatedAt: date, mergedAt: nil,
             body: body, conversationComments: [], lastCommitAt: date, headCommitOid: "sha-\(id)",
-            reviewThreads: [], category: .authored, hasBaseConflicts: false, ciStatus: .success,
+            reviewThreads: [], category: category, hasBaseConflicts: false, ciStatus: .success,
             checkSuccessCount: 1, checkFailureCount: 0, checkPendingCount: 0, githubCIState: "success",
             myLastReviewState: nil, myLastReviewAt: nil, reviewRequestedAt: nil, myThreadsAllResolved: false,
             approvalCount: 0, changesRequestedCount: 0, ciExtendedInfo: nil
         )
+    }
+}
+@MainActor
+final class HoverTooltipLifecycleTests: XCTestCase {
+    func testDestroyingVisibleTooltipHostClearsItAndNextHostCanShow() async throws {
+        let presenter = HoverTooltipPresenter()
+        let first = makeHost(presenter: presenter)
+        defer { first.close() }
+        try first.hover()
+        await expectTooltip(presenter, text: "Draft explanation")
+
+        weak var releasedHost = first.host
+        autoreleasepool { first.close() }
+        await expectTooltip(presenter, text: nil)
+        XCTAssertNil(releasedHost, "The hovered NSHostingView must be released, exercising graph teardown")
+
+        let second = makeHost(presenter: presenter)
+        defer { second.close() }
+        try second.hover()
+        await expectTooltip(presenter, text: "Draft explanation")
+    }
+
+    func testDestroyingPendingTooltipHostPreventsLatePresentation() async throws {
+        let presenter = HoverTooltipPresenter()
+        let fixture = makeHost(presenter: presenter, delayNanoseconds: 50_000_000)
+        defer { fixture.close() }
+        let lateTooltip = expectation(description: "Destroyed host must never publish its pending tooltip")
+        lateTooltip.isInverted = true
+        let observation = presenter.$tooltip.sink { if $0 != nil { lateTooltip.fulfill() } }
+        defer { observation.cancel() }
+
+        try fixture.hover()
+        weak var releasedHost = fixture.host
+        autoreleasepool { fixture.close() }
+        await fulfillment(of: [lateTooltip], timeout: 0.25)
+        XCTAssertNil(releasedHost, "Pending hover work must not retain the destroyed hosting view")
+    }
+
+    func testPanelDismissalCancelsPendingHoverAndAllowsReentry() async throws {
+        let presenter = HoverTooltipPresenter()
+        let fixture = makeHost(presenter: presenter, delayNanoseconds: 50_000_000)
+        defer { fixture.close() }
+        let lateTooltip = expectation(description: "Panel dismissal must cancel hover even when its view is retained")
+        lateTooltip.isInverted = true
+        let observation = presenter.$tooltip.sink { if $0 != nil { lateTooltip.fulfill() } }
+        try fixture.hover()
+        presenter.dismissAll()
+        await fulfillment(of: [lateTooltip], timeout: 0.25)
+        observation.cancel()
+
+        try fixture.hover()
+        await expectTooltip(presenter, text: "Draft explanation")
+        presenter.dismissAll()
+        XCTAssertNil(presenter.tooltip, "Dismissing the panel must also clear an already visible tooltip")
+    }
+
+    func testOldHostTeardownDoesNotHideAnotherOwnersTooltip() async throws {
+        let presenter = HoverTooltipPresenter()
+        let fixture = makeHost(presenter: presenter)
+        defer { fixture.close() }
+        try fixture.hover()
+        await expectTooltip(presenter, text: "Draft explanation")
+
+        let nextOwner = UUID()
+        autoreleasepool { fixture.close() }
+        presenter.show(ownerID: nextOwner, text: "Next row", point: .zero)
+        let drained = expectation(description: "Deferred teardown has run")
+        DispatchQueue.main.async { drained.fulfill() }
+        await fulfillment(of: [drained], timeout: 1)
+        XCTAssertEqual(presenter.tooltip?.ownerID, nextOwner, "Old teardown must not dismiss the new row's tooltip")
+        presenter.dismissAll()
+    }
+
+    private func expectTooltip(_ presenter: HoverTooltipPresenter, text: String?) async {
+        let changed = expectation(description: "Tooltip becomes \(text ?? "hidden")")
+        let observation = presenter.$tooltip.filter { $0?.text == text }.prefix(1).sink { _ in changed.fulfill() }
+        await fulfillment(of: [changed], timeout: 2)
+        observation.cancel()
+        XCTAssertEqual(presenter.tooltip?.text, text, "Tooltip presentation must match the current hover lifecycle")
+    }
+
+    private func makeHost(presenter: HoverTooltipPresenter, delayNanoseconds: UInt64 = 1_000_000) -> TooltipHost {
+        let root = Text("Draft")
+            .frame(width: 180, height: 44)
+            .delayedHoverTooltip("Draft explanation", delayNanoseconds: delayNanoseconds)
+            .allowsHitTesting(false)
+            .environment(\.hoverTooltipPresenter, presenter)
+            .coordinateSpace(name: HoverTooltipCoordinateSpace.name)
+            .overlay { HoverTooltipOverlay(presenter: presenter) }
+        return TooltipHost(root: AnyView(root))
+    }
+
+    @MainActor
+    private final class TooltipHost {
+        let window: NSWindow
+        var host: NSHostingView<AnyView>?
+
+        init(root: AnyView) {
+            window = NSWindow(contentRect: CGRect(x: -10000, y: -10000, width: 180, height: 44),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            host = NSHostingView(rootView: root)
+            window.contentView = host
+            window.orderFront(nil)
+            host?.layoutSubtreeIfNeeded()
+        }
+
+        func hover() throws {
+            let host = try XCTUnwrap(host, "Tooltip host must exist before hover")
+            host.layoutSubtreeIfNeeded()
+            let tracker = try XCTUnwrap(findTracker(in: host), "The real tooltip tracking view must be mounted")
+            let point = tracker.convert(CGPoint(x: tracker.bounds.midX, y: tracker.bounds.midY), to: nil)
+            let event = try XCTUnwrap(NSEvent.mouseEvent(with: .mouseMoved, location: point, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 0, pressure: 0), "A native hover event is required")
+            tracker.mouseMoved(with: event)
+        }
+
+        func close() {
+            window.contentView = nil
+            host = nil
+            window.close()
+        }
+
+        private func findTracker(in view: NSView) -> NSView? {
+            if String(describing: type(of: view)) == "HoverTooltipTrackingView" { return view }
+            for child in view.subviews {
+                if let tracker = findTracker(in: child) { return tracker }
+            }
+            return nil
+        }
     }
 }

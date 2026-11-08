@@ -38,6 +38,9 @@ final class PanelMenuCapture {
 final class PanelInteractionCoordinator: ObservableObject {
     @Published private(set) var isPresented = false
     @Published private(set) var isWindowActive = false
+    @Published private(set) var selectedCategory: PRPanelCategory = .all
+    @Published private(set) var categoryRevealRevision: UInt64 = 0
+    @Published private(set) var categoryRevealTarget: PanelFocusTarget?
     @Published var selectedRowID: PRPanelRowID?
     @Published private(set) var expandedSections = Set(PRSectionID.allCases)
     private(set) var locks: Set<InteractionLock> = []
@@ -201,7 +204,8 @@ final class PanelInteractionCoordinator: ObservableObject {
         guard !pointerInsideList || pendingUserIntent || !isPresented else { return }
         let previous = visibleRows(in: displayedStructure)
         let expanded = pendingExpandedSections ?? expandedSections
-        let nextRows = PRSectionID.allCases.filter { expanded.contains($0) }.flatMap { next.displayedRowIDs(for: $0) }
+        let nextRows = selectedCategory.sections.filter { expanded.contains($0) }
+            .flatMap { next.displayedRowIDs(for: $0) }
         for (id, target) in removedRowFallbacks {
             if case let .row(targetID) = target, !nextRows.contains(targetID) {
                 removedRowFallbacks[id] = fallback(for: targetID, previous: previous, available: nextRows)
@@ -346,6 +350,34 @@ final class PanelInteractionCoordinator: ObservableObject {
         return frame.minY - viewport.minY - scrollAnchorOffset
     }
 
+
+    func selectCategory(_ category: PRPanelCategory) {
+        guard selectedCategory != category else { return }
+        selectedCategory = category
+        let nextRows = visibleRows(in: displayedStructure)
+        if let selectedRowID, !nextRows.contains(selectedRowID) {
+            self.selectedRowID = nil
+            focusTarget = nil
+        }
+        if case let .row(anchor)? = scrollAnchor, !nextRows.contains(anchor) {
+            scrollAnchor = nil
+        }
+        let sections = category.sections
+        let targetSection = sections.first { displayedStructure?.displayedRowIDs(for: $0).isEmpty == false }
+            ?? sections.first
+        if let targetSection {
+            let target = PanelFocusTarget.section(targetSection)
+            categoryRevealTarget = target
+            scrollAnchor = target
+        } else {
+            categoryRevealTarget = nil
+            scrollAnchor = nil
+        }
+        removedRowFallbacks.removeAll()
+        pendingAnchorRestoration = nil
+        categoryRevealRevision &+= 1
+        commitRevision &+= 1
+    }
     func toggleSection(_ section: PRSectionID) {
         var expanded = desiredExpandedSections
         if expanded.remove(section) == nil {
@@ -443,7 +475,8 @@ final class PanelInteractionCoordinator: ObservableObject {
 
     private func visibleRows(in projection: PRPanelProjection?) -> [PRPanelRowID] {
         guard let projection else { return [] }
-        return PRSectionID.allCases.filter { expandedSections.contains($0) }.flatMap { projection.displayedRowIDs(for: $0) }
+        return selectedCategory.sections.filter { expandedSections.contains($0) }
+            .flatMap { projection.displayedRowIDs(for: $0) }
     }
 
     private func fallback(for id: PRPanelRowID, previous: [PRPanelRowID], available: [PRPanelRowID]) -> PanelFocusTarget {

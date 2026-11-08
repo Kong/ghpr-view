@@ -16,6 +16,30 @@ enum PRSectionID: Hashable, CaseIterable {
     }
 }
 
+enum PRPanelCategory: String, CaseIterable, Identifiable {
+    case all, myPRs, reviews, mentions
+
+    var id: String { rawValue }
+
+    var title: LocalizedStringKey {
+        switch self {
+        case .all: return "All"
+        case .myPRs: return "My PRs"
+        case .reviews: return "Reviews"
+        case .mentions: return "Mentions"
+        }
+    }
+
+    var sections: [PRSectionID] {
+        switch self {
+        case .all: return PRSectionID.allCases
+        case .myPRs: return [.authored]
+        case .reviews: return [.reviewRequests]
+        case .mentions: return [.mentioned, .directMentions]
+        }
+    }
+}
+
 struct PRPanelRowID: Hashable {
     let section: PRSectionID
     let prID: Int
@@ -54,6 +78,10 @@ struct PRPanelProjection {
 
     func displayedRowIDs(for section: PRSectionID) -> [PRPanelRowID] {
         rowIDsBySection[section] ?? []
+    }
+
+    func displayedRowIDs(for category: PRPanelCategory) -> [PRPanelRowID] {
+        category.sections.flatMap { displayedRowIDs(for: $0) }
     }
 
     func pr(for id: PRPanelRowID) -> PullRequest? { rowsByID[id] }
@@ -197,6 +225,7 @@ struct PRPanelSnapshot {
     var prList: PRList
     var projection: PRPanelProjection
     var rateLimitInfo: RateLimitInfo
+    var restRateLimitInfo: RateLimitInfo
     var configuration: Configuration
     var jiraConnectionState: JiraConnectionState
     var pinnedIdentifiers: Set<String>

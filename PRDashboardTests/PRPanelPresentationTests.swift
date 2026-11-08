@@ -4,6 +4,36 @@ import XCTest
 final class PRPanelPresentationTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
 
+
+    func testCategoryScopesKeepExistingRoleSectionsAndMergedHistoryInAll() {
+        let authored = makePR(1)
+        let review = makePR(2, category: .reviewRequest)
+        let mention = makePR(3)
+        let merged = makePR(4, mergedAt: now)
+        var list = makeList([authored, review])
+        list.mentionedPullRequests = [mention]
+        list.directMentionPullRequests = [mention]
+        list.mergedPullRequests = [merged]
+        let projection = project(list)
+
+        XCTAssertEqual(projection.displayedRowIDs(for: .all).map(\.prID), [1, 2, 3, 3, 4])
+        XCTAssertEqual(projection.displayedRowIDs(for: .myPRs).map(\.section), [.authored])
+        XCTAssertEqual(projection.displayedRowIDs(for: .reviews).map(\.section), [.reviewRequests])
+        XCTAssertEqual(projection.displayedRowIDs(for: .mentions).map(\.section), [.mentioned, .directMentions])
+        XCTAssertEqual(PRPanelCategory.allCases, [.all, .myPRs, .reviews, .mentions])
+    }
+
+    func testUnknownQuotaDoesNotPretendToBeKnownOrBlockInitialHeadroom() {
+        let unknown = RateLimitInfo.empty
+        XCTAssertFalse(unknown.isAvailable)
+        XCTAssertFalse(unknown.isLow)
+        XCTAssertTrue(unknown.hasHeadroomForMentions)
+        XCTAssertTrue(unknown.hasHeadroomForDetails)
+
+        let rest = RateLimitInfo(limit: 5_000, remaining: 4_000, resetDate: now)
+        let graphQL = RateLimitInfo(limit: 5_000, remaining: 2_000, resetDate: now)
+        XCTAssertNotEqual(rest, graphQL, "Independent API pools retain their own quota values")
+    }
     func testScopedQueriesAndCombinedFacetsPreserveMatchingIDs() {
         var passing = makePR(1)
         passing.approvalCount = 2
@@ -116,7 +146,7 @@ final class PRPanelPresentationTests: XCTestCase {
                                        pinnedIdentifiers: [], configuration: .default, now: $0)
             }
             return PRPanelSnapshot(
-                prList: list, projection: projection, rateLimitInfo: .empty,
+                prList: list, projection: projection, rateLimitInfo: .empty, restRateLimitInfo: .empty,
                 configuration: .default, jiraConnectionState: .configured,
                 pinnedIdentifiers: [], activeFacetSelections: [:], activityReminderCount: 0,
                 openingPRIDs: [], updatingBranchPRIDs: [], loadingHoverDetailPRIDs: [],

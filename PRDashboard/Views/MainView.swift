@@ -102,6 +102,7 @@ struct MainView: View {
             prList: viewModel.prList,
             projection: projection,
             rateLimitInfo: viewModel.rateLimitInfo,
+            restRateLimitInfo: viewModel.restRateLimitInfo,
             configuration: viewModel.configuration,
             jiraConnectionState: viewModel.jiraConnectionState,
             pinnedIdentifiers: viewModel.pinnedPRIdentifiers,

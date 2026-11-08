@@ -875,6 +875,7 @@ private final class UIUXFixtureModel: ObservableObject {
         snapshot = PRPanelSnapshot(
             prList: list, projection: projection,
             rateLimitInfo: RateLimitInfo(limit: 5000, remaining: 4500, resetDate: UIUXFixtures.now.addingTimeInterval(1800)),
+            restRateLimitInfo: RateLimitInfo(limit: 5000, remaining: 4900, resetDate: UIUXFixtures.now.addingTimeInterval(2400)),
             configuration: UIUXFixtures.configuration, jiraConnectionState: .configured,
             pinnedIdentifiers: pinned, activeFacetSelections: [:], activityReminderCount: 1,
             openingPRIDs: [], updatingBranchPRIDs: [], loadingHoverDetailPRIDs: [],
@@ -905,6 +906,7 @@ private final class UIUXFixtureModel: ObservableObject {
         snapshot.prList.error = nil
         snapshot.actionError = nil
         snapshot.rateLimitInfo = RateLimitInfo(limit: 5000, remaining: 4500, resetDate: UIUXFixtures.now.addingTimeInterval(1800))
+        snapshot.restRateLimitInfo = RateLimitInfo(limit: 5000, remaining: 4900, resetDate: UIUXFixtures.now.addingTimeInterval(2400))
         switch value {
         case .cached, .recover:
             snapshot.prList = UIUXFixtures.prList(count: count)

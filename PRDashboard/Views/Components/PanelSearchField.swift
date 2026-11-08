@@ -15,8 +15,16 @@ struct PanelSearchField: NSViewRepresentable {
         field.placeholderString = "Search PRs, repos, authors, Jira keys…"
         field.sendsSearchStringImmediately = true
         field.sendsWholeSearchString = false
-        field.controlSize = .small
-        field.font = .systemFont(ofSize: 13)
+        // Let AppKit draw one search bezel and its native focus treatment alongside
+        // the toolbar's glass buttons, including on systems without Liquid Glass.
+        field.controlSize = .regular
+        field.bezelStyle = .roundedBezel
+        field.isBezeled = true
+        field.drawsBackground = true
+        field.backgroundColor = .controlBackgroundColor
+        field.textColor = .labelColor
+        field.focusRingType = .exterior
+        field.font = .systemFont(ofSize: PanelMetrics.titleSize)
         field.delegate = context.coordinator
         field.stringValue = text
         field.setAccessibilityIdentifier("panel-search")
