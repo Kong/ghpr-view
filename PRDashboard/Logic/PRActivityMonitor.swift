@@ -1181,18 +1181,21 @@ enum PRActivityEngine {
 
 enum PRActivityDigestFormatter {
     static func nativeTitle(for batch: DigestBatch) -> String {
-        batch.entries.count == 1 ? String(localized: "1 PR needs attention") : String(localized: "\(batch.entries.count) PRs need attention")
+        if batch.omittedEntryCount > 0 {
+            return String(localized: "\(batch.entries.count) PRs need attention (+\(batch.omittedEntryCount) more)")
+        }
+        return batch.entries.count == 1 ? String(localized: "1 PR needs attention") : String(localized: "\(batch.entries.count) PRs need attention")
     }
 
     static func nativeBody(for batch: DigestBatch) -> String {
         var lines: [String] = []
-        for entry in batch.entries {
+        for entry in batch.entries.prefix(3) {
             let reasons = entry.reasons.map(reasonLabel).joined(separator: ", ")
-            let actions = entry.actionKinds.map(actionLabel).joined(separator: ", ")
-            lines.append("\(entry.reference.repoFullName)#\(entry.reference.number) — \(reasons)；建议：\(actions)")
+            lines.append("\(entry.reference.repoFullName)#\(entry.reference.number) — \(reasons)")
         }
-        if batch.omittedEntryCount > 0 {
-            lines.append(String(localized: "\(batch.omittedEntryCount) more PR(s) are waiting in ghpr."))
+        let remaining = max(0, batch.entries.count - 3) + batch.omittedEntryCount
+        if remaining > 0 {
+            lines.append(String(localized: "\(remaining) more PRs in Activity"))
         }
         return lines.joined(separator: "\n")
     }
@@ -1202,7 +1205,8 @@ enum PRActivityDigestFormatter {
     }
 
     static func slackText(for batch: DigestBatch) -> String {
-        var lines: [String] = ["*\(nativeTitle(for: batch))*"]
+        let title = batch.entries.count == 1 ? String(localized: "1 PR needs attention") : String(localized: "\(batch.entries.count) PRs need attention")
+        var lines: [String] = ["*\(title)*"]
         for entry in batch.entries {
             let escapedTitle = SlackNotificationClient.escapedForSlack(entry.title)
             let reasons = entry.reasons.map(reasonLabel).joined(separator: ", ")
@@ -2194,7 +2198,10 @@ final class PRActivityMonitor: ObservableObject {
         }
         guard changed else { return }
         candidate.updatedAt = clock()
-        guard commit(candidate) else { return }
+        guard commit(candidate) else {
+            publish()
+            return
+        }
         publish()
     }
 

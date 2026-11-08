@@ -35,6 +35,13 @@ final class HoverTooltipPresenter: ObservableObject {
     }
 
     @Published private(set) var tooltip: Tooltip?
+    @Published private(set) var cancellationRevision: UInt64 = 0
+
+    /// Hosts call this when closing, even if their retained view does not disappear.
+    func dismissAll() {
+        cancellationRevision &+= 1
+        tooltip = nil
+    }
 
     func show(ownerID: UUID, text: String, point: CGPoint) {
         tooltip = Tooltip(ownerID: ownerID, text: text, point: point)
@@ -42,8 +49,8 @@ final class HoverTooltipPresenter: ObservableObject {
 
     func update(ownerID: UUID, text: String, point: CGPoint) {
         guard let current = tooltip, current.ownerID == ownerID else { return }
-        // onContinuousHover fires per mouse movement (~60-120 Hz). Skip sub-pixel
-        // updates so the overlay doesn't re-layout on every frame.
+        // Pointer events can arrive frequently. Skip sub-pixel updates so the
+        // overlay doesn't re-layout on every movement.
         if current.text == text,
            abs(current.point.x - point.x) < 1,
            abs(current.point.y - point.y) < 1
@@ -181,11 +188,84 @@ struct HoverTooltipOverlay: View {
     }
 }
 
+private struct HoverTooltipTrackingArea: NSViewRepresentable {
+    let onActive: (CGPoint) -> Void
+    let onEnded: () -> Void
+
+    func makeNSView(context: Context) -> HoverTooltipTrackingView {
+        let view = HoverTooltipTrackingView()
+        view.setAccessibilityElement(false)
+        updateNSView(view, context: context)
+        return view
+    }
+
+    func updateNSView(_ view: HoverTooltipTrackingView, context: Context) {
+        view.onActive = onActive
+        view.onEnded = onEnded
+    }
+
+    static func dismantleNSView(_ view: HoverTooltipTrackingView, coordinator: ()) {
+        view.stopTracking()
+        view.onActive = nil
+        view.onEnded = nil
+    }
+}
+
+private final class HoverTooltipTrackingView: NSView {
+    var onActive: ((CGPoint) -> Void)?
+    var onEnded: (() -> Void)?
+    private var hoverTrackingArea: NSTrackingArea?
+
+    override var isFlipped: Bool { true }
+    override var acceptsFirstResponder: Bool { false }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        removeHoverTrackingArea()
+        guard window != nil else { return }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.activeAlways, .inVisibleRect, .mouseEnteredAndExited, .mouseMoved],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        hoverTrackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        onActive?(convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        onActive?(convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseExited(with event: NSEvent) { onEnded?() }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil { stopTracking() }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
+    func stopTracking() {
+        removeHoverTrackingArea()
+        onEnded?()
+    }
+
+    private func removeHoverTrackingArea() {
+        if let hoverTrackingArea { removeTrackingArea(hoverTrackingArea) }
+        hoverTrackingArea = nil
+    }
+}
+
 private struct DelayedHoverTooltipModifier: ViewModifier {
     let text: String
     let delayNanoseconds: UInt64
 
     @Environment(\.hoverTooltipPresenter) private var presenter
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var ownerID = UUID()
     @State private var isHovered = false
@@ -196,21 +276,30 @@ private struct DelayedHoverTooltipModifier: ViewModifier {
     func body(content: Content) -> some View {
         if let presenter {
             content
-                .onContinuousHover(coordinateSpace: .named(HoverTooltipCoordinateSpace.name)) { phase in
-                    switch phase {
-                    case .active(let point):
-                        latestPoint = point
-
-                        if !isHovered {
-                            isHovered = true
-                            scheduleTooltip(presenter: presenter)
-                        } else if presenter.isVisible(for: ownerID) {
-                            presenter.update(ownerID: ownerID, text: text, point: point)
-                        }
-                    case .ended:
-                        isHovered = false
-                        hideTooltip(presenter: presenter)
+                .background {
+                    GeometryReader { geometry in
+                        let frame = geometry.frame(in: .named(HoverTooltipCoordinateSpace.name))
+                        HoverTooltipTrackingArea(
+                            onActive: { localPoint in
+                                let point = CGPoint(x: frame.minX + localPoint.x, y: frame.minY + localPoint.y)
+                                latestPoint = point
+                                if !isHovered {
+                                    isHovered = true
+                                    scheduleTooltip(presenter: presenter)
+                                } else if presenter.isVisible(for: ownerID) {
+                                    presenter.update(ownerID: ownerID, text: text, point: point)
+                                }
+                            },
+                            onEnded: {
+                                isHovered = false
+                                hideTooltip(presenter: presenter)
+                            }
+                        )
                     }
+                }
+                .onReceive(presenter.$cancellationRevision) { _ in
+                    isHovered = false
+                    hideTooltip(presenter: presenter)
                 }
                 .onDisappear {
                     isHovered = false
@@ -226,7 +315,7 @@ private struct DelayedHoverTooltipModifier: ViewModifier {
         showTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: delayNanoseconds)
             guard !Task.isCancelled, isHovered else { return }
-            withAnimation(.easeOut(duration: 0.12)) {
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.10)) {
                 presenter.show(ownerID: ownerID, text: text, point: latestPoint)
             }
         }
@@ -236,7 +325,7 @@ private struct DelayedHoverTooltipModifier: ViewModifier {
         showTask?.cancel()
         showTask = nil
 
-        withAnimation(.easeOut(duration: 0.08)) {
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.10)) {
             presenter.hide(ownerID: ownerID)
         }
     }
@@ -261,7 +350,6 @@ struct Badge: View {
                 .padding(.vertical, 2)
                 .background(color)
                 .clipShape(Capsule())
-                .animation(.spring(response: 0.25), value: count)
         }
     }
 }
@@ -269,7 +357,7 @@ struct Badge: View {
 struct DraftBadge: View {
     var body: some View {
         Text("Draft")
-            .font(.system(size: 9, weight: .medium))
+            .font(.system(size: 11, weight: .medium))
             .foregroundColor(.secondary)
             .padding(.horizontal, 5)
             .padding(.vertical, 2)
@@ -285,40 +373,48 @@ struct MyReviewStatusBadge: View {
     let status: MyReviewStatus
 
     var body: some View {
-        HStack(spacing: 2) {
-            Text(emoji)
-                .font(.system(size: 11))
-            Text(abbreviation)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundColor(textColor)
-        }
-        .padding(.horizontal, 5)
-        .padding(.vertical, 2)
-        .background(backgroundColor)
-        .clipShape(Capsule())
-        .delayedHoverTooltip(
-            String(
-                localized:
-                    "This shows your review state: ⏳ waiting, 🟥 changes requested, 🟨 changes resolved, ✅ approved."
-            )
-        )
+        Label(title, systemImage: symbol)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundColor(textColor)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(backgroundColor)
+            .clipShape(Capsule())
+            .fixedSize(horizontal: true, vertical: false)
+            .delayedHoverTooltip(explanation)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Your review: \(title)")
+            .accessibilityValue(explanation)
     }
 
-    private var emoji: String {
+    private var symbol: String {
         switch status {
-        case .waiting: return "⏳"
-        case .changesRequested: return "🟥"
-        case .changesResolved: return "🟨"
-        case .approved: return "✅"
+        case .waiting: return "clock"
+        case .changesRequested: return "exclamationmark.bubble"
+        case .changesResolved: return "arrow.clockwise"
+        case .approved: return "checkmark.circle"
         }
     }
 
-    private var abbreviation: String {
+    private var title: String {
         switch status {
-        case .waiting: return "W"
-        case .changesRequested: return "CR-"
-        case .changesResolved: return "CR+"
-        case .approved: return "A"
+        case .waiting: return String(localized: "Waiting")
+        case .changesRequested: return String(localized: "Changes requested")
+        case .changesResolved: return String(localized: "Review again")
+        case .approved: return String(localized: "Approved")
+        }
+    }
+
+    private var explanation: String {
+        switch status {
+        case .waiting:
+            return String(localized: "Your review is waiting.")
+        case .changesRequested:
+            return String(localized: "You requested changes.")
+        case .changesResolved:
+            return String(localized: "Review again. Model state: changes resolved; new commits, resolved threads, or a review request may require another look.")
+        case .approved:
+            return String(localized: "You approved this PR.")
         }
     }
 
@@ -356,6 +452,8 @@ struct ApprovalBadge: View {
         .padding(.vertical, 2)
         .background(Color.green.opacity(0.15))
         .clipShape(Capsule())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(String(localized: "\(count) approvals"))
         .delayedHoverTooltip(
             String(localized: "This shows how many approvals this PR has received.")
         )
@@ -374,6 +472,7 @@ struct MentionBadge: View {
                 .padding(.vertical, 2)
                 .background(Color.blue.opacity(0.15))
                 .clipShape(Capsule())
+                .accessibilityLabel(String(localized: "\(count) unanswered direct mentions"))
                 .delayedHoverTooltip(
                     String(localized: "Unanswered direct mentions: \(count)")
                 )

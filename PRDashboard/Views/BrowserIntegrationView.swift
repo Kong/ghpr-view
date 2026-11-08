@@ -1,8 +1,168 @@
 import AppKit
 import SwiftUI
 
+struct BrowserIntegrationPresentation {
+    var bridgeStatus: BrowserBridgeStatus
+    var pairedClients: [BrowserClient]
+    var unhealthySlots: [SlotHealthReport]
+    var unhealthySurfaces: [SurfaceHealthReport]
+    var isGitHubPageConnected: Bool
+    var installUserscriptURL: URL?
+    var browserTestURL: URL?
+    var workbenchURL: URL?
+    var agentInstallStatuses: [CodingAgentIntegrationInstallStatus]
+    var agentInstallError: String?
+
+    var officialUserscriptClient: BrowserClient? {
+        pairedClients.first { $0.id == "dev.ghpr.official-userscript" && !$0.isRevoked }
+    }
+
+    var unhealthyPlacementCount: Int {
+        unhealthySurfaces.count + unhealthySlots.count
+    }
+}
+
+struct BrowserIntegrationActions {
+    var openURL: (URL) -> Void
+    var revoke: (BrowserClient) -> Void
+    var installForAllAgents: () -> Void
+}
+
 struct BrowserIntegrationView: View {
     @ObservedObject var controller: ExtensionPlatformController
+    @State private var agentInstallStatuses = BrowserIntegrationView.loadAgentStatuses()
+    @State private var agentInstallError: String?
+
+    var body: some View {
+        BrowserIntegrationContent(
+            presentation: Self.presentation(
+                controller: controller,
+                agentInstallStatuses: agentInstallStatuses,
+                agentInstallError: agentInstallError
+            ),
+            actions: Self.actions(controller: controller, installForAllAgents: install)
+        )
+    }
+
+    static func presentation(
+        controller: ExtensionPlatformController,
+        agentInstallStatuses: [CodingAgentIntegrationInstallStatus],
+        agentInstallError: String?
+    ) -> BrowserIntegrationPresentation {
+        BrowserIntegrationPresentation(
+            bridgeStatus: controller.bridgeStatus,
+            pairedClients: controller.pairedClients,
+            unhealthySlots: controller.unhealthySlots,
+            unhealthySurfaces: controller.unhealthySurfaces,
+            isGitHubPageConnected: controller.isGitHubPageConnected,
+            installUserscriptURL: controller.installUserscriptURL(),
+            browserTestURL: controller.server.baseURL?.appendingPathComponent("ui/browser-test"),
+            workbenchURL: controller.server.baseURL?.appendingPathComponent("ui/workbench"),
+            agentInstallStatuses: agentInstallStatuses,
+            agentInstallError: agentInstallError
+        )
+    }
+
+    static func actions(
+        controller: ExtensionPlatformController,
+        installForAllAgents: @escaping () -> Void
+    ) -> BrowserIntegrationActions {
+        BrowserIntegrationActions(
+            openURL: { url in
+                guard let destination = resolveBrowserURL(url, controller: controller) else { return }
+                NSWorkspace.shared.open(destination)
+            },
+            revoke: { controller.revoke(client: $0) },
+            installForAllAgents: installForAllAgents
+        )
+    }
+
+    static func resolveBrowserURL(_ url: URL, controller: ExtensionPlatformController) -> URL? {
+        guard let baseURL = controller.server.baseURL,
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url
+        }
+        let fragment = components.fragment
+        components.fragment = nil
+        let destination: URL?
+        switch components.url {
+        case baseURL.appendingPathComponent("ui/browser-test"):
+            destination = controller.browserTestURL()
+        case baseURL.appendingPathComponent("ui/workbench"):
+            destination = controller.workbenchURL()
+        default:
+            return url
+        }
+        guard let destination,
+              var resolved = URLComponents(url: destination, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+        resolved.fragment = fragment
+        return resolved.url
+    }
+
+    static func loadAgentStatuses() -> [CodingAgentIntegrationInstallStatus] {
+        CodingAgentIntegrationInstaller.statuses(
+            sourceMCPServerURL: CodingAgentIntegrationInstaller.bundledMCPServerURL()
+        )
+    }
+
+    static func installAgents() throws -> [CodingAgentIntegrationInstallStatus] {
+        guard let sourceSkillURL = Bundle.main.resourceURL?
+            .appendingPathComponent("ghpr-skill-builder/SKILL.md"),
+              FileManager.default.fileExists(atPath: sourceSkillURL.path),
+              let sourceMCPServerURL = CodingAgentIntegrationInstaller.bundledMCPServerURL() else {
+            throw NSError(
+                domain: "CodingAgentIntegration", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "The bundled Coding Agent Integration is incomplete."]
+            )
+        }
+        return try CodingAgentIntegrationInstaller.install(
+            sourceSkillURL: sourceSkillURL,
+            sourceMCPServerURL: sourceMCPServerURL,
+            agents: [.claudeCode, .codex, .omp]
+        )
+    }
+
+    private func install() {
+        do {
+            agentInstallStatuses = try Self.installAgents()
+            agentInstallError = nil
+        } catch {
+            agentInstallError = error.localizedDescription
+        }
+    }
+}
+
+struct CodingAgentIntegrationSettingsView: View {
+    @ObservedObject var controller: ExtensionPlatformController
+    @State private var agentInstallStatuses = BrowserIntegrationView.loadAgentStatuses()
+    @State private var agentInstallError: String?
+
+    var body: some View {
+        CodingAgentIntegrationContent(
+            presentation: BrowserIntegrationView.presentation(
+                controller: controller,
+                agentInstallStatuses: agentInstallStatuses,
+                agentInstallError: agentInstallError
+            ),
+            actions: BrowserIntegrationView.actions(controller: controller, installForAllAgents: install)
+        )
+    }
+
+    private func install() {
+        do {
+            agentInstallStatuses = try BrowserIntegrationView.installAgents()
+            agentInstallError = nil
+        } catch {
+            agentInstallError = error.localizedDescription
+        }
+    }
+}
+
+struct BrowserIntegrationContent: View {
+    let presentation: BrowserIntegrationPresentation
+    let actions: BrowserIntegrationActions
     @State private var showingDetails = false
     @State private var showingCodingAgentIntegration = false
 
@@ -36,7 +196,7 @@ struct BrowserIntegrationView: View {
                 }
             }
 
-            if controller.officialUserscriptClient == nil {
+            if presentation.officialUserscriptClient == nil {
                 Label(
                     "Tip: Install the Tampermonkey userscript to add ghpr actions on GitHub.",
                     systemImage: "puzzlepiece.extension"
@@ -47,9 +207,9 @@ struct BrowserIntegrationView: View {
                 .accessibilityIdentifier("userscript-reminder")
             }
 
-            if controller.unhealthyPlacementCount > 0 {
+            if presentation.unhealthyPlacementCount > 0 {
                 Label(
-                    "\(controller.unhealthyPlacementCount) GitHub placement\(controller.unhealthyPlacementCount == 1 ? "" : "s") need attention",
+                    "\(presentation.unhealthyPlacementCount) GitHub placement\(presentation.unhealthyPlacementCount == 1 ? "" : "s") need attention",
                     systemImage: "exclamationmark.triangle.fill"
                 )
                 .font(.caption)
@@ -57,13 +217,13 @@ struct BrowserIntegrationView: View {
                 .accessibilityIdentifier("browser-slot-health-warning")
             }
 
-            if controller.officialUserscriptClient == nil {
+            if presentation.officialUserscriptClient == nil {
                 Button {
-                    open(controller.installUserscriptURL())
+                    open(presentation.installUserscriptURL)
                 } label: {
                     Label("Install Userscript in Browser", systemImage: "arrow.up.right.square")
                 }
-                .disabled(controller.installUserscriptURL() == nil)
+                .disabled(presentation.installUserscriptURL == nil)
                 .accessibilityIdentifier("install-userscript")
 
                 Text("Installation opens in your default browser.")
@@ -90,29 +250,29 @@ struct BrowserIntegrationView: View {
                     statusRow(
                         title: "Official Userscript",
                         value: officialUserscriptText,
-                        symbol: controller.officialUserscriptClient == nil
+                        symbol: presentation.officialUserscriptClient == nil
                             ? "square.and.arrow.down"
                             : "checkmark.circle.fill",
-                        color: controller.officialUserscriptClient == nil ? .secondary : .green
+                        color: presentation.officialUserscriptClient == nil ? .secondary : .green
                     )
                     statusRow(
                         title: "GitHub Page",
-                        value: controller.isGitHubPageConnected ? "Connected" : "Waiting for a GitHub tab",
-                        symbol: controller.isGitHubPageConnected ? "link.circle.fill" : "link.circle",
-                        color: controller.isGitHubPageConnected ? .green : .secondary
+                        value: presentation.isGitHubPageConnected ? "Connected" : "Waiting for a GitHub tab",
+                        symbol: presentation.isGitHubPageConnected ? "link.circle.fill" : "link.circle",
+                        color: presentation.isGitHubPageConnected ? .green : .secondary
                     )
-                    if !controller.unhealthySurfaces.isEmpty || !controller.unhealthySlots.isEmpty {
+                    if !presentation.unhealthySurfaces.isEmpty || !presentation.unhealthySlots.isEmpty {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Surface health")
                                 .font(.caption)
                                 .fontWeight(.medium)
-                            ForEach(controller.unhealthySurfaces) { report in
+                            ForEach(presentation.unhealthySurfaces) { report in
                                 Text("\(report.surface): \(report.state.rawValue.capitalized)")
                                     .font(.caption2)
                                     .foregroundColor(.orange)
                                     .accessibilityIdentifier("surface-health-row-\(report.id)")
                             }
-                            ForEach(controller.unhealthySlots) { report in
+                            ForEach(presentation.unhealthySlots) { report in
                                 Text("\(report.slot.rawValue): Missing")
                                     .font(.caption2)
                                     .foregroundColor(.orange)
@@ -129,13 +289,13 @@ struct BrowserIntegrationView: View {
                         .font(.caption)
                         .fontWeight(.medium)
 
-                    if controller.pairedClients.isEmpty {
+                    if presentation.pairedClients.isEmpty {
                         Text("No browser clients are paired.")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     } else {
                         VStack(spacing: 7) {
-                            ForEach(controller.pairedClients) { client in
+                            ForEach(presentation.pairedClients) { client in
                                 clientRow(client)
                             }
                         }
@@ -145,20 +305,20 @@ struct BrowserIntegrationView: View {
 
                     HStack(spacing: 8) {
                         Button {
-                            open(controller.browserTestURL())
+                            open(presentation.browserTestURL)
                         } label: {
                             Label("Open Browser Test", systemImage: "arrow.up.right.square")
                         }
-                        .disabled(controller.browserTestURL() == nil)
+                        .disabled(presentation.browserTestURL == nil)
                         .accessibilityIdentifier("open-browser-test")
 
-                        if controller.officialUserscriptClient != nil {
+                        if presentation.officialUserscriptClient != nil {
                             Button {
-                                open(controller.installUserscriptURL())
+                                open(presentation.installUserscriptURL)
                             } label: {
                                 Label("Reinstall Userscript", systemImage: "arrow.up.right.square")
                             }
-                            .disabled(controller.installUserscriptURL() == nil)
+                            .disabled(presentation.installUserscriptURL == nil)
                             .accessibilityIdentifier("install-userscript")
                         }
                     }
@@ -177,12 +337,16 @@ struct BrowserIntegrationView: View {
             }
 
             if showingCodingAgentIntegration {
-                CodingAgentIntegrationSettingsView(controller: controller)
+                CodingAgentIntegrationContent(presentation: presentation, actions: actions)
                     .padding(.top, 2)
             }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("browser-integration-settings")
+        .environment(\.openURL, OpenURLAction { url in
+            actions.openURL(url)
+            return .handled
+        })
     }
 
     private func disclosureRow(
@@ -235,7 +399,7 @@ struct BrowserIntegrationView: View {
                     .foregroundColor(.secondary)
             } else {
                 Button("Revoke") {
-                    controller.revoke(client: client)
+                    actions.revoke(client)
                 }
                 .font(.caption)
                 .buttonStyle(.borderless)
@@ -264,11 +428,11 @@ struct BrowserIntegrationView: View {
     }
 
     private var activeClientCount: Int {
-        controller.pairedClients.lazy.filter { !$0.isRevoked }.count
+        presentation.pairedClients.lazy.filter { !$0.isRevoked }.count
     }
 
     private var browserSummaryTitle: String {
-        switch controller.bridgeStatus.state {
+        switch presentation.bridgeStatus.state {
         case .failed:
             return "Needs attention"
         case .starting:
@@ -276,10 +440,10 @@ struct BrowserIntegrationView: View {
         case .stopped:
             return "Browser integration unavailable"
         case .running:
-            if controller.officialUserscriptClient == nil {
+            if presentation.officialUserscriptClient == nil {
                 return "Finish browser setup"
             }
-            if controller.unhealthyPlacementCount > 0 {
+            if presentation.unhealthyPlacementCount > 0 {
                 return "Needs attention"
             }
             return "Ready"
@@ -287,7 +451,7 @@ struct BrowserIntegrationView: View {
     }
 
     private var browserSummaryDetail: String {
-        switch controller.bridgeStatus.state {
+        switch presentation.bridgeStatus.state {
         case .failed:
             return "Open connection details to diagnose the Browser Bridge."
         case .starting:
@@ -295,20 +459,20 @@ struct BrowserIntegrationView: View {
         case .stopped:
             return "The local Browser Bridge is not running."
         case .running:
-            if controller.officialUserscriptClient == nil {
+            if presentation.officialUserscriptClient == nil {
                 return "Install the userscript once to connect ghpr with GitHub."
             }
-            if controller.unhealthyPlacementCount > 0 {
+            if presentation.unhealthyPlacementCount > 0 {
                 return "Some ghpr actions could not attach to GitHub."
             }
-            return controller.isGitHubPageConnected
+            return presentation.isGitHubPageConnected
                 ? "A GitHub page is connected."
                 : "Ready when you open a GitHub pull request."
         }
     }
 
     private var browserSummarySymbol: String {
-        switch controller.bridgeStatus.state {
+        switch presentation.bridgeStatus.state {
         case .failed:
             return "exclamationmark.triangle.fill"
         case .starting:
@@ -316,10 +480,10 @@ struct BrowserIntegrationView: View {
         case .stopped:
             return "bolt.slash.fill"
         case .running:
-            if controller.officialUserscriptClient == nil {
+            if presentation.officialUserscriptClient == nil {
                 return "puzzlepiece.extension"
             }
-            if controller.unhealthyPlacementCount > 0 {
+            if presentation.unhealthyPlacementCount > 0 {
                 return "exclamationmark.triangle.fill"
             }
             return "checkmark.circle.fill"
@@ -327,7 +491,7 @@ struct BrowserIntegrationView: View {
     }
 
     private var browserSummaryColor: Color {
-        switch controller.bridgeStatus.state {
+        switch presentation.bridgeStatus.state {
         case .failed:
             return .red
         case .starting:
@@ -335,14 +499,14 @@ struct BrowserIntegrationView: View {
         case .stopped:
             return .secondary
         case .running:
-            return controller.officialUserscriptClient == nil || controller.unhealthyPlacementCount > 0
+            return presentation.officialUserscriptClient == nil || presentation.unhealthyPlacementCount > 0
                 ? .orange
                 : .green
         }
     }
 
     private var bridgeStatusText: String {
-        switch controller.bridgeStatus.state {
+        switch presentation.bridgeStatus.state {
         case .stopped: return "Stopped"
         case .starting: return "Starting…"
         case .running(let port): return "Running · \(port)"
@@ -351,7 +515,7 @@ struct BrowserIntegrationView: View {
     }
 
     private var bridgeStatusSymbol: String {
-        switch controller.bridgeStatus.state {
+        switch presentation.bridgeStatus.state {
         case .running: return "bolt.horizontal.circle.fill"
         case .failed: return "exclamationmark.triangle.fill"
         case .starting: return "clock"
@@ -360,7 +524,7 @@ struct BrowserIntegrationView: View {
     }
 
     private var bridgeStatusColor: Color {
-        switch controller.bridgeStatus.state {
+        switch presentation.bridgeStatus.state {
         case .running: return .green
         case .failed: return .red
         case .starting: return .orange
@@ -369,7 +533,7 @@ struct BrowserIntegrationView: View {
     }
 
     private var officialUserscriptText: String {
-        guard let client = controller.officialUserscriptClient else {
+        guard let client = presentation.officialUserscriptClient else {
             return "Not paired"
         }
         return "Installed · v\(client.version)"
@@ -384,16 +548,13 @@ struct BrowserIntegrationView: View {
 
     private func open(_ url: URL?) {
         guard let url else { return }
-        NSWorkspace.shared.open(url)
+        actions.openURL(url)
     }
 }
 
-struct CodingAgentIntegrationSettingsView: View {
-    @ObservedObject var controller: ExtensionPlatformController
-    @State private var statuses = CodingAgentIntegrationInstaller.statuses(
-        sourceMCPServerURL: CodingAgentIntegrationInstaller.bundledMCPServerURL()
-    )
-    @State private var errorMessage: String?
+struct CodingAgentIntegrationContent: View {
+    let presentation: BrowserIntegrationPresentation
+    let actions: BrowserIntegrationActions
     @State private var showingDetails = false
 
 
@@ -417,7 +578,7 @@ struct CodingAgentIntegrationSettingsView: View {
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("coding-agent-integration-status")
 
-            if let errorMessage {
+            if let errorMessage = presentation.agentInstallError {
                 Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundColor(.red)
@@ -426,18 +587,18 @@ struct CodingAgentIntegrationSettingsView: View {
 
             HStack(spacing: 8) {
                 Button {
-                    if let url = controller.workbenchURL() {
-                        NSWorkspace.shared.open(url)
+                    if let url = presentation.workbenchURL {
+                        actions.openURL(url)
                     }
                 } label: {
                     Label("Open Workbench in Browser", systemImage: "arrow.up.right.square")
                 }
-                .disabled(controller.workbenchURL() == nil)
+                .disabled(presentation.workbenchURL == nil)
                 .accessibilityIdentifier("open-skill-workbench")
 
                 if !allAgentsInstalled {
                     Button("Install for All Agents") {
-                        install()
+                        actions.installForAllAgents()
                     }
                     .accessibilityIdentifier("install-coding-agent-integration")
                 }
@@ -466,7 +627,7 @@ struct CodingAgentIntegrationSettingsView: View {
 
             if showingDetails {
                 VStack(alignment: .leading, spacing: 8) {
-                    ForEach(statuses) { status in
+                    ForEach(presentation.agentInstallStatuses) { status in
                         HStack {
                             Text(status.agent.displayName)
                             Spacer()
@@ -482,19 +643,19 @@ struct CodingAgentIntegrationSettingsView: View {
                     HStack(spacing: 8) {
                         if allAgentsInstalled {
                             Button("Reinstall for All Agents") {
-                                install()
+                                actions.installForAllAgents()
                             }
                             .accessibilityIdentifier("install-coding-agent-integration")
                         }
 
                         Button {
-                            if let url = controller.workbenchURL() {
-                                NSWorkspace.shared.open(url.appending(fragment: "contract"))
+                            if let url = presentation.workbenchURL {
+                                actions.openURL(url.appending(fragment: "contract"))
                             }
                         } label: {
                             Label("View Contract in Browser", systemImage: "arrow.up.right.square")
                         }
-                        .disabled(controller.workbenchURL() == nil)
+                        .disabled(presentation.workbenchURL == nil)
                     }
                 }
                 .padding(.top, 2)
@@ -502,14 +663,18 @@ struct CodingAgentIntegrationSettingsView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("coding-agent-integration-settings")
+        .environment(\.openURL, OpenURLAction { url in
+            actions.openURL(url)
+            return .handled
+        })
     }
 
     private var installedAgentCount: Int {
-        statuses.lazy.filter(\.installed).count
+        presentation.agentInstallStatuses.lazy.filter(\.installed).count
     }
 
     private var allAgentsInstalled: Bool {
-        !statuses.isEmpty && installedAgentCount == statuses.count
+        !presentation.agentInstallStatuses.isEmpty && installedAgentCount == presentation.agentInstallStatuses.count
     }
 
     private var integrationSummaryTitle: String {
@@ -519,7 +684,7 @@ struct CodingAgentIntegrationSettingsView: View {
         if installedAgentCount == 0 {
             return "Coding Agent Integration is not installed"
         }
-        return "Installed for \(installedAgentCount) of \(statuses.count) agents"
+        return "Installed for \(installedAgentCount) of \(presentation.agentInstallStatuses.count) agents"
     }
 
     private var integrationSummarySymbol: String {
@@ -530,25 +695,6 @@ struct CodingAgentIntegrationSettingsView: View {
         allAgentsInstalled ? .green : .secondary
     }
 
-    private func install() {
-        guard let sourceSkillURL = Bundle.main.resourceURL?
-            .appendingPathComponent("ghpr-skill-builder/SKILL.md"),
-              FileManager.default.fileExists(atPath: sourceSkillURL.path),
-              let sourceMCPServerURL = CodingAgentIntegrationInstaller.bundledMCPServerURL() else {
-            errorMessage = "The bundled Coding Agent Integration is incomplete."
-            return
-        }
-        do {
-            statuses = try CodingAgentIntegrationInstaller.install(
-                sourceSkillURL: sourceSkillURL,
-                sourceMCPServerURL: sourceMCPServerURL,
-                agents: [.claudeCode, .codex, .omp]
-            )
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
 
 }
 

@@ -97,9 +97,16 @@ struct PRRowView: View {
     var onboardingManager: OnboardingManager? = nil
     var approvalOnboardingPRID: Int? = nil
     var reviewStatusOnboardingPRID: Int? = nil
+    var now: Date? = nil
+    var latestFactsDescription: String? = nil
+    @Environment(\.allowsRemoteAvatars) private var allowsRemoteAvatars
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @ObservedObject private var menuTracker = MenuTracker.shared
 
     @State private var isHovered = false
+    @State private var detailRequest: UInt64 = 0
 
     private var updateBranchWithRebaseAction: (() -> Void)? {
         pr.category == .authored ? onUpdateBranchWithRebase : nil
@@ -146,217 +153,168 @@ struct PRRowView: View {
         let displayDate = pr.lastCommitAt ?? pr.updatedAt
         let prefix = pr.lastCommitAt == nil ? "~" : ""
 
-        if abs(displayDate.timeIntervalSinceNow) < 24 * 60 * 60 {
-            return prefix + DateFormatters.relativeString(from: displayDate)
+        let referenceDate = now ?? Date()
+        if abs(displayDate.timeIntervalSince(referenceDate)) < 24 * 60 * 60 {
+            return prefix + DateFormatters.relativeFormatter.localizedString(for: displayDate, relativeTo: referenceDate)
         } else {
             return prefix + DateFormatters.shortDateTime.string(from: displayDate)
         }
     }
 
+    private var timeHelp: String {
+        let source = pr.lastCommitAt == nil ? "PR updated (fallback)" : "Last commit"
+        let date = pr.lastCommitAt ?? pr.updatedAt
+        return "\(source): \(date.formatted(.dateTime.year().month().day().hour().minute().second().timeZone()))"
+    }
+
+    @MainActor
+    static func closeDetails() {
+        PRHoverDetailTrackingView.cancelAll()
+        PRHoverDetailPanelController.shared.closeAll()
+    }
+
+    @MainActor
+    static var isPresentingFocusedDetails: Bool { PRHoverDetailPanelController.shared.isFocused }
+
+    @MainActor
+    static var detailUIResourceCount: Int {
+        PRHoverDetailTrackingView.pendingHoverTaskCount + PRHoverDetailPanelController.shared.activeResourceCount
+    }
+
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            // Author avatar
-            CachedAvatarView(url: pr.authorAvatarURL, authorInitial: pr.author)
-                .frame(width: 32, height: 32)
-                .clipShape(Circle())
+            HStack(alignment: .top, spacing: 8) {
+                CachedAvatarView(url: pr.authorAvatarURL, authorInitial: pr.author)
+                    .frame(width: 28, height: 28)
+                    .clipShape(Circle())
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
 
-            VStack(alignment: .leading, spacing: 4) {
-                // Repo and PR number
-                HStack(spacing: 4) {
-                    if isPinned {
-                        Image(systemName: "pin.fill")
-                            .font(.system(size: 9))
-                            .foregroundColor(.orange)
-                    }
-
-                    SearchHighlightedText(text: pr.repoFullName, query: searchHighlightQuery)
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-
-                    SearchHighlightedText(text: "#\(pr.number)", query: searchHighlightQuery)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.secondary)
-
-                    if let ticket = pr.jiraTicket {
-                        Button {
-                            onOpenJira(ticket)
-                        } label: {
-                            SearchHighlightedText(text: ticket, query: searchHighlightQuery)
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundColor(.blue)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1)
-                                .background(Color.blue.opacity(0.15))
-                                .cornerRadius(4)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 4) {
+                        if isPinned {
+                            Image(systemName: "pin.fill").foregroundColor(.orange)
                         }
-                        .buttonStyle(.plain)
-                        .delayedHoverTooltip(
-                            String(localized: "This is the Jira ticket linked to this PR.")
-                        )
+                        SearchHighlightedText(text: pr.repoFullName, query: searchHighlightQuery)
+                            .lineLimit(1).truncationMode(.middle)
+                        SearchHighlightedText(text: "#\(pr.number)", query: searchHighlightQuery)
+                            .fixedSize()
+                        Spacer(minLength: 4)
+                        Text(timeDisplay).fixedSize().help(timeHelp).accessibilityLabel(timeHelp)
                     }
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .allowsHitTesting(false)
 
-                    if showCmuxStatus, pr.isOpenInCmux == true {
-                        Text("cmux")
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundColor(.purple)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .background(Color.purple.opacity(0.13))
-                            .cornerRadius(4)
-                            .delayedHoverTooltip(
-                                String(localized: "This PR is currently open as a tab in cmux.")
-                            )
+                    SearchHighlightedText(text: pr.title, query: searchHighlightQuery)
+                        .font(.system(size: 13))
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .foregroundColor(.primary)
+                        .allowsHitTesting(false)
+                        .prHoverDetail(
+                            pr,
+                            onOpenJira: onOpenJira,
+                            onUpdateBranchWithRebase: updateBranchWithRebaseAction,
+                            onLoadHoverDetail: onLoadHoverDetail,
+                            isUpdatingBranch: isUpdatingBranch,
+                            isLoadingHoverDetail: isLoadingHoverDetail,
+                            jiraMetadataEnabled: jiraMetadataEnabled,
+                            allowsRemoteAvatars: allowsRemoteAvatars,
+                            reduceMotion: reduceMotion,
+                            focusedRequest: detailRequest
+                        )
+
+                    PRSignalLayout(spacing: 6) {
+                        SearchHighlightedText(text: pr.author, query: searchHighlightQuery)
+                            .foregroundColor(.secondary).allowsHitTesting(false)
+                        if let ticket = pr.jiraTicket {
+                            Button { onOpenJira(ticket) } label: {
+                                SearchHighlightedText(text: ticket, query: searchHighlightQuery)
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundColor(.accentColor)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background {
+                                        RoundedRectangle(cornerRadius: 4)
+                                            .fill(reduceTransparency
+                                                ? Color(nsColor: .controlBackgroundColor)
+                                                : Color.accentColor.opacity(0.10))
+                                    }
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: 4)
+                                            .stroke(colorSchemeContrast == .increased
+                                                ? Color.primary : Color.accentColor.opacity(0.35),
+                                                lineWidth: colorSchemeContrast == .increased ? 1 : 0.5)
+                                    }
+                                    .frame(minHeight: 28)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Open Jira issue \(ticket)")
+                            .delayedHoverTooltip(String(localized: "This is the Jira ticket linked to this PR."))
+                            .accessibilityIdentifier("pr-jira-\(pr.id)")
+                            .panelControlGeometry("jira")
+                        }
+                        coreSignals.allowsHitTesting(false)
+                        if isOpening {
+                            if reduceMotion {
+                                Text("Opening…").foregroundColor(.secondary)
+                            } else {
+                                ProgressView().controlSize(.mini)
+                            }
+                        }
+                    }
+                    .font(.system(size: 11))
+
+                    if let searchMatchContext {
+                        SearchMatchContextView(context: searchMatchContext, query: searchHighlightQuery)
+                            .allowsHitTesting(false)
                     }
                 }
 
-                // PR title
-                SearchHighlightedText(text: pr.title, query: searchHighlightQuery)
-                    .font(.system(size: 13))
-                    .lineLimit(2)
-                    .foregroundColor(.primary)
-                    .prHoverDetail(
-                        pr,
-                        onOpenJira: onOpenJira,
-                        onUpdateBranchWithRebase: updateBranchWithRebaseAction,
-                        onLoadHoverDetail: onLoadHoverDetail,
-                        isUpdatingBranch: isUpdatingBranch,
-                        isLoadingHoverDetail: isLoadingHoverDetail,
-                        jiraMetadataEnabled: jiraMetadataEnabled
-                    )
-
-                if let searchMatchContext {
-                    SearchMatchContextView(context: searchMatchContext, query: searchHighlightQuery)
+                Button { detailRequest &+= 1 } label: {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 14))
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
                 }
-
-                // Author and badges
-                HStack(spacing: 6) {
-                    SearchHighlightedText(text: pr.author, query: searchHighlightQuery)
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-
-                    Text("·")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-
-                    Text(timeDisplay)
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-
-                    if pr.isDraft {
-                        DraftBadge()
-                    }
-
-                    if pr.approvalCount > 0 {
-                        approvalBadge
-                    }
-
-                    if let mentionCount = pr.mentionCount, mentionCount > 0 {
-                        MentionBadge(count: mentionCount)
-                    }
-
-                    if showConflictStatus, pr.hasBaseConflicts {
-                        ConflictBadge()
-                    }
-
-                    Spacer()
-                    if let extensionRun {
-                        Label(
-                            extensionRun.progressMessage ?? extensionRun.status.displayName,
-                            systemImage: "waveform.path.ecg"
-                        )
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(Color(red: 0.49, green: 0.23, blue: 0.88))
-                        .lineLimit(1)
-                        .help("\(extensionRun.skillID) · \(extensionRun.status.displayName)")
-                    } else if let extensionAnalysis {
-                        Label(
-                            extensionAnalysis.verdict.displayName,
-                            systemImage: "sparkles"
-                        )
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(extensionAnalysisColor)
-                        .lineLimit(1)
-                        .help(extensionAnalysis.summary)
-                    }
-
-                    if !extensionTags.isEmpty {
-                        Image(systemName: "tag.fill")
-                            .font(.system(size: 9))
-                            .foregroundColor(.orange)
-                            .help(extensionTags.map(\.displayName).sorted().joined(separator: ", "))
-                    }
-
-                    if isOpening {
-                        ProgressView()
-                            .scaleEffect(0.45)
-                            .frame(width: 14, height: 14)
-                            .help("Opening PR")
-                    }
-
-                    if pr.category == .authored ||
-                        pr.category == .mentioned ||
-                        pr.category == .directMention {
-                        if showCIStatus, let ciStatus = pr.ciStatus {
-                            CIStatusIcon(
-                                status: ciStatus,
-                                successCount: pr.checkSuccessCount,
-                                failureCount: pr.checkFailureCount,
-                                pendingCount: pr.checkPendingCount,
-                                isRunning: pr.ciIsRunning,
-                                workflows: pr.ciWorkflows
-                            )
-                        }
-                    } else if pr.category == .reviewRequest {
-                        if showMyReviewStatus, let reviewStatus = pr.myReviewStatus {
-                            reviewStatusBadge(reviewStatus)
-                        }
-                    }
-
-                    if pr.unreadUnresolvedCount > 0 {
-                        Badge(count: pr.unreadUnresolvedCount)
-                            .delayedHoverTooltip(
-                                String(
-                                    localized:
-                                        "This shows how many unread unresolved review comments this PR has."
-                                )
-                            )
-                    } else if pr.readUnresolvedCount > 0 {
-                        Badge(count: pr.readUnresolvedCount, color: .gray)
-                            .delayedHoverTooltip(
-                                String(
-                                    localized:
-                                        "All current unresolved review comments on this PR are marked as read."
-                                )
-                            )
-                    }
-                }
+                .buttonStyle(.plain)
+                .help("Details")
+                .accessibilityLabel("Details for PR #\(pr.number)")
+                .accessibilityIdentifier("pr-details-\(pr.id)")
+                .panelControlGeometry("details")
             }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 8)
+        .background {
+            Button(action: onOpen) {
+                Rectangle().fill(Color.clear).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(isOpening)
+            .accessibilityLabel("Open \(pr.repoFullName) #\(pr.number), \(pr.title)")
+            .accessibilityIdentifier("pr-row-\(pr.id)")
+            .panelControlGeometry("open")
+            .help(timeHelp)
+            .accessibilityValue(latestFactsDescription.map { "\($0). \(timeHelp)" } ?? timeHelp)
         }
-        .padding(.vertical, 6)
-        .padding(.horizontal, 8)
         .background(isHovered ? Color.primary.opacity(0.05) : Color.clear)
         .cornerRadius(6)
-        .contentShape(Rectangle())
-        .accessibilityIdentifier("pr-row-\(pr.id)")
+        .animation(PanelMotion.feedback(reduceMotion: reduceMotion), value: isHovered)
         .onHover { hovering in
-            if !menuTracker.isTracking {
-                isHovered = hovering
-            }
+            if !menuTracker.isTracking { isHovered = hovering }
         }
         .onChange(of: menuTracker.isTracking) { isTracking in
-            if !isTracking {
-                isHovered = false
-            }
-        }
-        .onTapGesture {
-            guard !isOpening else { return }
-            onOpen()
+            if !isTracking { isHovered = false }
         }
         .contextMenu {
             Button("Open in Browser") {
                 onOpen()
             }
             .disabled(isOpening)
+            Button("Details…") { detailRequest &+= 1 }
             Button("Copy URL") {
                 onCopyURL()
             }
@@ -453,6 +411,54 @@ struct PRRowView: View {
         }
     }
 
+    @ViewBuilder
+    private var coreSignals: some View {
+        if pr.isDraft { DraftBadge() }
+        if pr.approvalCount > 0 { approvalBadge }
+        if let mentionCount = pr.mentionCount, mentionCount > 0 { MentionBadge(count: mentionCount) }
+        if showConflictStatus, pr.hasBaseConflicts { ConflictBadge() }
+        if showCmuxStatus, pr.isOpenInCmux == true {
+            Text("cmux")
+                .foregroundColor(.purple)
+                .delayedHoverTooltip(String(localized: "This PR is currently open as a tab in cmux."))
+        }
+        if showCIStatus, let ciStatus = pr.ciStatus {
+            CIStatusIcon(
+                status: ciStatus,
+                successCount: pr.checkSuccessCount,
+                failureCount: pr.checkFailureCount,
+                pendingCount: pr.checkPendingCount,
+                isRunning: pr.ciIsRunning,
+                workflows: pr.ciWorkflows
+            )
+        }
+        if pr.category == .reviewRequest, showMyReviewStatus, let reviewStatus = pr.myReviewStatus {
+            reviewStatusBadge(reviewStatus)
+        }
+        if pr.unreadUnresolvedCount > 0 {
+            Label("\(pr.unreadUnresolvedCount)", systemImage: "bubble.left.fill")
+                .foregroundColor(.orange)
+                .delayedHoverTooltip("\(pr.unreadUnresolvedCount) unread unresolved threads")
+                .accessibilityLabel("\(pr.unreadUnresolvedCount) unread unresolved threads")
+        }
+        if pr.readUnresolvedCount > 0 {
+            Label("\(pr.readUnresolvedCount)", systemImage: "bubble.left")
+                .foregroundColor(.secondary)
+                .delayedHoverTooltip("\(pr.readUnresolvedCount) read unresolved threads")
+                .accessibilityLabel("\(pr.readUnresolvedCount) read unresolved threads")
+        }
+        if let extensionRun {
+            Label(extensionRun.progressMessage ?? extensionRun.status.displayName, systemImage: "waveform.path.ecg")
+                .foregroundColor(.purple)
+        } else if let extensionAnalysis {
+            Label(extensionAnalysis.verdict.displayName, systemImage: "sparkles")
+                .foregroundColor(extensionAnalysisColor)
+        }
+        ForEach(extensionTags.map(\.displayName).sorted(), id: \.self) { tag in
+            Label(tag, systemImage: "tag").foregroundColor(.secondary)
+        }
+    }
+
     private var extensionAnalysisColor: Color {
         switch extensionAnalysis?.verdict {
         case .likelyFlaky:
@@ -488,6 +494,50 @@ struct PRRowView: View {
         } else {
             badge
         }
+    }
+}
+
+private struct PRSignalLayout: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrange(subviews, width: proposal.width ?? .infinity).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let arrangement = arrange(subviews, width: bounds.width)
+        for (index, origin) in arrangement.origins.enumerated() {
+            subviews[index].place(
+                at: CGPoint(x: bounds.minX + origin.x, y: bounds.minY + origin.y),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: arrangement.sizes[index].width, height: arrangement.sizes[index].height)
+            )
+        }
+    }
+
+    private func arrange(_ subviews: Subviews, width: CGFloat) -> (size: CGSize, origins: [CGPoint], sizes: [CGSize]) {
+        let availableWidth = max(0, width)
+        var origins: [CGPoint] = []
+        var sizes: [CGSize] = []
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var lineHeight: CGFloat = 0
+        var usedWidth: CGFloat = 0
+        for subview in subviews {
+            let ideal = subview.sizeThatFits(.unspecified)
+            let size = subview.sizeThatFits(ProposedViewSize(width: min(ideal.width, availableWidth), height: nil))
+            if x > 0, x + size.width > availableWidth {
+                x = 0
+                y += lineHeight + spacing
+                lineHeight = 0
+            }
+            origins.append(CGPoint(x: x, y: y))
+            sizes.append(size)
+            usedWidth = max(usedWidth, x + size.width)
+            x += size.width + spacing
+            lineHeight = max(lineHeight, size.height)
+        }
+        return (CGSize(width: usedWidth, height: y + lineHeight), origins, sizes)
     }
 }
 
@@ -732,7 +782,10 @@ private extension View {
         onLoadHoverDetail: (() -> Void)?,
         isUpdatingBranch: Bool,
         isLoadingHoverDetail: Bool,
-        jiraMetadataEnabled: Bool
+        jiraMetadataEnabled: Bool,
+        allowsRemoteAvatars: Bool,
+        reduceMotion: Bool,
+        focusedRequest: UInt64
     ) -> some View {
         background(PRHoverDetailTrackingArea(
             pr: pr,
@@ -741,7 +794,10 @@ private extension View {
             onLoadHoverDetail: onLoadHoverDetail,
             isUpdatingBranch: isUpdatingBranch,
             isLoadingHoverDetail: isLoadingHoverDetail,
-            jiraMetadataEnabled: jiraMetadataEnabled
+            jiraMetadataEnabled: jiraMetadataEnabled,
+            allowsRemoteAvatars: allowsRemoteAvatars,
+            reduceMotion: reduceMotion,
+            focusedRequest: focusedRequest
         ))
     }
 }
@@ -754,65 +810,115 @@ private struct PRHoverDetailTrackingArea: NSViewRepresentable {
     let isUpdatingBranch: Bool
     let isLoadingHoverDetail: Bool
     let jiraMetadataEnabled: Bool
+    let allowsRemoteAvatars: Bool
+    let reduceMotion: Bool
+    let focusedRequest: UInt64
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.panelDisplayRowID) private var displayRowID
 
     func makeNSView(context: Context) -> PRHoverDetailTrackingView {
         let view = PRHoverDetailTrackingView()
-        view.updatePayload(
-            pr: pr,
-            onOpenJira: onOpenJira,
-            onUpdateBranchWithRebase: onUpdateBranchWithRebase,
-            onLoadHoverDetail: onLoadHoverDetail,
-            isUpdatingBranch: isUpdatingBranch,
-            isLoadingHoverDetail: isLoadingHoverDetail,
-            jiraMetadataEnabled: jiraMetadataEnabled
-        )
+        PRHoverDetailTrackingView.instances.add(view)
+        updateNSView(view, context: context)
         return view
     }
 
     func updateNSView(_ nsView: PRHoverDetailTrackingView, context: Context) {
+        nsView.setEnabled(isEnabled)
         nsView.updatePayload(
             pr: pr,
+            originRowID: displayRowID,
             onOpenJira: onOpenJira,
             onUpdateBranchWithRebase: onUpdateBranchWithRebase,
             onLoadHoverDetail: onLoadHoverDetail,
             isUpdatingBranch: isUpdatingBranch,
             isLoadingHoverDetail: isLoadingHoverDetail,
-            jiraMetadataEnabled: jiraMetadataEnabled
+            jiraMetadataEnabled: jiraMetadataEnabled,
+            allowsRemoteAvatars: allowsRemoteAvatars,
+            reduceMotion: reduceMotion,
+            focusedRequest: focusedRequest
         )
     }
 }
 
 private final class PRHoverDetailTrackingView: NSView {
+    static let instances = NSHashTable<PRHoverDetailTrackingView>.weakObjects()
+
+    static var pendingHoverTaskCount: Int {
+        instances.allObjects.filter { $0.hoverTask != nil }.count
+    }
+
+    static func cancelAll() {
+        for view in instances.allObjects {
+            view.isHovered = false
+            view.hoverTask?.cancel()
+            view.hoverTask = nil
+            view.didRequestHoverDetail = false
+        }
+    }
     private var pr: PullRequest?
+    private var originRowID: PRPanelRowID?
     private var onOpenJira: ((String) -> Void)?
     private var onUpdateBranchWithRebase: (() -> Void)?
     private var onLoadHoverDetail: (() -> Void)?
     private var isUpdatingBranch = false
     private var isLoadingHoverDetail = false
     private var jiraMetadataEnabled = false
+    private var allowsRemoteAvatars = true
+    private var reduceMotion = false
+    private var focusedRequest: UInt64 = 0
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     private var trackingArea: NSTrackingArea?
     private var hoverTask: Task<Void, Never>?
     private var isHovered = false
     private var didRequestHoverDetail = false
 
+    private var isEnabled = true
+
+    func setEnabled(_ enabled: Bool) {
+        guard isEnabled != enabled else { return }
+        isEnabled = enabled
+        if !enabled {
+            isHovered = false
+            hideDetail()
+        }
+    }
+
     func updatePayload(
         pr: PullRequest,
+        originRowID: PRPanelRowID?,
         onOpenJira: @escaping (String) -> Void,
         onUpdateBranchWithRebase: (() -> Void)?,
         onLoadHoverDetail: (() -> Void)?,
         isUpdatingBranch: Bool,
         isLoadingHoverDetail: Bool,
-        jiraMetadataEnabled: Bool
+        jiraMetadataEnabled: Bool,
+        allowsRemoteAvatars: Bool,
+        reduceMotion: Bool,
+        focusedRequest: UInt64
     ) {
         let prChanged = self.pr?.id != pr.id
         self.pr = pr
+        self.originRowID = originRowID
         self.onOpenJira = onOpenJira
         self.onUpdateBranchWithRebase = onUpdateBranchWithRebase
         self.onLoadHoverDetail = onLoadHoverDetail
         self.isUpdatingBranch = isUpdatingBranch
         self.isLoadingHoverDetail = isLoadingHoverDetail
         self.jiraMetadataEnabled = jiraMetadataEnabled
+        self.allowsRemoteAvatars = allowsRemoteAvatars
+        self.reduceMotion = reduceMotion
+        let requestsFocus = self.focusedRequest != focusedRequest
+        self.focusedRequest = focusedRequest
+        guard isEnabled else { return }
+
+        if requestsFocus {
+            hoverTask?.cancel()
+            showDetail(mode: .focused)
+            return
+        }
 
         if prChanged, isHovered {
             didRequestHoverDetail = false
@@ -839,6 +945,7 @@ private final class PRHoverDetailTrackingView: NSView {
     }
 
     override func mouseEntered(with event: NSEvent) {
+        guard isEnabled else { return }
         isHovered = true
         didRequestHoverDetail = false
         PRHoverDetailPanelController.shared.cancelHide(ownerID: ownerID)
@@ -871,6 +978,7 @@ private final class PRHoverDetailTrackingView: NSView {
     }
 
     private func scheduleDetail() {
+        guard isEnabled else { return }
         hoverTask?.cancel()
         hoverTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 500_000_000)
@@ -879,13 +987,14 @@ private final class PRHoverDetailTrackingView: NSView {
         }
     }
 
-    private func showDetail() {
-        guard let pr else { return }
+    private func showDetail(mode: PRDetailPresentationMode = .hover) {
+        guard isEnabled, let pr else { return }
         requestHoverDetailIfNeeded()
         PRHoverDetailPanelController.shared.show(
             pr: pr,
             anchorView: self,
             ownerID: ownerID,
+            originRowID: originRowID,
             onOpenJira: { [weak self] issueKey in
                 guard let self else { return }
                 PRHoverDetailPanelController.shared.hide(ownerID: self.ownerID)
@@ -894,7 +1003,10 @@ private final class PRHoverDetailTrackingView: NSView {
             onUpdateBranchWithRebase: onUpdateBranchWithRebase,
             isUpdatingBranch: isUpdatingBranch,
             isLoadingHoverDetail: isLoadingHoverDetail,
-            jiraMetadataEnabled: jiraMetadataEnabled
+            jiraMetadataEnabled: jiraMetadataEnabled,
+            allowsRemoteAvatars: allowsRemoteAvatars,
+            reduceMotion: reduceMotion,
+            mode: mode
         )
     }
 
@@ -919,16 +1031,42 @@ extension Notification.Name {
     static let prHoverDetailPanelVisibilityDidChange = Notification.Name("PRHoverDetailPanelVisibilityDidChange")
 }
 
+private enum PRDetailPresentationMode {
+    case hover
+    case focused
+}
+
+private final class PRDetailPanel: NSPanel {
+    var presentationMode: PRDetailPresentationMode = .hover
+    var onEscape: (() -> Void)?
+    override var canBecomeKey: Bool { presentationMode == .focused }
+    override var canBecomeMain: Bool { false }
+    override func cancelOperation(_ sender: Any?) { onEscape?() }
+}
+
 @MainActor
 private final class PRHoverDetailPanelController {
     static let shared = PRHoverDetailPanelController()
 
-    private var panel: NSPanel?
+    private var panel: PRDetailPanel?
     private var visibleOwnerID: ObjectIdentifier?
     private weak var anchorView: NSView?
     private var hideTask: Task<Void, Never>?
     private var localMouseMonitor: Any?
     private var globalMouseMonitor: Any?
+    private var mode: PRDetailPresentationMode = .hover
+    var isFocused: Bool { mode == .focused }
+    var activeResourceCount: Int {
+        (panel?.isVisible == true ? 1 : 0) + (hideTask == nil ? 0 : 1)
+            + (localMouseMonitor == nil ? 0 : 1) + (globalMouseMonitor == nil ? 0 : 1)
+    }
+    private weak var returnWindow: NSWindow?
+    private weak var returnResponder: NSResponder?
+    private var focusedOriginRowID: PRPanelRowID?
+
+    func closeAll() {
+        if let ownerID = visibleOwnerID { hide(ownerID: ownerID, restoreFocus: false) }
+    }
     func isVisible(for ownerID: ObjectIdentifier) -> Bool {
         visibleOwnerID == ownerID && panel?.isVisible == true
     }
@@ -937,13 +1075,28 @@ private final class PRHoverDetailPanelController {
         pr: PullRequest,
         anchorView: NSView,
         ownerID: ObjectIdentifier,
+        originRowID: PRPanelRowID?,
         onOpenJira: @escaping (String) -> Void,
         onUpdateBranchWithRebase: (() -> Void)?,
         isUpdatingBranch: Bool,
         isLoadingHoverDetail: Bool,
-        jiraMetadataEnabled: Bool
+        jiraMetadataEnabled: Bool,
+        allowsRemoteAvatars: Bool,
+        reduceMotion: Bool,
+        mode: PRDetailPresentationMode
     ) {
         guard let placement = placement(for: anchorView, pr: pr) else { return }
+        if self.mode == .focused, mode == .hover {
+            guard visibleOwnerID == ownerID else { return }
+        }
+        let effectiveMode: PRDetailPresentationMode = self.mode == .focused && visibleOwnerID == ownerID ? .focused : mode
+        let enteringFocused = mode == .focused && (self.mode != .focused || visibleOwnerID != ownerID)
+        if mode == .focused {
+            focusedOriginRowID = originRowID
+            returnWindow = anchorView.window
+            returnResponder = anchorView.window?.firstResponder
+        }
+        self.mode = effectiveMode
         let wasVisible = visibleOwnerID != nil
         cancelHide(ownerID: ownerID)
         visibleOwnerID = ownerID
@@ -963,9 +1116,18 @@ private final class PRHoverDetailPanelController {
             isLoadingHoverDetail: isLoadingHoverDetail,
             jiraMetadataEnabled: jiraMetadataEnabled
         )
+        .environment(\.allowsRemoteAvatars, allowsRemoteAvatars)
+        .transaction { transaction in
+            if reduceMotion {
+                transaction.animation = nil
+                transaction.disablesAnimations = true
+            }
+        }
 
         let panel = panel ?? makePanel()
         self.panel = panel
+        panel.presentationMode = effectiveMode
+        panel.onEscape = { [weak self] in self?.hide(ownerID: ownerID, restoreFocus: true) }
 
         let frameSize = placement.frame.size
         if let existing = panel.contentView as? PRHoverDetailHostingView,
@@ -982,50 +1144,55 @@ private final class PRHoverDetailPanelController {
         }
         panel.setFrame(placement.frame, display: true)
 
-        if !panel.isVisible {
-            panel.alphaValue = 0
-            panel.orderFront(nil)
-            ensureMouseMonitors()
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.10
-                panel.animator().alphaValue = 1
+        panel.alphaValue = 1
+        if effectiveMode == .focused {
+            if mode == .focused {
+                panel.makeKeyAndOrderFront(nil)
             }
+            if enteringFocused {
+                panel.recalculateKeyViewLoop()
+                panel.selectNextKeyView(nil)
+            }
+            removeMouseMonitors()
         } else {
-            panel.alphaValue = 1
+            panel.orderFront(nil)
             ensureMouseMonitors()
         }
     }
 
-    func hide(ownerID: ObjectIdentifier) {
+    func hide(ownerID: ObjectIdentifier, restoreFocus: Bool = false) {
         guard visibleOwnerID == ownerID else { return }
         hideTask?.cancel()
         hideTask = nil
         visibleOwnerID = nil
         anchorView = nil
+        mode = .hover
         removeMouseMonitors()
-        guard let panel, panel.isVisible else {
-            notifyVisibilityChanged(isVisible: false)
-            return
+        panel?.orderOut(nil)
+        panel?.alphaValue = 1
+        if restoreFocus, let returnWindow, returnWindow.isVisible {
+            returnWindow.makeKey()
+            if let returnResponder { returnWindow.makeFirstResponder(returnResponder) }
+            NotificationCenter.default.post(
+                name: .panelFocusedDetailsDidClose,
+                object: returnWindow,
+                userInfo: focusedOriginRowID.map { ["originRowID": $0] }
+            )
         }
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.08
-            panel.animator().alphaValue = 0
-        } completionHandler: { [weak self, weak panel] in
-            Task { @MainActor [weak self, weak panel] in
-                guard self?.visibleOwnerID == nil else { return }
-                panel?.orderOut(nil)
-                panel?.alphaValue = 1
-                self?.notifyVisibilityChanged(isVisible: false)
-            }
-        }
+        returnWindow = nil
+        returnResponder = nil
+        focusedOriginRowID = nil
+        notifyVisibilityChanged(isVisible: false)
     }
 
     func scheduleHide(ownerID: ObjectIdentifier) {
         guard visibleOwnerID == ownerID else { return }
+        guard mode == .hover else { return }
         guard hideTask == nil else { return }
         hideTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 220_000_000)
-            guard let self, self.visibleOwnerID == ownerID else { return }
+            guard !Task.isCancelled, let self,
+                  self.visibleOwnerID == ownerID, self.mode == .hover else { return }
             self.hideTask = nil
             if self.isPointerInsideHoverRegion() {
                 return
@@ -1057,8 +1224,8 @@ private final class PRHoverDetailPanelController {
         }
     }
 
-    private func makePanel() -> NSPanel {
-        let panel = NSPanel(
+    private func makePanel() -> PRDetailPanel {
+        let panel = PRDetailPanel(
             contentRect: NSRect(origin: .zero, size: CGSize(width: PRHoverDetailMetrics.cardWidth, height: 1)),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
@@ -1831,6 +1998,7 @@ private struct StackedAvatarsView: View {
     var maxVisible: Int = 5
 
     @State private var isHovered = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var deduped: [String] {
         var seen = Set<String>()
@@ -1879,7 +2047,7 @@ private struct StackedAvatarsView: View {
                     .padding(.leading, 2)
             }
         }
-        .animation(.easeInOut(duration: 0.15), value: isHovered)
+        .animation(PanelMotion.state(reduceMotion: reduceMotion), value: isHovered)
         .onHover { isHovered = $0 }
     }
 }

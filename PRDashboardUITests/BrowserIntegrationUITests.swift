@@ -335,9 +335,9 @@ final class BrowserIntegrationUITests: XCTestCase {
 
 
     private func showIntegrationsTab(in app: XCUIApplication) {
-        let tab = app.buttons["settings-tab-integrations"]
-        XCTAssertTrue(tab.waitForExistence(timeout: 3), "Settings must expose an Integrations tab")
-        tab.click()
+        let page = app.descendants(matching: .any).matching(identifier: "settings-page-integrations").firstMatch
+        XCTAssertTrue(page.waitForExistence(timeout: 3), "Settings must expose its Integrations sidebar row")
+        page.click()
     }
 
     private func launch(with argument: String) -> XCUIApplication {

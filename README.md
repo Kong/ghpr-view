@@ -41,13 +41,25 @@ Click the menu bar icon, then **Sign in with GitHub**, and enter the code at [gi
 
 If that is blocked, use a [personal access token](https://github.com/settings/tokens) with `repo`, `read:user`, `workflow`, and `read:org`. A release build keeps it in the Keychain.
 
-Left-click opens the list. Right-click opens the menu, including Quit. **Cmd+R** refreshes. The gear is Settings.
+Left-click opens the list. Right-click opens the menu, including Quit. Search, Filter, and Refresh are at the top; Activity and Settings are in the footer. Each PR has a Details button for the full status and available actions.
+
+**Cmd+F** focuses search, **Cmd+R** refreshes, and **Cmd+,** opens Settings. With the list focused, use the arrow keys to select a PR and Return to open it. Escape clears a search before closing the panel; native menus, sheets, and input composition handle Escape first. Clearing search keeps your selected filters.
+
+The CI summary includes both failed and unknown checks; individual rows distinguish them. The menu bar count combines unread unresolved threads on your PRs with unanswered direct mentions. Activity has its own reminder count.
+
+Settings uses a persistent sidebar for General, Pull Requests, Alerts, Integrations, and Advanced, with Cancel/Save controls. Its 620×620pt minimum content size and 156pt sidebar preserve readable form space; the menu panel remains 400×500pt. Switching pages keeps your draft. Sign-in, connections, and Launch at Login take effect immediately; Cancel discards the remaining draft settings.
+
+Jira keys use a light accent marker and open independently from the PR row. Hovering a key or status badge shows a short explanation; the row's Details button and title hover still provide the full PR context. Activity and Settings use borderless footer icons.
+
+Clicking a digest notification opens Activity with that digest's local history. If its history has expired, Activity explains that and still shows current reminders. Dismiss and Snooze keep the reminder visible if saving fails. Snooze's 24 hours and 7 days are elapsed durations.
 
 ## Requirements
 
 macOS 13 or later, and a GitHub account. The interface is in English and Simplified Chinese.
 
 ## Build from source
+
+Building the native app requires Xcode 26 or later with the macOS 26 SDK or later. The app still runs on macOS 13 and later; older systems use standard bordered controls.
 
 ```bash
 git clone https://github.com/kong/ghpr-view.git

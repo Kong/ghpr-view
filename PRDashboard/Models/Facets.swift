@@ -184,48 +184,21 @@ enum FacetPredicate {
     }
 
     private static func matchesCIState(_ pr: PullRequest, term: String) -> Bool {
-        switch term.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "", "any", "value":
-            return pr.ciStatus != nil || pr.checkTotalCount > 0 || pr.ciIsRunning
-        case "pass", "passed", "success", "green":
-            return pr.ciStatus == .success
-        case "failure", "fail", "failed", "failing", "red":
-            return pr.ciStatus == .failure || pr.ciStatus == .unknown || pr.checkFailureCount > 0
-        case "running", "pending", "inflight", "in-flight":
-            return pr.ciIsInFlight
-        default:
-            return false
+        switch PRSearchScope.ciFilter(term) {
+        case .any: return pr.ciStatus != nil || pr.checkTotalCount > 0 || pr.ciIsRunning
+        case .pass: return pr.ciStatus == .success
+        case .failure: return pr.ciStatus == .failure || pr.ciStatus == .unknown || pr.checkFailureCount > 0
+        case .running: return pr.ciIsInFlight
+        case nil: return false
         }
     }
 
     private static func matchesPRState(_ pr: PullRequest, term: String) -> Bool {
-        switch term.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "conflict", "conflicts":
-            return pr.hasBaseConflicts
-        default:
-            return false
-        }
+        PRSearchScope.isConflictFilter(term) && pr.hasBaseConflicts
     }
 
     private static func matchesApprovalCount(_ pr: PullRequest, term: String) -> Bool {
-        let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return pr.approvalCount > 0 }
-
-        let operators = [">=", "<=", "==", ">", "<", "="]
-        let matchedOperator = operators.first { trimmed.hasPrefix($0) }
-        let operation = matchedOperator ?? "="
-        let numberText = String(trimmed.dropFirst(matchedOperator?.count ?? 0))
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let expected = Int(numberText) else { return false }
-
-        switch operation {
-        case ">=": return pr.approvalCount >= expected
-        case ">": return pr.approvalCount > expected
-        case "<=": return pr.approvalCount <= expected
-        case "<": return pr.approvalCount < expected
-        case "=", "==": return pr.approvalCount == expected
-        default: return false
-        }
+        PRSearchScope.approvalFilter(term)?.matches(pr.approvalCount) ?? false
     }
 }
 

@@ -93,6 +93,85 @@ final class BrowserBridgeTests: XCTestCase {
         XCTAssertFalse(String(decoding: encoded, as: UTF8.self).contains("token"))
     }
 
+    func testSettingsBrowserLaunchRefreshesExpiredCapabilities() async throws {
+        let root = temporaryDirectory()
+        let controller = ExtensionPlatformController(
+            snapshotProvider: Self.emptySnapshot,
+            storageURL: nil,
+            assetProvider: BrowserAssetProvider(roots: []),
+            appVersion: "1.0.0",
+            ports: [0],
+            draftsRootURL: root.appendingPathComponent("drafts"),
+            installedSkillsRootURL: root.appendingPathComponent("installed"),
+            bundledSkillsRootURL: nil
+        )
+        let ready = expectation(description: "Settings Browser Bridge is listening")
+        let subscription = controller.server.$status.sink { status in
+            if case .running = status.state {
+                ready.fulfill()
+            }
+        }
+        defer {
+            subscription.cancel()
+            controller.server.stop()
+        }
+        controller.server.start()
+        await fulfillment(of: [ready], timeout: 5)
+        let baseURL = try XCTUnwrap(controller.server.baseURL)
+        let presentation = BrowserIntegrationView.presentation(
+            controller: controller, agentInstallStatuses: [], agentInstallError: nil
+        )
+        let expired = controller.store.issueWorkbenchGrant(
+            now: Date().addingTimeInterval(-16 * 60)
+        )
+        let expiredResponse = await controller.router.response(
+            for: BrowserHTTPRequest(
+                method: "GET", target: "/api/v1/local-capability",
+                headers: ["Authorization": "Bearer \(expired)"]
+            ),
+            baseURL: baseURL
+        )
+        XCTAssertEqual(expiredResponse.status, 401)
+
+        let workbench = try XCTUnwrap(presentation.workbenchURL)
+        var contractComponents = try XCTUnwrap(URLComponents(url: workbench, resolvingAgainstBaseURL: false))
+        contractComponents.fragment = "contract"
+        let contract = try XCTUnwrap(contractComponents.url)
+        let targets = [
+            try XCTUnwrap(presentation.browserTestURL),
+            workbench,
+            contract
+        ]
+        for target in targets {
+            XCTAssertNil(target.query, "Presentation must not retain a capability")
+            let resolved = try XCTUnwrap(
+                BrowserIntegrationView.resolveBrowserURL(target, controller: controller)
+            )
+            let components = try XCTUnwrap(URLComponents(url: resolved, resolvingAgainstBaseURL: false))
+            let token = try XCTUnwrap(components.queryItems?.first { $0.name == "cap" }?.value)
+            XCTAssertNotEqual(token, expired)
+            XCTAssertEqual(resolved.fragment, target.fragment)
+            let response = await controller.router.response(
+                for: BrowserHTTPRequest(
+                    method: "GET", target: "/api/v1/local-capability",
+                    headers: ["Authorization": "Bearer \(token)"]
+                ),
+                baseURL: baseURL
+            )
+            XCTAssertEqual(response.status, 200)
+            let context = try BrowserJSON.decode(LocalCapabilityContext.self, from: response.body)
+            XCTAssertEqual(context.kind, .workbench)
+        }
+        let external = try XCTUnwrap(URL(string: "https://example.com/ui/workbench#contract"))
+        XCTAssertEqual(
+            BrowserIntegrationView.resolveBrowserURL(external, controller: controller), external
+        )
+        let install = try XCTUnwrap(presentation.installUserscriptURL)
+        XCTAssertEqual(
+            BrowserIntegrationView.resolveBrowserURL(install, controller: controller), install
+        )
+    }
+
     func testRouterCapabilityAndPairingStatusBoundaries() async throws {
         let store = ExtensionPlatformStore(storageURL: nil)
         let root = temporaryDirectory()
