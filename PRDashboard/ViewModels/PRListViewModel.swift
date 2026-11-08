@@ -285,6 +285,7 @@ final class PRListViewModel: ObservableObject {
     @Published private(set) var isValidatingPAT: Bool = false
     @Published private(set) var patError: Error?
     @Published private(set) var rateLimitInfo: RateLimitInfo = .empty { didSet { invalidateSnapshot() } }
+    @Published private(set) var restRateLimitInfo: RateLimitInfo = .empty { didSet { invalidateSnapshot() } }
     @Published private(set) var openingPRIDs: Set<Int> = [] { didSet { invalidateSnapshot() } }
     @Published private(set) var updatingBranchPRIDs: Set<Int> = [] { didSet { invalidateSnapshot() } }
     @Published private(set) var loadingHoverDetailPRIDs: Set<Int> = [] { didSet { invalidateSnapshot() } }
@@ -303,6 +304,7 @@ final class PRListViewModel: ObservableObject {
     private let menuTracker: MenuTracker
     private var prListUpdateBuffer = MenuTrackingUpdateBuffer<PRList>()
     private var rateLimitUpdateBuffer = MenuTrackingUpdateBuffer<RateLimitInfo>()
+    private var restRateLimitUpdateBuffer = MenuTrackingUpdateBuffer<RateLimitInfo>()
 
     private(set) var presentationRevision: UInt64 = 0
     private(set) var snapshotRevision: UInt64 = 0
@@ -387,6 +389,9 @@ final class PRListViewModel: ObservableObject {
                 if let pendingRateLimit = self.rateLimitUpdateBuffer.setTracking(isTracking) {
                     self.rateLimitInfo = pendingRateLimit
                 }
+                if let pendingRestRateLimit = self.restRateLimitUpdateBuffer.setTracking(isTracking) {
+                    self.restRateLimitInfo = pendingRestRateLimit
+                }
             }
             .store(in: &cancellables)
 
@@ -416,6 +421,16 @@ final class PRListViewModel: ObservableObject {
                     return
                 }
                 self.rateLimitInfo = visibleInfo
+            }
+            .store(in: &cancellables)
+        prManager.$restRateLimitInfo
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] info in
+                guard let self,
+                      let visibleInfo = self.restRateLimitUpdateBuffer.receive(info) else {
+                    return
+                }
+                self.restRateLimitInfo = visibleInfo
             }
             .store(in: &cancellables)
 

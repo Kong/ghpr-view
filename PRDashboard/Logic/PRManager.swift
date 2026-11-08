@@ -173,6 +173,7 @@ final class PRManager: PRManagerType, ObservableObject {
     @Published private(set) var prList: PRList = .empty
     @Published private(set) var refreshState: RefreshState = .idle
     @Published private(set) var rateLimitInfo: RateLimitInfo = .empty
+    @Published private(set) var restRateLimitInfo: RateLimitInfo = .empty
     @Published private(set) var jiraConnectionState: JiraConnectionState = .notConfigured
     @Published var configuration: Configuration
     @Published private(set) var pinnedPRIdentifiers: Set<String> = []
@@ -385,6 +386,12 @@ final class PRManager: PRManagerType, ObservableObject {
                     self?.rateLimitInfo = info
                     self?.updateCIWatchTimer()
                 }
+            }
+            .store(in: &cancellables)
+        apiClient.$restRateLimitInfo
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] info in
+                Task { @MainActor [weak self] in self?.restRateLimitInfo = info }
             }
             .store(in: &cancellables)
 

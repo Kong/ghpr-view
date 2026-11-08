@@ -189,15 +189,17 @@ struct PRRowView: View {
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 4) {
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 6) {
                         if isPinned {
                             Image(systemName: "pin.fill").foregroundColor(.orange)
                         }
                         SearchHighlightedText(text: pr.repoFullName, query: searchHighlightQuery)
+                            .font(.system(size: 11, weight: .medium))
                             .lineLimit(1).truncationMode(.middle)
                         SearchHighlightedText(text: "#\(pr.number)", query: searchHighlightQuery)
                             .fixedSize()
+                            .monospacedDigit()
                         Spacer(minLength: 4)
                         Text(timeDisplay).fixedSize().help(timeHelp).accessibilityLabel(timeHelp)
                     }
@@ -206,8 +208,9 @@ struct PRRowView: View {
                     .allowsHitTesting(false)
 
                     SearchHighlightedText(text: pr.title, query: searchHighlightQuery)
-                        .font(.system(size: 13))
+                        .font(.system(size: 13, weight: .medium))
                         .lineLimit(2)
+                        .lineSpacing(1)
                         .fixedSize(horizontal: false, vertical: true)
                         .foregroundColor(.primary)
                         .allowsHitTesting(false)
@@ -224,7 +227,7 @@ struct PRRowView: View {
                             focusedRequest: detailRequest
                         )
 
-                    PRSignalLayout(spacing: 6) {
+                    PRSignalLayout(spacing: 8, lineSpacing: 4) {
                         SearchHighlightedText(text: pr.author, query: searchHighlightQuery)
                             .foregroundColor(.secondary).allowsHitTesting(false)
                         if let ticket = pr.jiraTicket {
@@ -240,13 +243,13 @@ struct PRRowView: View {
                                         RoundedRectangle(cornerRadius: 4)
                                             .fill(reduceTransparency
                                                 ? Color(nsColor: .controlBackgroundColor)
-                                                : Color.accentColor.opacity(0.10))
+                                                : Color.accentColor.opacity(0.07))
                                     }
                                     .overlay {
                                         RoundedRectangle(cornerRadius: 4)
                                             .stroke(colorSchemeContrast == .increased
-                                                ? Color.primary : Color.accentColor.opacity(0.35),
-                                                lineWidth: colorSchemeContrast == .increased ? 1 : 0.5)
+                                                ? Color.primary : Color.clear,
+                                                lineWidth: colorSchemeContrast == .increased ? 1 : 0)
                                     }
                                     .frame(minHeight: 28)
                                     .contentShape(Rectangle())
@@ -257,7 +260,9 @@ struct PRRowView: View {
                             .accessibilityIdentifier("pr-jira-\(pr.id)")
                             .panelControlGeometry("jira")
                         }
-                        coreSignals.allowsHitTesting(false)
+                        coreSignals
+                            .environment(\.compactPRRowBadges, true)
+                            .allowsHitTesting(false)
                         if isOpening {
                             if reduceMotion {
                                 Text("Opening…").foregroundColor(.secondary)
@@ -297,7 +302,6 @@ struct PRRowView: View {
             .accessibilityLabel("Open \(pr.repoFullName) #\(pr.number), \(pr.title)")
             .accessibilityIdentifier("pr-row-\(pr.id)")
             .panelControlGeometry("open")
-            .help(timeHelp)
             .accessibilityValue(latestFactsDescription.map { "\($0). \(timeHelp)" } ?? timeHelp)
         }
         .background(isHovered ? Color.primary.opacity(0.05) : Color.clear)
@@ -499,6 +503,7 @@ struct PRRowView: View {
 
 private struct PRSignalLayout: Layout {
     var spacing: CGFloat
+    var lineSpacing: CGFloat
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         arrange(subviews, width: proposal.width ?? .infinity).size
@@ -523,12 +528,17 @@ private struct PRSignalLayout: Layout {
         var y: CGFloat = 0
         var lineHeight: CGFloat = 0
         var usedWidth: CGFloat = 0
-        for subview in subviews {
+        var lineStartIndex = 0
+        for (index, subview) in subviews.enumerated() {
             let ideal = subview.sizeThatFits(.unspecified)
             let size = subview.sizeThatFits(ProposedViewSize(width: min(ideal.width, availableWidth), height: nil))
             if x > 0, x + size.width > availableWidth {
+                for rowIndex in lineStartIndex..<index {
+                    origins[rowIndex].y += (lineHeight - sizes[rowIndex].height) / 2
+                }
+                lineStartIndex = index
                 x = 0
-                y += lineHeight + spacing
+                y += lineHeight + lineSpacing
                 lineHeight = 0
             }
             origins.append(CGPoint(x: x, y: y))
@@ -536,6 +546,9 @@ private struct PRSignalLayout: Layout {
             usedWidth = max(usedWidth, x + size.width)
             x += size.width + spacing
             lineHeight = max(lineHeight, size.height)
+        }
+        for rowIndex in lineStartIndex..<subviews.count {
+            origins[rowIndex].y += (lineHeight - sizes[rowIndex].height) / 2
         }
         return (CGSize(width: usedWidth, height: y + lineHeight), origins, sizes)
     }

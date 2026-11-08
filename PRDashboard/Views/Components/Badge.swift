@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 private enum HoverTooltipPalette {
@@ -79,6 +80,40 @@ extension EnvironmentValues {
     var hoverTooltipPresenter: HoverTooltipPresenter? {
         get { self[HoverTooltipPresenterKey.self] }
         set { self[HoverTooltipPresenterKey.self] = newValue }
+    }
+}
+
+private struct CompactPRRowBadgeStyleKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var compactPRRowBadges: Bool {
+        get { self[CompactPRRowBadgeStyleKey.self] }
+        set { self[CompactPRRowBadgeStyleKey.self] = newValue }
+    }
+}
+
+private struct PRRowBadgeSurface: ViewModifier {
+    @Environment(\.compactPRRowBadges) private var compact
+    let color: Color
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if compact {
+            content
+        } else {
+            content
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .background(color)
+                .clipShape(Capsule())
+        }
+    }
+}
+private extension View {
+    func prRowBadgeSurface(_ color: Color) -> some View {
+        modifier(PRRowBadgeSurface(color: color))
     }
 }
 
@@ -189,8 +224,11 @@ struct HoverTooltipOverlay: View {
 }
 
 private struct HoverTooltipTrackingArea: NSViewRepresentable {
-    let onActive: (CGPoint) -> Void
-    let onEnded: () -> Void
+    let presenter: HoverTooltipPresenter
+    let text: String
+    let delayNanoseconds: UInt64
+    let origin: CGPoint
+    let reduceMotion: Bool
 
     func makeNSView(context: Context) -> HoverTooltipTrackingView {
         let view = HoverTooltipTrackingView()
@@ -200,21 +238,44 @@ private struct HoverTooltipTrackingArea: NSViewRepresentable {
     }
 
     func updateNSView(_ view: HoverTooltipTrackingView, context: Context) {
-        view.onActive = onActive
-        view.onEnded = onEnded
+        view.configure(presenter: presenter, text: text, delayNanoseconds: delayNanoseconds,
+                       origin: origin, reduceMotion: reduceMotion)
     }
 
     static func dismantleNSView(_ view: HoverTooltipTrackingView, coordinator: ()) {
         view.stopTracking()
-        view.onActive = nil
-        view.onEnded = nil
     }
 }
 
 private final class HoverTooltipTrackingView: NSView {
-    var onActive: ((CGPoint) -> Void)?
-    var onEnded: (() -> Void)?
+    private let ownerID = UUID()
+    private weak var presenter: HoverTooltipPresenter?
+    private var cancellationSubscription: AnyCancellable?
+    private var text = ""
+    private var delayNanoseconds: UInt64 = 500_000_000
+    private var origin: CGPoint = .zero
+    private var reduceMotion = false
+    private var isHovered = false
+    private var latestPoint: CGPoint = .zero
+    private var showTask: Task<Void, Never>?
     private var hoverTrackingArea: NSTrackingArea?
+
+    func configure(presenter: HoverTooltipPresenter, text: String, delayNanoseconds: UInt64,
+                   origin: CGPoint, reduceMotion: Bool) {
+        if self.presenter !== presenter {
+            stopTracking()
+            self.presenter = presenter
+            cancellationSubscription = presenter.$cancellationRevision.dropFirst().sink { [weak self] _ in
+                self?.endHover()
+            }
+        }
+        self.text = text
+        self.delayNanoseconds = delayNanoseconds
+        self.origin = origin
+        self.reduceMotion = reduceMotion
+    }
+
+    deinit { showTask?.cancel() }
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { false }
@@ -234,15 +295,43 @@ private final class HoverTooltipTrackingView: NSView {
         hoverTrackingArea = area
     }
 
-    override func mouseEntered(with event: NSEvent) {
-        onActive?(convert(event.locationInWindow, from: nil))
+    override func mouseEntered(with event: NSEvent) { trackHover(with: event) }
+
+    override func mouseMoved(with event: NSEvent) { trackHover(with: event) }
+
+    override func mouseExited(with event: NSEvent) { endHover() }
+
+    private func trackHover(with event: NSEvent) {
+        guard window != nil, let presenter else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        latestPoint = CGPoint(x: origin.x + point.x, y: origin.y + point.y)
+        if isHovered {
+            presenter.update(ownerID: ownerID, text: text, point: latestPoint)
+            return
+        }
+        isHovered = true
+        showTask = Task { @MainActor [weak self, delayNanoseconds] in
+            try? await Task.sleep(nanoseconds: delayNanoseconds)
+            guard !Task.isCancelled, let self, self.isHovered else { return }
+            self.showTask = nil
+            withAnimation(self.reduceMotion ? nil : .easeOut(duration: 0.10)) {
+                self.presenter?.show(ownerID: self.ownerID, text: self.text, point: self.latestPoint)
+            }
+        }
     }
 
-    override func mouseMoved(with event: NSEvent) {
-        onActive?(convert(event.locationInWindow, from: nil))
+    private func cancelHover() {
+        isHovered = false
+        showTask?.cancel()
+        showTask = nil
     }
 
-    override func mouseExited(with event: NSEvent) { onEnded?() }
+    private func endHover() {
+        cancelHover()
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.10)) {
+            presenter?.hide(ownerID: ownerID)
+        }
+    }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         if newWindow == nil { stopTracking() }
@@ -251,7 +340,15 @@ private final class HoverTooltipTrackingView: NSView {
 
     func stopTracking() {
         removeHoverTrackingArea()
-        onEnded?()
+        cancelHover()
+        // AppKit can detach/dismantle this view during SwiftUI graph destruction.
+        // Cancel work now, but publish removal only after that transaction unwinds.
+        guard let presenter, presenter.isVisible(for: ownerID) else { return }
+        let ownerID = ownerID
+        DispatchQueue.main.async { [weak self, weak presenter] in
+            guard self?.isHovered != true else { return }
+            presenter?.hide(ownerID: ownerID)
+        }
     }
 
     private func removeHoverTrackingArea() {
@@ -267,11 +364,6 @@ private struct DelayedHoverTooltipModifier: ViewModifier {
     @Environment(\.hoverTooltipPresenter) private var presenter
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    @State private var ownerID = UUID()
-    @State private var isHovered = false
-    @State private var latestPoint: CGPoint = .zero
-    @State private var showTask: Task<Void, Never>?
-
     @ViewBuilder
     func body(content: Content) -> some View {
         if let presenter {
@@ -280,53 +372,16 @@ private struct DelayedHoverTooltipModifier: ViewModifier {
                     GeometryReader { geometry in
                         let frame = geometry.frame(in: .named(HoverTooltipCoordinateSpace.name))
                         HoverTooltipTrackingArea(
-                            onActive: { localPoint in
-                                let point = CGPoint(x: frame.minX + localPoint.x, y: frame.minY + localPoint.y)
-                                latestPoint = point
-                                if !isHovered {
-                                    isHovered = true
-                                    scheduleTooltip(presenter: presenter)
-                                } else if presenter.isVisible(for: ownerID) {
-                                    presenter.update(ownerID: ownerID, text: text, point: point)
-                                }
-                            },
-                            onEnded: {
-                                isHovered = false
-                                hideTooltip(presenter: presenter)
-                            }
+                            presenter: presenter,
+                            text: text,
+                            delayNanoseconds: delayNanoseconds,
+                            origin: frame.origin,
+                            reduceMotion: reduceMotion
                         )
                     }
                 }
-                .onReceive(presenter.$cancellationRevision) { _ in
-                    isHovered = false
-                    hideTooltip(presenter: presenter)
-                }
-                .onDisappear {
-                    isHovered = false
-                    hideTooltip(presenter: presenter)
-                }
         } else {
             content
-        }
-    }
-
-    private func scheduleTooltip(presenter: HoverTooltipPresenter) {
-        showTask?.cancel()
-        showTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: delayNanoseconds)
-            guard !Task.isCancelled, isHovered else { return }
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.10)) {
-                presenter.show(ownerID: ownerID, text: text, point: latestPoint)
-            }
-        }
-    }
-
-    private func hideTooltip(presenter: HoverTooltipPresenter) {
-        showTask?.cancel()
-        showTask = nil
-
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.10)) {
-            presenter.hide(ownerID: ownerID)
         }
     }
 }
@@ -359,10 +414,7 @@ struct DraftBadge: View {
         Text("Draft")
             .font(.system(size: 11, weight: .medium))
             .foregroundColor(.secondary)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 2)
-            .background(Color.secondary.opacity(0.2))
-            .clipShape(Capsule())
+            .prRowBadgeSurface(Color.secondary.opacity(0.2))
             .delayedHoverTooltip(
                 String(localized: "This PR is a draft and not ready for review.")
             )
@@ -376,10 +428,7 @@ struct MyReviewStatusBadge: View {
         Label(title, systemImage: symbol)
             .font(.system(size: 11, weight: .medium))
             .foregroundColor(textColor)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 2)
-            .background(backgroundColor)
-            .clipShape(Capsule())
+            .prRowBadgeSurface(backgroundColor)
             .fixedSize(horizontal: true, vertical: false)
             .delayedHoverTooltip(explanation)
             .accessibilityElement(children: .ignore)
@@ -448,10 +497,7 @@ struct ApprovalBadge: View {
                 .font(.system(size: 10, weight: .semibold))
         }
         .foregroundColor(.green)
-        .padding(.horizontal, 5)
-        .padding(.vertical, 2)
-        .background(Color.green.opacity(0.15))
-        .clipShape(Capsule())
+        .prRowBadgeSurface(Color.green.opacity(0.15))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(String(localized: "\(count) approvals"))
         .delayedHoverTooltip(
@@ -468,10 +514,7 @@ struct MentionBadge: View {
             Text(count > 99 ? "@99+" : "@\(count)")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundColor(.blue)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 2)
-                .background(Color.blue.opacity(0.15))
-                .clipShape(Capsule())
+                .prRowBadgeSurface(Color.blue.opacity(0.15))
                 .accessibilityLabel(String(localized: "\(count) unanswered direct mentions"))
                 .delayedHoverTooltip(
                     String(localized: "Unanswered direct mentions: \(count)")
@@ -485,10 +528,7 @@ struct ConflictBadge: View {
         Text("Conflict")
             .font(.system(size: 10, weight: .medium))
             .foregroundColor(.red)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 2)
-            .background(Color.red.opacity(0.15))
-            .clipShape(Capsule())
+            .prRowBadgeSurface(Color.red.opacity(0.15))
             .delayedHoverTooltip(
                 String(localized: "This PR has conflicts with the base branch.")
             )

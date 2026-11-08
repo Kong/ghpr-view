@@ -26,9 +26,13 @@ enum PanelMotion {
     static func disclosure(reduceMotion: Bool) -> Animation? {
         reduceMotion ? nil : .easeInOut(duration: 0.18)
     }
+
+    static func filter(reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : .easeInOut(duration: 0.24)
+    }
 }
 
-/// One native material layer per functional toolbar/footer button.
+/// Each toolbar button owns its native material; avoid a second backing surface.
 struct PanelToolButtonStyle: ViewModifier {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
@@ -42,7 +46,6 @@ struct PanelToolButtonStyle: ViewModifier {
         } else {
             content.buttonStyle(.bordered)
                 .controlSize(.small)
-                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
                 .overlay(border)
         }
     }

@@ -13,6 +13,8 @@ struct PRPanelView: View {
     var onSearchEscape: (() -> Void)? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Namespace private var categoryNamespace
     @State private var showSyncDetails = false
     @StateObject private var tooltipPresenter = HoverTooltipPresenter()
     @State private var firstVisibleApprovalPRID: Int?
@@ -202,6 +204,10 @@ struct PRPanelView: View {
                 .focused($nativeControlFocus, equals: .refresh)
             }
             .frame(minHeight: PanelMetrics.toolbarHeight)
+            categorySelector
+                .padding(.horizontal, 2)
+                .padding(.top, 4)
+                .padding(.bottom, 4)
 
             if !searchSuggestions.isEmpty || !snapshot.labelSuggestions.isEmpty || !snapshot.facetChips.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -252,6 +258,74 @@ struct PRPanelView: View {
         }
         .padding(.horizontal, PanelMetrics.inset)
     }
+    @ViewBuilder
+    private var categorySelector: some View {
+        if #available(macOS 26.0, *), !reduceTransparency {
+            GlassEffectContainer(spacing: 4) {
+                categoryButtons
+            }
+        } else {
+            categoryButtons
+        }
+    }
+
+    private var categoryButtons: some View {
+        HStack(spacing: 2) {
+            ForEach(PRPanelCategory.allCases) { category in
+                let selected = interaction.selectedCategory == category
+                Button {
+                    interaction.selectCategory(category)
+                } label: {
+                    categoryLabel(category, selected: selected)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(category.title)
+                .accessibilityValue(selected ? "Selected" : "")
+                .accessibilityIdentifier("panel-category-\(category.rawValue)")
+            }
+        }
+        .animation(PanelMotion.filter(reduceMotion: reduceMotion), value: interaction.selectedCategory)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("panel-category-selector")
+    }
+
+    @ViewBuilder
+    private func categoryLabel(_ category: PRPanelCategory, selected: Bool) -> some View {
+        let label = Text(category.title)
+            .font(.system(size: 11, weight: selected ? .semibold : .regular))
+            .foregroundStyle(selected ? HierarchicalShapeStyle.primary : .secondary)
+            .frame(maxWidth: .infinity, minHeight: 28)
+            .contentShape(Capsule())
+
+        if #available(macOS 26.0, *), selected, !reduceTransparency {
+            // Include the text so Liquid Glass also adapts its foreground contrast.
+            label
+                .glassEffect(.regular.interactive(), in: Capsule())
+                .glassEffectID("panel-category-selection", in: categoryNamespace)
+                .overlay {
+                    if contrast == .increased {
+                        Capsule().stroke(Color.primary, lineWidth: 1)
+                    }
+                }
+        } else {
+            label.background {
+                if selected {
+                    categorySelectionSurface
+                }
+            }
+        }
+    }
+
+    private var categorySelectionSurface: some View {
+        Capsule()
+            .fill(Color(nsColor: .controlBackgroundColor))
+            .overlay(Capsule().stroke(
+                contrast == .increased ? Color.primary : Color.secondary.opacity(0.35),
+                lineWidth: contrast == .increased ? 1 : 0.75
+            ))
+            .matchedGeometryEffect(id: "panel-category-selection", in: categoryNamespace)
+    }
+
     private var prListView: some View {
         let snapshot = layoutSnapshot
         let summary = interaction.latestSnapshot?.projection ?? snapshot.projection
@@ -259,20 +333,22 @@ struct PRPanelView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if let error = snapshot.prList.error { staleDataBanner(error).panelGeometry(.error) }
-                    PRSummaryView(
-                        readyToMerge: summary.summaryReadyToMerge,
-                        changesRequested: summary.summaryChangesRequested,
-                        ciFailing: summary.summaryCIFailing,
-                        ciRunning: summary.summaryCIRunning,
-                        toReview: summary.summaryWaitingForMyReview
-                    )
-                    .frame(height: interaction.protectsLayout ? interaction.protectedGeometry[.summary]?.height : nil, alignment: .top)
-                    .clipped()
-                    .panelGeometry(.summary)
-                    if PRSectionID.allCases.allSatisfy({ layoutProjection.displayedRowIDs(for: $0).isEmpty }) {
+                    if interaction.selectedCategory == .all {
+                        PRSummaryView(
+                            readyToMerge: summary.summaryReadyToMerge,
+                            changesRequested: summary.summaryChangesRequested,
+                            ciFailing: summary.summaryCIFailing,
+                            ciRunning: summary.summaryCIRunning,
+                            toReview: summary.summaryWaitingForMyReview
+                        )
+                        .frame(height: interaction.protectsLayout ? interaction.protectedGeometry[.summary]?.height : nil, alignment: .top)
+                        .clipped()
+                        .panelGeometry(.summary)
+                    }
+                    if interaction.selectedCategory.sections.allSatisfy({ layoutProjection.displayedRowIDs(for: $0).isEmpty }) {
                         noMatchingPRs
                     }
-                    ForEach(PRSectionID.allCases, id: \.self) { section in
+                    ForEach(interaction.selectedCategory.sections, id: \.self) { section in
                         let rows = layoutProjection.displayedRowIDs(for: section)
                         collapsibleSection(section, count: rows.count, onboardingStep: onboardingStep(for: section)) {
                             ForEach(rows, id: \.self) { id in
@@ -315,6 +391,12 @@ struct PRPanelView: View {
                 transaction.disablesAnimations = true
                 withTransaction(transaction) { reader.scrollTo(target) }
             }
+            .onChange(of: interaction.categoryRevealRevision) { _ in
+                guard let target = interaction.categoryRevealTarget else { return }
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { reader.scrollTo(target, anchor: .top) }
+            }
         }
     }
 
@@ -322,6 +404,9 @@ struct PRPanelView: View {
     private var noMatchingPRs: some View {
         VStack(spacing: 8) {
             Text("No matching PRs").font(.headline)
+            if interaction.selectedCategory != .all {
+                Button("Show all categories") { interaction.selectCategory(.all) }
+            }
             if !searchText.isEmpty { Button("Clear query") { updateQuery("") } }
             if !snapshot.activeFacetSelections.isEmpty { Button("Clear filters", action: actions.clearAllFacets) }
         }
@@ -602,7 +687,7 @@ struct PRPanelView: View {
     // MARK: - Footer
 
     private var footerView: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             Button { showSyncDetails.toggle() } label: {
                 HStack(spacing: 4) {
                     if interaction.hasPendingOrder {
@@ -613,9 +698,9 @@ struct PRPanelView: View {
                     } else if snapshot.prList.isLoading {
                         if !reduceMotion { ProgressView().controlSize(.mini) }
                         Text("Updating…")
-                    } else if snapshot.rateLimitInfo.limit > 0 && snapshot.rateLimitInfo.isLow {
+                    } else if isLowQuota(snapshot.rateLimitInfo) {
                         Image(systemName: "exclamationmark.triangle")
-                        Text("API limited")
+                        Text("GraphQL limited")
                         if snapshot.rateLimitInfo.resetDate > snapshot.now {
                             Text(snapshot.rateLimitInfo.resetDate, style: .time)
                         }
@@ -625,7 +710,7 @@ struct PRPanelView: View {
                     Image(systemName: "info.circle")
                 }
                 .lineLimit(1)
-                .frame(width: 170, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(.plain)
             .help("Synchronization and API details")
@@ -633,8 +718,7 @@ struct PRPanelView: View {
             .accessibilityValue(interaction.hasPendingOrder ? "List order pending" : (snapshot.actionError ?? ""))
             .panelOnboardingAnchor(onboardingManager, step: .unresolvedComments, arrow: .top)
             .popover(isPresented: $showSyncDetails, arrowEdge: .top) { syncDetails }
-
-            Spacer(minLength: 0)
+            quotaView
 
             Button(action: actions.openActivity) {
                 HStack(spacing: 3) {
@@ -672,6 +756,51 @@ struct PRPanelView: View {
         .frame(minHeight: PanelMetrics.footerHeight)
     }
 
+    private var footerQuota: (name: String, info: RateLimitInfo) {
+        let quotas = [("REST", snapshot.restRateLimitInfo), ("GraphQL", snapshot.rateLimitInfo)]
+            .filter { $0.1.isAvailable && $0.1.limit > 0 }
+        guard let lowest = quotas.min(by: {
+            Double($0.1.remaining) / Double($0.1.limit) < Double($1.1.remaining) / Double($1.1.limit)
+        }) else { return ("API", .empty) }
+        return lowest
+    }
+
+    private var quotaHoverText: String {
+        [quotaDetailText("GraphQL", info: snapshot.rateLimitInfo),
+         quotaDetailText("REST", info: snapshot.restRateLimitInfo)].joined(separator: "\n")
+    }
+
+    private func quotaDetailText(_ name: String, info: RateLimitInfo) -> String {
+        guard info.isAvailable else { return "\(name): unavailable" }
+        let quota = "\(name): \(info.remaining) remaining of \(info.limit)"
+        guard info.resetDate > snapshot.now else { return quota }
+        return "\(quota), resets \(Self.absoluteDateFormatter.string(from: info.resetDate))"
+    }
+
+    private var quotaView: some View {
+        let quota = footerQuota
+        let info = quota.info
+        let ratio = info.limit > 0 ? Double(info.remaining) / Double(info.limit) : 1
+        let color: Color = !info.isAvailable ? .secondary : info.remaining == 0 ? .red : isLowQuota(info) ? .orange : .secondary
+        return Text("\(quota.name) \(info.isAvailable ? "\(info.remaining.formatted())/\(info.limit.formatted())" : "—")")
+            .font(.system(size: 9))
+            .monospacedDigit()
+            .foregroundStyle(color)
+            .lineLimit(1)
+            .fixedSize()
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Lowest API quota: \(quota.name) \(info.isAvailable ? "\(info.remaining.formatted())/\(info.limit.formatted())" : "—"). \(quotaHoverText)")
+            .accessibilityValue("\(quota.name) is \(ratio.formatted(.percent.precision(.fractionLength(0)))) remaining")
+            .delayedHoverTooltip(quotaHoverText)
+            .accessibilityIdentifier("panel-quota")
+    }
+
+    private func isLowQuota(_ info: RateLimitInfo) -> Bool {
+        guard info.isAvailable, info.limit > 0 else { return false }
+        return info.isLow || Double(info.remaining) / Double(info.limit) < 0.15
+    }
+
+
     private func syncLabel(relativeTo now: Date) -> some View {
         Text("Updated \(Self.relativeDateFormatter.localizedString(for: snapshot.prList.lastUpdated, relativeTo: now))")
     }
@@ -680,14 +809,8 @@ struct PRPanelView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Synchronization").font(.headline)
             Text("Last updated: \(Self.absoluteDateFormatter.string(from: snapshot.prList.lastUpdated))")
-            if snapshot.rateLimitInfo.limit > 0 {
-                Text("API: \(snapshot.rateLimitInfo.remaining) remaining of \(snapshot.rateLimitInfo.limit)")
-                if snapshot.rateLimitInfo.resetDate > snapshot.now {
-                    Text("API reset: \(Self.absoluteDateFormatter.string(from: snapshot.rateLimitInfo.resetDate))")
-                }
-            } else {
-                Text("API quota unavailable")
-            }
+            quotaDetail("GraphQL", info: snapshot.rateLimitInfo)
+            quotaDetail("REST", info: snapshot.restRateLimitInfo)
             Divider()
             Text("\(snapshot.prList.totalUnresolvedCount) unresolved threads")
             Text("\(snapshot.prList.authoredUnreadUnresolvedCount) unread unresolved threads on your PRs")
@@ -698,6 +821,18 @@ struct PRPanelView: View {
         .padding(PanelMetrics.inset)
         .frame(maxWidth: 340, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder
+    private func quotaDetail(_ name: String, info: RateLimitInfo) -> some View {
+        if info.isAvailable {
+            Text("\(name): \(info.remaining) remaining of \(info.limit)")
+            if info.resetDate > snapshot.now {
+                Text("\(name) reset: \(Self.absoluteDateFormatter.string(from: info.resetDate))")
+            }
+        } else {
+            Text("\(name) API quota unavailable")
+        }
     }
 
     private static let absoluteDateFormatter: DateFormatter = {

@@ -7,25 +7,33 @@ struct RateLimitInfo: Equatable {
     let limit: Int
     let remaining: Int
     let resetDate: Date
+    let isAvailable: Bool
+
+    init(limit: Int, remaining: Int, resetDate: Date, isAvailable: Bool = true) {
+        self.limit = limit
+        self.remaining = remaining
+        self.resetDate = resetDate
+        self.isAvailable = isAvailable
+    }
 
     var isLow: Bool {
-        remaining < 100
+        isAvailable && remaining < 100
     }
 
     var hasHeadroomForMentions: Bool {
-        remaining >= 500
+        !isAvailable || remaining >= 500
     }
 
     var hasHeadroomForDetails: Bool {
-        remaining >= 200
+        !isAvailable || remaining >= 200
     }
 
     var hasHeadroomForHoverDetails: Bool {
-        remaining >= 100
+        !isAvailable || remaining >= 100
     }
 
     static var empty: RateLimitInfo {
-        RateLimitInfo(limit: 5000, remaining: 5000, resetDate: Date())
+        RateLimitInfo(limit: 5_000, remaining: 5_000, resetDate: .distantPast, isAvailable: false)
     }
 }
 
@@ -363,6 +371,7 @@ final class GitHubAPIClient: ObservableObject {
     private var lastETag: String?
 
     @Published private(set) var rateLimitInfo: RateLimitInfo = .empty
+    @Published private(set) var restRateLimitInfo: RateLimitInfo = .empty
 
     private struct RetryDecision {
         let classification: String
@@ -1994,6 +2003,7 @@ final class GitHubAPIClient: ObservableObject {
     private func recordGraphQLRateLimit(_ rateLimit: DirectMentionRateLimit) async {
         let resetDate = rateLimit.resetAt.flatMap { Self.parseISO8601Date($0) } ?? Date()
         await MainActor.run {
+            guard self.rateLimitInfo.isAvailable else { return }
             self.rateLimitInfo = RateLimitInfo(
                 limit: self.rateLimitInfo.limit,
                 remaining: rateLimit.remaining,
@@ -2520,7 +2530,7 @@ final class GitHubAPIClient: ObservableObject {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.invalidResponse
         }
-        updateRateLimitInfo(from: httpResponse)
+        updateRESTRateLimitInfo(from: httpResponse)
 
         guard httpResponse.statusCode == 200 else {
             if Self.isAuthenticationFailure(statusCode: httpResponse.statusCode, data: data) {
@@ -2695,7 +2705,7 @@ final class GitHubAPIClient: ObservableObject {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.invalidResponse
         }
-        updateRateLimitInfo(from: httpResponse)
+        updateRESTRateLimitInfo(from: httpResponse)
         guard httpResponse.statusCode == 200 else {
             if Self.isAuthenticationFailure(statusCode: httpResponse.statusCode, data: data) {
                 reportUnauthorized(rejectedToken: requestToken)
@@ -3954,7 +3964,7 @@ final class GitHubAPIClient: ObservableObject {
                     throw APIError.invalidResponse
                 }
 
-                updateRateLimitInfo(from: httpResponse)
+                updateGraphQLRateLimitInfo(from: httpResponse)
 
                 switch httpResponse.statusCode {
                 case 200:
@@ -4037,21 +4047,28 @@ final class GitHubAPIClient: ObservableObject {
         throw APIError.unknown(String(localized: "GraphQL request failed without a terminal error"))
     }
 
-    private func updateRateLimitInfo(from response: HTTPURLResponse) {
-        if let limitStr = response.value(forHTTPHeaderField: "X-RateLimit-Limit"),
-           let remainingStr = response.value(forHTTPHeaderField: "X-RateLimit-Remaining"),
-           let resetStr = response.value(forHTTPHeaderField: "X-RateLimit-Reset"),
-           let limit = Int(limitStr),
-           let remaining = Int(remainingStr),
-           let resetTimestamp = TimeInterval(resetStr) {
-            Task { @MainActor in
-                self.rateLimitInfo = RateLimitInfo(
-                    limit: limit,
-                    remaining: remaining,
-                    resetDate: Date(timeIntervalSince1970: resetTimestamp)
-                )
-            }
-        }
+    private func updateGraphQLRateLimitInfo(from response: HTTPURLResponse) {
+        guard let info = Self.rateLimitInfo(from: response) else { return }
+        Task { @MainActor in self.rateLimitInfo = info }
+    }
+
+    private func updateRESTRateLimitInfo(from response: HTTPURLResponse) {
+        guard let info = Self.rateLimitInfo(from: response) else { return }
+        Task { @MainActor in self.restRateLimitInfo = info }
+    }
+
+    private static func rateLimitInfo(from response: HTTPURLResponse) -> RateLimitInfo? {
+        guard let limitStr = response.value(forHTTPHeaderField: "X-RateLimit-Limit"),
+              let remainingStr = response.value(forHTTPHeaderField: "X-RateLimit-Remaining"),
+              let resetStr = response.value(forHTTPHeaderField: "X-RateLimit-Reset"),
+              let limit = Int(limitStr),
+              let remaining = Int(remainingStr),
+              let resetTimestamp = TimeInterval(resetStr) else { return nil }
+        return RateLimitInfo(
+            limit: limit,
+            remaining: remaining,
+            resetDate: Date(timeIntervalSince1970: resetTimestamp)
+        )
     }
 
     private func rateLimitResetDate(from response: HTTPURLResponse) -> Date? {
@@ -6599,7 +6616,7 @@ extension GitHubAPIClient {
                 guard let httpResponse = response as? HTTPURLResponse else {
                     throw MonitorTransportError.invalidResponse
                 }
-                updateRateLimitInfo(from: httpResponse)
+                updateGraphQLRateLimitInfo(from: httpResponse)
 
                 switch httpResponse.statusCode {
                 case 200:
@@ -6682,7 +6699,7 @@ extension GitHubAPIClient {
 
     /// Records rate-limit headers observed on a monitor REST call.
     func monitorRecordRateLimit(from response: HTTPURLResponse) {
-        updateRateLimitInfo(from: response)
+        updateRESTRateLimitInfo(from: response)
     }
 
     /// Reports a token GitHub rejected during monitor work to the shared auth handler.

@@ -31,6 +31,34 @@ final class MacOSUIUXTests: XCTestCase {
         XCTAssertEqual(result, .completed, "Expected fixture intent: \(text)", file: file, line: line)
     }
 
+
+    func testCategorySwitchFiltersRowsAndAllRestoresGroups() {
+        let app = launch(count: 20)
+        defer { app.terminate() }
+        open(app)
+        let quota = element(app, "panel-quota")
+        XCTAssertTrue(quota.waitForExistence(timeout: 5))
+        XCTAssertTrue(quota.label.contains("Lowest API quota: GraphQL 4,500/5,000"))
+        XCTAssertTrue(quota.label.contains("GraphQL: 4500 remaining of 5000"))
+        XCTAssertTrue(quota.label.contains("REST: 4900 remaining of 5000"), "Accessible quota description retains both pools")
+        XCTAssertFalse(element(app, "panel-quota-graphql").exists)
+
+        element(app, "panel-category-reviews").click()
+        XCTAssertTrue(element(app, "pr-row-1002").waitForExistence(timeout: 5))
+        XCTAssertTrue(element(app, "pr-row-1001").waitForNonExistence(timeout: 3), "My PRs must leave the visible list in Reviews")
+
+        element(app, "panel-category-mentions").click()
+        XCTAssertTrue(element(app, "pr-row-1003").waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Direct Mentions"].waitForExistence(timeout: 5))
+        XCTAssertTrue(element(app, "pr-row-1002").waitForNonExistence(timeout: 3))
+
+        element(app, "panel-category-myPRs").click()
+        XCTAssertTrue(element(app, "pr-row-1001").waitForExistence(timeout: 5))
+        XCTAssertTrue(element(app, "pr-row-1002").waitForNonExistence(timeout: 3))
+
+        element(app, "panel-category-all").click()
+        XCTAssertEqual(element(app, "panel-category-all").value as? String, "Selected")
+    }
     func testCachedPanelRendersInNativePopover() {
         let app = launch(count: 3)
         defer { app.terminate() }
