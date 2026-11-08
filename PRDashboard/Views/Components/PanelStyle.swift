@@ -28,36 +28,30 @@ enum PanelMotion {
     }
 
     static func filter(reduceMotion: Bool) -> Animation? {
-        reduceMotion ? nil : .easeInOut(duration: 0.24)
+        reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.86)
     }
 }
 
-/// Each toolbar button owns its native material; avoid a second backing surface.
+/// Compact borderless tools share the panel surface and keep feedback local.
 struct PanelToolButtonStyle: ViewModifier {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var isHovered = false
 
-    @ViewBuilder
     func body(content: Content) -> some View {
-        if #available(macOS 26.0, *), !reduceTransparency {
-            content.buttonStyle(.glass)
-                .controlSize(.small)
-                .overlay(border)
-        } else {
-            content.buttonStyle(.bordered)
-                .controlSize(.small)
-                .overlay(border)
-        }
+        content
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .background {
+                Circle()
+                    .fill(Color.primary.opacity(isHovered && isEnabled ? (contrast == .increased ? 0.14 : 0.06) : 0))
+                    .allowsHitTesting(false)
+            }
+            .animation(PanelMotion.feedback(reduceMotion: reduceMotion), value: isHovered && isEnabled)
+            .onHover { isHovered = $0 }
     }
 
-    @ViewBuilder
-    private var border: some View {
-        if contrast == .increased {
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(Color.primary, lineWidth: 1)
-                .allowsHitTesting(false)
-        }
-    }
 }
 
 extension View {

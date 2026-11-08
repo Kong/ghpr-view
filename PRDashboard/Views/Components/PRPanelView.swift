@@ -15,6 +15,8 @@ struct PRPanelView: View {
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Namespace private var categoryNamespace
+    @State private var hoveredCategory: PRPanelCategory?
+    @State private var pressedCategory: PRPanelCategory?
     @State private var showSyncDetails = false
     @StateObject private var tooltipPresenter = HoverTooltipPresenter()
     @State private var firstVisibleApprovalPRID: Int?
@@ -120,6 +122,8 @@ struct PRPanelView: View {
         .onChange(of: interaction.isPresented) { presented in
             if !presented {
                 tooltipPresenter.dismissAll()
+                hoveredCategory = nil
+                pressedCategory = nil
                 showSyncDetails = false
             }
         }
@@ -182,7 +186,7 @@ struct PRPanelView: View {
                         .font(.system(size: PanelMetrics.symbolSize))
                         .frame(minWidth: PanelMetrics.toolSize, minHeight: PanelMetrics.toolSize)
                 }
-                .tint(isFacetPanelPresented ? .accentColor : nil)
+                .foregroundStyle(isFacetPanelPresented ? Color.accentColor : Color.primary)
                 .panelToolButton()
                 .help(isFacetPanelPresented ? "Close Filters" : "Filter")
                 .accessibilityLabel("Filter")
@@ -261,11 +265,18 @@ struct PRPanelView: View {
     @ViewBuilder
     private var categorySelector: some View {
         if #available(macOS 26.0, *), !reduceTransparency {
-            GlassEffectContainer(spacing: 4) {
-                categoryButtons
+            categoryButtons.background {
+                PanelCategoryGlassMaterial(
+                    selected: interaction.selectedCategory, hovered: hoveredCategory, pressed: pressedCategory,
+                    reduceMotion: reduceMotion, increasedContrast: contrast == .increased
+                )
+                .allowsHitTesting(false)
             }
         } else {
             categoryButtons
+                .animation(PanelMotion.filter(reduceMotion: reduceMotion), value: interaction.selectedCategory)
+                .animation(PanelMotion.filter(reduceMotion: reduceMotion), value: hoveredCategory)
+                .animation(PanelMotion.feedback(reduceMotion: reduceMotion), value: pressedCategory)
         }
     }
 
@@ -278,13 +289,19 @@ struct PRPanelView: View {
                 } label: {
                     categoryLabel(category, selected: selected)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PanelCategoryButtonStyle(category: category, pressedCategory: $pressedCategory))
+                .onHover { hovering in
+                    if hovering {
+                        hoveredCategory = category
+                    } else if hoveredCategory == category {
+                        hoveredCategory = nil
+                    }
+                }
                 .accessibilityLabel(category.title)
                 .accessibilityValue(selected ? "Selected" : "")
                 .accessibilityIdentifier("panel-category-\(category.rawValue)")
             }
         }
-        .animation(PanelMotion.filter(reduceMotion: reduceMotion), value: interaction.selectedCategory)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("panel-category-selector")
     }
@@ -296,34 +313,25 @@ struct PRPanelView: View {
             .foregroundStyle(selected ? HierarchicalShapeStyle.primary : .secondary)
             .frame(maxWidth: .infinity, minHeight: 28)
             .contentShape(Capsule())
-
-        if #available(macOS 26.0, *), selected, !reduceTransparency {
-            // Include the text so Liquid Glass also adapts its foreground contrast.
+        if #available(macOS 26.0, *), !reduceTransparency {
             label
-                .glassEffect(.regular.interactive(), in: Capsule())
-                .glassEffectID("panel-category-selection", in: categoryNamespace)
-                .overlay {
-                    if contrast == .increased {
-                        Capsule().stroke(Color.primary, lineWidth: 1)
-                    }
-                }
         } else {
             label.background {
                 if selected {
-                    categorySelectionSurface
+                    Capsule()
+                        .fill(Color(nsColor: .controlBackgroundColor))
+                        .overlay(Capsule().stroke(
+                            contrast == .increased ? Color.primary : Color.secondary.opacity(0.35),
+                            lineWidth: contrast == .increased ? 1 : 0.75
+                        ))
+                        .matchedGeometryEffect(id: "panel-category-selection", in: categoryNamespace)
+                        .scaleEffect(pressedCategory == category ? 0.96 : 1)
+                } else if hoveredCategory == category {
+                    Capsule().fill(Color.primary.opacity(0.06))
+                        .scaleEffect(pressedCategory == category ? 0.96 : 1)
                 }
             }
         }
-    }
-
-    private var categorySelectionSurface: some View {
-        Capsule()
-            .fill(Color(nsColor: .controlBackgroundColor))
-            .overlay(Capsule().stroke(
-                contrast == .increased ? Color.primary : Color.secondary.opacity(0.35),
-                lineWidth: contrast == .increased ? 1 : 0.75
-            ))
-            .matchedGeometryEffect(id: "panel-category-selection", in: categoryNamespace)
     }
 
     private var prListView: some View {
@@ -890,6 +898,137 @@ struct PRPanelView: View {
         }
     }
 }
+
+private struct PanelCategoryButtonStyle: ButtonStyle {
+    let category: PRPanelCategory
+    @Binding var pressedCategory: PRPanelCategory?
+
+    func makeBody(configuration: SwiftUI.ButtonStyleConfiguration) -> some View {
+        configuration.label
+            .onChange(of: configuration.isPressed) { pressed in
+                if pressed {
+                    pressedCategory = category
+                } else if pressedCategory == category {
+                    pressedCategory = nil
+                }
+            }
+    }
+}
+
+/// Keep native glass sampling separate from SwiftUI's stationary text and hit targets.
+@available(macOS 26.0, *)
+private struct PanelCategoryGlassMaterial: NSViewRepresentable {
+    let selected: PRPanelCategory
+    let hovered: PRPanelCategory?
+    let pressed: PRPanelCategory?
+    let reduceMotion: Bool
+    let increasedContrast: Bool
+
+    func makeNSView(context: Context) -> PanelCategoryGlassView { PanelCategoryGlassView() }
+
+    func updateNSView(_ view: PanelCategoryGlassView, context: Context) {
+        let categories = PRPanelCategory.allCases
+        view.configure(
+            selected: categories.firstIndex(of: selected) ?? 0,
+            hovered: hovered.flatMap { categories.firstIndex(of: $0) },
+            pressed: pressed.flatMap { categories.firstIndex(of: $0) },
+            reduceMotion: reduceMotion, increasedContrast: increasedContrast
+        )
+    }
+}
+
+@available(macOS 26.0, *)
+private final class PanelCategoryGlassView: NSView {
+    private let container = NSGlassEffectContainerView()
+    private let surface = NSView()
+    private let selection = NSGlassEffectView()
+    private let hover = NSGlassEffectView()
+    private var selectedIndex = 0
+    private var hoveredIndex: Int?
+    private var pressedIndex: Int?
+    private var reduceMotion = false
+    private var increasedContrast = false
+    private var measuredSize: NSSize = .zero
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setAccessibilityElement(false)
+        container.spacing = 4
+        container.contentView = surface
+        addSubview(container)
+        surface.addSubview(selection)
+        surface.addSubview(hover)
+        selection.cornerRadius = 14
+        hover.cornerRadius = 14
+        selection.wantsLayer = true
+        hover.wantsLayer = true
+        hover.alphaValue = 0
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func layout() {
+        super.layout()
+        guard measuredSize != bounds.size else { return }
+        measuredSize = bounds.size
+        container.frame = bounds
+        surface.frame = container.bounds
+        position(animated: false)
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateContrast()
+    }
+
+    func configure(selected: Int, hovered: Int?, pressed: Int?, reduceMotion: Bool, increasedContrast: Bool) {
+        let pressChanged = pressedIndex != pressed
+        let selectionChanged = selectedIndex != selected
+        let changed = selectionChanged || hoveredIndex != hovered || pressChanged || self.reduceMotion != reduceMotion
+        selectedIndex = selected
+        hoveredIndex = hovered
+        pressedIndex = pressed
+        self.reduceMotion = reduceMotion
+        if self.increasedContrast != increasedContrast {
+            self.increasedContrast = increasedContrast
+            updateContrast()
+        }
+        // Ordinary snapshot updates must not snap an in-flight animation to its destination.
+        if changed { position(animated: !reduceMotion && window != nil, duration: pressChanged && !selectionChanged ? 0.10 : 0.24) }
+    }
+
+    private func updateContrast() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            selection.layer?.borderWidth = increasedContrast ? 1 : 0
+            hover.layer?.borderWidth = increasedContrast ? 1 : 0
+            selection.layer?.borderColor = NSColor.labelColor.cgColor
+            hover.layer?.borderColor = NSColor.labelColor.cgColor
+        }
+    }
+
+    private func position(animated: Bool, duration: TimeInterval = 0.24) {
+        guard bounds.width > 0, bounds.height > 0 else { return }
+        let count = CGFloat(PRPanelCategory.allCases.count)
+        let width = max(0, (bounds.width - (count - 1) * 2) / count)
+        let hoverIndex = hoveredIndex ?? pressedIndex
+        let selectedInset: CGFloat = pressedIndex == selectedIndex ? 1.5 : (hoveredIndex == selectedIndex ? 0.5 : 0)
+        let hoverInset: CGFloat = pressedIndex != nil && pressedIndex == hoverIndex ? 1.5 : 0
+        let selectedFrame = NSRect(x: CGFloat(selectedIndex) * (width + 2), y: 0, width: width, height: bounds.height)
+            .insetBy(dx: selectedInset, dy: selectedInset)
+        let hoverFrame = NSRect(x: CGFloat(hoverIndex ?? selectedIndex) * (width + 2), y: 0, width: width, height: bounds.height)
+            .insetBy(dx: hoverInset, dy: hoverInset)
+        let hoverOpacity: CGFloat = hoverIndex != nil && hoverIndex != selectedIndex ? 1 : 0
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = animated ? duration : 0
+            selection.animator().frame = selectedFrame
+            hover.animator().frame = hoverFrame
+            hover.animator().alphaValue = hoverOpacity
+        }
+    }
+}
+
 
 private extension View {
     @ViewBuilder

@@ -36,6 +36,7 @@ enum UIUXFixtures {
     static var configuration: Configuration {
         var value = Configuration.default
         value.showMyReviewStatus = true
+        value.openAtCmuxFirst = true
         value.minimumApprovalsForReadyToMerge = 2
         value.notificationsEnabled = false
         value.monitorEnabled = false

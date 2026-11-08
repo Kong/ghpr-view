@@ -144,9 +144,6 @@ struct HoverTooltipOverlay: View {
                     .onPreferenceChange(HoverTooltipSizePreferenceKey.self) { size in
                         measuredSize = size
                     }
-                    .onChange(of: tooltip.ownerID) { _ in
-                        measuredSize = .zero
-                    }
                     .opacity(measuredSize == .zero ? 0 : 1)
                     .position(position(for: tooltip, in: geometry.size))
                     .transition(.opacity)
@@ -252,7 +249,7 @@ private final class HoverTooltipTrackingView: NSView {
     private weak var presenter: HoverTooltipPresenter?
     private var cancellationSubscription: AnyCancellable?
     private var text = ""
-    private var delayNanoseconds: UInt64 = 500_000_000
+    private var delayNanoseconds: UInt64 = 300_000_000
     private var origin: CGPoint = .zero
     private var reduceMotion = false
     private var isHovered = false
@@ -363,11 +360,15 @@ private struct DelayedHoverTooltipModifier: ViewModifier {
 
     @Environment(\.hoverTooltipPresenter) private var presenter
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.compactPRRowBadges) private var compact
 
     @ViewBuilder
     func body(content: Content) -> some View {
+        // Give compact signals the same vertical target as Jira, including the
+        // whitespace around the glyphs. The native tracker still passes clicks through.
+        let target = content.frame(minHeight: compact ? PanelMetrics.toolSize : nil)
         if let presenter {
-            content
+            target
                 .background {
                     GeometryReader { geometry in
                         let frame = geometry.frame(in: .named(HoverTooltipCoordinateSpace.name))
@@ -381,13 +382,13 @@ private struct DelayedHoverTooltipModifier: ViewModifier {
                     }
                 }
         } else {
-            content
+            target
         }
     }
 }
 
 extension View {
-    func delayedHoverTooltip(_ text: String, delayNanoseconds: UInt64 = 500_000_000) -> some View {
+    func delayedHoverTooltip(_ text: String, delayNanoseconds: UInt64 = 300_000_000) -> some View {
         modifier(DelayedHoverTooltipModifier(text: text, delayNanoseconds: delayNanoseconds))
     }
 }
