@@ -420,11 +420,14 @@ struct PRRowView: View {
         if pr.isDraft { DraftBadge() }
         if pr.approvalCount > 0 { approvalBadge }
         if let mentionCount = pr.mentionCount, mentionCount > 0 { MentionBadge(count: mentionCount) }
-        if showConflictStatus, pr.hasBaseConflicts { ConflictBadge() }
+        if showConflictStatus, pr.hasBaseConflicts {
+            ConflictBadge().accessibilityIdentifier("pr-conflict-\(pr.id)")
+        }
         if showCmuxStatus, pr.isOpenInCmux == true {
             Text("cmux")
                 .foregroundColor(.purple)
                 .delayedHoverTooltip(String(localized: "This PR is currently open as a tab in cmux."))
+                .accessibilityIdentifier("pr-cmux-\(pr.id)")
         }
         if showCIStatus, let ciStatus = pr.ciStatus {
             CIStatusIcon(
@@ -435,6 +438,7 @@ struct PRRowView: View {
                 isRunning: pr.ciIsRunning,
                 workflows: pr.ciWorkflows
             )
+            .accessibilityIdentifier("pr-ci-\(pr.id)")
         }
         if pr.category == .reviewRequest, showMyReviewStatus, let reviewStatus = pr.myReviewStatus {
             reviewStatusBadge(reviewStatus)

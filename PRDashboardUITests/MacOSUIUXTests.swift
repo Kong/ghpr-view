@@ -5,9 +5,10 @@ import CoreGraphics
 final class MacOSUIUXTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
-    private func launch(count: Int = 20) -> XCUIApplication {
+    private func launch(count: Int = 20, appearance: String? = nil) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing-uiux", "--uiux-count=\(count)"]
+        if let appearance { app.launchArguments.append("--uiux-appearance=\(appearance)") }
         app.launch()
         XCTAssertTrue(app.windows["UIUX Fixtures"].waitForExistence(timeout: 8))
         return app
@@ -42,6 +43,25 @@ final class MacOSUIUXTests: XCTestCase {
         XCTAssertTrue(quota.label.contains("GraphQL: 4500 remaining of 5000"))
         XCTAssertTrue(quota.label.contains("REST: 4900 remaining of 5000"), "Accessible quota description retains both pools")
         XCTAssertFalse(element(app, "panel-quota-graphql").exists)
+        let panel = element(app, "uiux-panel")
+        element(app, "panel-search").hover()
+        let restingImage = XCTAttachment(screenshot: panel.screenshot())
+        restingImage.name = "Glass resting baseline"
+        restingImage.lifetime = .keepAlways
+        add(restingImage)
+        element(app, "panel-category-all").hover()
+        XCTAssertEqual(element(app, "panel-category-all").value as? String, "Selected")
+        let selectedHover = XCTAttachment(screenshot: panel.screenshot())
+        selectedHover.name = "Light glass selected hover"
+        selectedHover.lifetime = .keepAlways
+        add(selectedHover)
+        element(app, "panel-category-reviews").hover()
+        XCTAssertEqual(element(app, "panel-category-all").value as? String, "Selected", "Hover must not select a category")
+        XCTAssertTrue(element(app, "pr-row-1001").exists)
+        let hoverImage = XCTAttachment(screenshot: panel.screenshot())
+        hoverImage.name = "Glass category hover"
+        hoverImage.lifetime = .keepAlways
+        add(hoverImage)
 
         element(app, "panel-category-reviews").click()
         XCTAssertTrue(element(app, "pr-row-1002").waitForExistence(timeout: 5))
@@ -58,9 +78,11 @@ final class MacOSUIUXTests: XCTestCase {
 
         element(app, "panel-category-all").click()
         XCTAssertEqual(element(app, "panel-category-all").value as? String, "Selected")
+        XCTAssertTrue(element(app, "pr-row-1001").waitForExistence(timeout: 5))
+        XCTAssertTrue(element(app, "pr-row-1002").waitForExistence(timeout: 5))
     }
     func testCachedPanelRendersInNativePopover() {
-        let app = launch(count: 3)
+        let app = launch(count: 3, appearance: "dark")
         defer { app.terminate() }
         open(app)
         XCTAssertTrue(element(app, "pr-row-1001").waitForExistence(timeout: 5))
@@ -68,9 +90,24 @@ final class MacOSUIUXTests: XCTestCase {
         XCTAssertEqual(panel.frame.width, 400, accuracy: 2)
         XCTAssertEqual(panel.frame.height, 500, accuracy: 2)
         let attachment = XCTAttachment(screenshot: panel.screenshot())
-        attachment.name = "UIUX native panel"
+        attachment.name = "Dark glass resting foreground"
         attachment.lifetime = .keepAlways
         add(attachment)
+        for id in ["panel-category-all", "panel-category-reviews", "panel-filter", "panel-refresh"] {
+            element(app, id).hover()
+            let hover = XCTAttachment(screenshot: panel.screenshot())
+            hover.name = "Dark glass hover \(id)"
+            hover.lifetime = .keepAlways
+            add(hover)
+        }
+        element(app, "panel-category-reviews").press(forDuration: 0.2)
+        XCTAssertEqual(element(app, "panel-category-reviews").value as? String, "Selected")
+        XCTAssertTrue(element(app, "pr-row-1002").waitForExistence(timeout: 3))
+        element(app, "panel-search").hover()
+        let selected = XCTAttachment(screenshot: panel.screenshot())
+        selected.name = "Dark glass selected foreground"
+        selected.lifetime = .keepAlways
+        add(selected)
     }
 
     func testKeyboardSearchRefreshAndEscapeSequence() {
@@ -117,7 +154,7 @@ final class MacOSUIUXTests: XCTestCase {
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(element(app, "pr-row-1001").exists)
         XCTAssertFalse(element(app, "uiux-action-log").label.contains("openPR("))
-        element(app, "pr-row-1001").click()
+        element(app, "pr-row-1001").coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.1)).click()
         expectLog(app, "openPR(1001)")
     }
 
@@ -311,15 +348,45 @@ final class MacOSUIUXTests: XCTestCase {
         element(app, "panel-search").hover()
         XCTAssertTrue(draftTip.waitForNonExistence(timeout: 3))
 
-        // Post native events together so Escape interrupts the 500ms hover delay,
-        // without XCTest's per-action idle wait allowing the tooltip to appear first.
-        let point = CGPoint(x: jira.frame.midX, y: jira.frame.midY)
-        CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)?
-            .post(tap: .cghidEventTap)
-        for down in [true, false] {
-            CGEvent(keyboardEventSource: nil, virtualKey: 53, keyDown: down)?.post(tap: .cghidEventTap)
+        // Enter through the padding, where compact glyph-sized trackers used to miss.
+        for (id, explanation) in [
+            ("pr-cmux-1001", "This PR is currently open as a tab in cmux."),
+            ("pr-ci-1001", "1 workflows passed"),
+            ("pr-jira-1001", jiraExplanation)
+        ] {
+            let target = element(app, id)
+            XCTAssertTrue(target.exists)
+            let edgeOffset: CGFloat = id == "pr-cmux-1001" ? -3 : 2
+            target.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0))
+                .withOffset(CGVector(dx: 0, dy: edgeOffset)).hover()
+            XCTAssertTrue(panel.staticTexts[explanation].waitForExistence(timeout: 2), "Hover near the upper edge of \(id)")
+            let image = XCTAttachment(screenshot: panel.screenshot())
+            image.name = "Hover target \(id)"
+            image.lifetime = .keepAlways
+            add(image)
         }
-        XCTAssertTrue(panel.waitForNonExistence(timeout: 3), "Escape must close the panel during pending hover")
+
+        element(app, "panel-category-mentions").click()
+        let conflict = element(app, "pr-conflict-1003")
+        XCTAssertTrue(conflict.waitForExistence(timeout: 3))
+        conflict.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0))
+            .withOffset(CGVector(dx: 0, dy: -3)).hover()
+        XCTAssertTrue(panel.staticTexts["This PR has conflicts with the base branch."].waitForExistence(timeout: 2))
+        let conflictImage = XCTAttachment(screenshot: panel.screenshot())
+        conflictImage.name = "Conflict tooltip in native popover"
+        conflictImage.lifetime = .keepAlways
+        add(conflictImage)
+        element(app, "pr-jira-1003").hover()
+        XCTAssertTrue(panel.staticTexts[jiraExplanation].waitForExistence(timeout: 2))
+        element(app, "panel-category-all").click()
+        element(app, "panel-search").hover()
+        XCTAssertTrue(panel.staticTexts[jiraExplanation].waitForNonExistence(timeout: 2))
+
+        // Native UI closure covers a visible tooltip; pending cancellation is also
+        // exercised without XCTest's per-action idle wait by HoverTooltipLifecycleTests.
+        jira.hover()
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(panel.waitForNonExistence(timeout: 3), "Escape must close the panel while hovering")
         let lateTip = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == true"), object: app.staticTexts[jiraExplanation])
         lateTip.isInverted = true
         XCTAssertEqual(XCTWaiter.wait(for: [lateTip], timeout: 0.8), .completed, "No tooltip may arrive after closure")
@@ -378,7 +445,7 @@ final class MacOSUIUXTests: XCTestCase {
         let app = launch(count: 3)
         defer { app.terminate() }
         open(app)
-        element(app, "pr-row-1001").rightClick()
+        element(app, "pr-row-1001").coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.1)).rightClick()
         XCTAssertTrue(app.menuItems["Details…"].waitForExistence(timeout: 3))
         app.menuItems["Details…"].click()
         app.typeKey(.tab, modifierFlags: [])
