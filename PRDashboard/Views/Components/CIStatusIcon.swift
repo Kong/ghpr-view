@@ -8,7 +8,7 @@ struct CIStatusIcon: View {
     var isRunning: Bool = false
     var workflows: [CIWorkflowInfo] = []
 
-    @State private var isHovered = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 2) {
@@ -18,24 +18,58 @@ struct CIStatusIcon: View {
                     .foregroundColor(iconColor)
 
                 if isRunning {
-                    ProgressView()
-                        .controlSize(.mini)
-                        .scaleEffect(0.35)
-                        .frame(width: 8, height: 8)
-                        .offset(x: 2, y: 2)
+                    if reduceMotion {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 7))
+                            .offset(x: 2, y: 2)
+                    } else {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .scaleEffect(0.35)
+                            .frame(width: 8, height: 8)
+                            .offset(x: 2, y: 2)
+                    }
                 }
             }
 
-            // Show counts for failure, pending, or success with workflow info
+            Text(statusText)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.primary)
             if !countText.isEmpty {
                 Text(countText)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(iconColor)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
             }
         }
-        .onHover { hovering in
-            isHovered = hovering
+        .fixedSize(horizontal: true, vertical: false)
+        .delayedHoverTooltip(detailText)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(String(localized: "CI: \(statusText)"))
+        .accessibilityValue(detailText)
+    }
+
+    private var statusText: String {
+        switch status {
+        case .success: return String(localized: "Passed")
+        case .failure: return String(localized: "Failed")
+        case .pending: return String(localized: "Pending")
+        case .expected: return String(localized: "Expected")
+        case .unknown: return String(localized: "Unknown")
         }
+    }
+
+    private var detailText: String {
+        let details = hoverText
+        if !details.isEmpty { return details }
+        let explanation: String
+        switch status {
+        case .success: explanation = String(localized: "CI passed")
+        case .failure: explanation = String(localized: "CI failed")
+        case .pending: explanation = String(localized: "CI is pending")
+        case .expected: explanation = String(localized: "CI checks are expected")
+        case .unknown: explanation = String(localized: "CI status is unknown")
+        }
+        return isRunning ? explanation + String(localized: "; updating") : explanation
     }
 
     private var iconName: String {
@@ -60,7 +94,7 @@ struct CIStatusIcon: View {
         case .failure:
             return .red
         case .pending:
-            return .yellow
+            return .orange
         case .expected:
             return .secondary
         case .unknown:
@@ -69,20 +103,16 @@ struct CIStatusIcon: View {
     }
 
     private var countText: String {
-        if isHovered {
-            return hoverText
-        }
-
         let totalWf = workflows.count
         if totalWf > 0 {
             switch status {
             case .failure:
                 let failedWf = workflows.filter { $0.status == .failure }.count
                 let totalFailedTasks = workflows.reduce(0) { $0 + $1.failureCount }
-                return String(localized: "\(failedWf)/\(totalWf) wf · \(totalFailedTasks)")
+                return String(localized: "\(failedWf)/\(totalWf) wf · \(totalFailedTasks) failed tasks")
             case .pending:
                 let doneWf = workflows.filter { $0.status == .success || $0.status == .failure }.count
-                return String(localized: "\(doneWf)/\(totalWf) wf")
+                return String(localized: "\(doneWf)/\(totalWf) wf done")
             case .success:
                 return String(localized: "\(totalWf) wf")
             default:
@@ -93,10 +123,16 @@ struct CIStatusIcon: View {
         // Fallback to task-level counts when no workflow info
         let total = successCount + failureCount + pendingCount
         if total == 0 { return "" }
-        if status == .failure || status == .pending {
-            return "\(successCount)/\(total)"
+        switch status {
+        case .failure:
+            return String(localized: "\(failureCount)/\(total) tasks")
+        case .pending:
+            return String(localized: "\(pendingCount)/\(total) tasks")
+        case .success:
+            return String(localized: "\(total) tasks")
+        case .expected, .unknown:
+            return ""
         }
-        return ""
     }
 
     private var hoverText: String {

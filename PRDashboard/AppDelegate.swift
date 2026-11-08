@@ -25,7 +25,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var jiraSetupCoordinator: JiraSetupCoordinator?
     var presentationCoordinator: AppPresentationCoordinator?
     let settingsNavigation = SettingsNavigation()
+    let activityNavigation = ActivityNavigation()
     var extensionPlatformController: ExtensionPlatformController?
+    let panelInteraction = PanelInteractionCoordinator()
+    #if DEBUG
+    private var uiuxFixtureHost: UIUXFixtureHost?
+    #endif
     var browserPairingWindow: NSWindow?
     var extensionPlatformUITestWindow: NSWindow?
     private var jiraClient: JiraAPIClient?
@@ -34,6 +39,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        if CommandLine.arguments.contains("--ui-testing-uiux") {
+            let host = UIUXFixtureHost()
+            uiuxFixtureHost = host
+            host.start()
+            return
+        }
+        #endif
         let isExtensionPlatformUITest = CommandLine.arguments.contains {
             $0.hasPrefix("--ui-testing-browser-")
         }
@@ -81,10 +94,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Digest channels are installed below and rebuilt whenever configuration
         // (proxy, Slack binding) changes.
         configureActivityChannels()
-        notificationManager?.openActivity = { [weak self] in
-            Task { @MainActor in
-                self?.openActivityWindow()
-            }
+        notificationManager?.openActivity = { [weak self] batchID in
+            self?.openActivityWindow(digestBatchID: batchID)
         }
 
         // 4.1 Load cached PR data for immediate display
@@ -178,7 +189,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             viewModel: viewModel,
             onboardingManager: onboardingManager!,
             presentationCoordinator: presentationCoordinator,
-            extensionPlatformController: extensionPlatformController
+            extensionPlatformController: extensionPlatformController,
+            interaction: panelInteraction
         )
 
         // 7. Create popover
@@ -190,17 +202,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 8. Create status bar controller
         statusBarController = StatusBarController(
             popover: popover,
-            prManager: prManager!,
+            onWillShow: { [weak self] in
+                self?.prManager?.enablePolling(true)
+                self?.panelInteraction.prepareForPresentation(
+                    keyboard: self?.statusBarController?.openingFromKeyboard == true
+                )
+                self?.panelInteraction.setPresented(true)
+            },
+            onWillClose: { [weak self] in
+                self?.panelInteraction.setPresented(false)
+            },
             onCheckForUpdates: { [weak self] in
                 self?.checkForUpdates(userInitiated: true)
             }
         )
+        panelInteraction.onRequestClose = { [weak self] in
+            guard let statusBar = self?.statusBarController else { return }
+            statusBar.hidePopover(statusBar, restoringFocus: true)
+        }
 
         // Observe PR list changes to update menu bar notification badge
         prManager?.$prList
             .receive(on: DispatchQueue.main)
             .sink { [weak self] prList in
-                self?.statusBarController?.updateBadge(count: prList.menuNotificationCount)
+                self?.statusBarController?.updateBadge(prList: prList)
             }
             .store(in: &cancellables)
 
@@ -434,12 +459,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return base
     }
 
-    private func openActivityWindow() {
+    private func openActivityWindow(digestBatchID: String? = nil) {
         guard let viewModel else { return }
+        activityNavigation.digestBatchID = digestBatchID
         promoteDockIcon()
 
         if activityWindow == nil {
-            let hostingController = NSHostingController(rootView: PRActivityView(viewModel: viewModel))
+            let hostingController = NSHostingController(rootView: PRActivityView(viewModel: viewModel, navigation: activityNavigation))
             let window = NSWindow(contentViewController: hostingController)
             window.title = String(localized: "Activity")
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
@@ -542,8 +568,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             let window = NSWindow(contentViewController: hostingController)
             window.title = String(localized: "Settings")
-            window.styleMask = [.titled, .closable]
-            window.setContentSize(NSSize(width: 688, height: 720))
+            window.styleMask = [.titled, .closable, .resizable]
+            window.setContentSize(NSSize(width: SettingsWindowMetrics.width, height: SettingsWindowMetrics.height))
+            window.contentMinSize = NSSize(width: SettingsWindowMetrics.width, height: SettingsWindowMetrics.height)
             window.center()
             window.isReleasedWhenClosed = false
             window.delegate = self

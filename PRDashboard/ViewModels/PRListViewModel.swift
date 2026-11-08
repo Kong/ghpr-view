@@ -128,8 +128,9 @@ enum PRSearchScope {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedQuery = "\(scope.prefix)\(typedValue)"
 
-        return scope.values
-            .filter { typedValue.isEmpty || $0.value.hasPrefix(typedValue) }
+        let matches = scope.values.filter { typedValue.isEmpty || $0.value.hasPrefix(typedValue) }
+        let values = matches.isEmpty && validationMessage(for: rawSearchText) != nil ? scope.values : matches
+        return values
             .map { value in
                 Suggestion(
                     title: value.value,
@@ -140,6 +141,65 @@ enum PRSearchScope {
             .filter { suggestion in
                 suggestion.query != normalizedQuery
             }
+    }
+
+    enum CIFilter {
+        case any, pass, failure, running
+    }
+
+    static func ciFilter(_ term: String) -> CIFilter? {
+        switch term.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "", "any", "value": return .any
+        case "pass", "passed", "success", "green": return .pass
+        case "failure", "fail", "failed", "failing", "red": return .failure
+        case "running", "pending", "inflight", "in-flight": return .running
+        default: return nil
+        }
+    }
+
+    static func isConflictFilter(_ term: String) -> Bool {
+        ["conflict", "conflicts"].contains(term.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+    }
+
+    struct ApprovalFilter {
+        let operation: String
+        let expected: Int
+
+        func matches(_ count: Int) -> Bool {
+            switch operation {
+            case ">=": return count >= expected
+            case ">": return count > expected
+            case "<=": return count <= expected
+            case "<": return count < expected
+            default: return count == expected
+            }
+        }
+    }
+
+    static func approvalFilter(_ term: String) -> ApprovalFilter? {
+        let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return ApprovalFilter(operation: ">", expected: 0) }
+        let operation = [">=", "<=", "==", ">", "<", "="].first { trimmed.hasPrefix($0) }
+        let number = String(trimmed.dropFirst(operation?.count ?? 0))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let expected = Int(number) else { return nil }
+        return ApprovalFilter(operation: operation ?? "=", expected: expected)
+    }
+
+    static func validationMessage(for query: String) -> String? {
+        let parsed = parse(query)
+        switch parsed.kind {
+        case .ci where ciFilter(parsed.term) == nil:
+            return "Unknown CI filter"
+        case .pr where parsed.term.isEmpty:
+            return "Use pr:conflict"
+        case .pr where !isConflictFilter(parsed.term):
+            return "Unknown PR filter"
+        case .approval where approvalFilter(parsed.term) == nil:
+            return "Use approval:<number> or a comparison such as approval:>=2"
+        default:
+            return nil
+        }
     }
 
     static func contains(_ term: String, in text: String) -> Bool {
@@ -212,28 +272,27 @@ struct MenuTrackingUpdateBuffer<Value> {
 
 @MainActor
 final class PRListViewModel: ObservableObject {
-    @Published var prList: PRList = .empty
-    @Published var searchText: String = ""
-    @Published private(set) var activeFacetSelections: [FacetFieldID: Set<String>] = [:]
-    @Published private(set) var savedViews: [SavedView]
+    @Published var prList: PRList = .empty { didSet { invalidatePresentation() } }
+    @Published var searchText: String = "" { didSet { invalidatePresentation() } }
+    @Published private(set) var activeFacetSelections: [FacetFieldID: Set<String>] = [:] { didSet { invalidatePresentation() } }
+    @Published private(set) var savedViews: [SavedView] { didSet { invalidateSnapshot() } }
     @Published var isFacetPanelPresented = false
     @Published private(set) var authState: AuthState = .empty
-    @Published private(set) var pinnedPRIdentifiers: Set<String> = []
-    @Published private(set) var pinChangeToken = UUID()
+    @Published private(set) var pinnedPRIdentifiers: Set<String> = [] { didSet { invalidatePresentation() } }
     @Published private(set) var deviceCode: DeviceCodeInfo?
     @Published private(set) var isAuthenticating: Bool = false
     @Published private(set) var authError: Error?
     @Published private(set) var isValidatingPAT: Bool = false
     @Published private(set) var patError: Error?
-    @Published private(set) var rateLimitInfo: RateLimitInfo = .empty
-    @Published private(set) var openingPRIDs: Set<Int> = []
-    @Published private(set) var updatingBranchPRIDs: Set<Int> = []
-    @Published private(set) var loadingHoverDetailPRIDs: Set<Int> = []
-    @Published private(set) var jiraConnectionState: JiraConnectionState = .notConfigured
+    @Published private(set) var rateLimitInfo: RateLimitInfo = .empty { didSet { invalidateSnapshot() } }
+    @Published private(set) var openingPRIDs: Set<Int> = [] { didSet { invalidateSnapshot() } }
+    @Published private(set) var updatingBranchPRIDs: Set<Int> = [] { didSet { invalidateSnapshot() } }
+    @Published private(set) var loadingHoverDetailPRIDs: Set<Int> = [] { didSet { invalidateSnapshot() } }
+    @Published private(set) var jiraConnectionState: JiraConnectionState = .notConfigured { didSet { invalidateSnapshot() } }
     @Published var jiraPrompt: JiraPrompt?
     @Published private(set) var jiraCredentialRevision: Int = 0
     /// Local activity monitor state: open action items, coverage, delivery receipts.
-    @Published private(set) var activity: PRActivitySnapshot = .idle
+    @Published private(set) var activity: PRActivitySnapshot = .idle { didSet { invalidateSnapshot() } }
 
     private let prManager: PRManager
     private let oauthManager: GitHubOAuthManager
@@ -244,6 +303,45 @@ final class PRListViewModel: ObservableObject {
     private let menuTracker: MenuTracker
     private var prListUpdateBuffer = MenuTrackingUpdateBuffer<PRList>()
     private var rateLimitUpdateBuffer = MenuTrackingUpdateBuffer<RateLimitInfo>()
+
+    private(set) var presentationRevision: UInt64 = 0
+    private(set) var snapshotRevision: UInt64 = 0
+    private var projectionCache = PRPanelProjectionCache()
+    /// Read after materializing panelProjection so clock expiry is included in delivery.
+    var panelPublicationRevision: UInt64 { snapshotRevision &+ projectionCache.publicationGeneration }
+    @Published private var presentationConfiguration: Configuration
+
+    private func invalidateSnapshot() {
+        snapshotRevision &+= 1
+    }
+
+    private func invalidatePresentation() {
+        presentationRevision &+= 1
+        invalidateSnapshot()
+    }
+
+    var panelProjection: PRPanelProjection {
+        projectionCache.projection(revision: presentationRevision, now: Date()) { now in
+            PRPanelProjection.make(
+                prList: prList, searchText: searchText, selections: activeFacetSelections,
+                pinnedIdentifiers: pinnedPRIdentifiers, configuration: presentationConfiguration, now: now
+            )
+        }
+    }
+
+    /// Uses live manager facts even while menu tracking buffers visible publication.
+    func latestPR(id: Int) -> PullRequest? {
+        PRPanelActionResolver.latestPR(id: id, in: prManager.prList)
+    }
+
+    func resolvePRAction(
+        id: Int, capturedHeadCommitOID: String?, requiresUnchangedHead: Bool
+    ) -> Result<PullRequest, PRPanelActionError> {
+        PRPanelActionResolver.resolve(
+            id: id, capturedHeadCommitOID: capturedHeadCommitOID,
+            requiresUnchangedHead: requiresUnchangedHead, in: prManager.prList
+        )
+    }
 
     var isJiraConfigured: Bool { jiraConnectionState == .configured }
     var openSettings: (() -> Void)?
@@ -257,6 +355,7 @@ final class PRListViewModel: ObservableObject {
         savedViewStore: SavedViewStore = SavedViewStore()
     ) {
         self.prManager = prManager
+        self.presentationConfiguration = prManager.configuration
         self.oauthManager = oauthManager
         self.linkOpener = linkOpener
         self.menuTracker = menuTracker
@@ -267,6 +366,14 @@ final class PRListViewModel: ObservableObject {
     }
 
     private func setupBindings() {
+        prManager.$configuration
+            .sink { [weak self] configuration in
+                guard let self else { return }
+                self.presentationConfiguration = configuration
+                self.invalidatePresentation()
+            }
+            .store(in: &cancellables)
+
         // SwiftUI rebuilds an active context menu when its observed row tree changes.
         // Keep refresh publications stable until the complete menu hierarchy closes.
         menuTracker.$isTracking
@@ -392,162 +499,28 @@ final class PRListViewModel: ObservableObject {
 
     // MARK: - Computed Properties
 
-    var filteredPRs: [PullRequest] {
-        filterPRs(prList.pullRequests)
-    }
-
-    var authoredPRs: [PullRequest] {
-        filteredPRs.filter { $0.category == .authored }
-    }
-
-    var pinnedAuthoredPRs: [PullRequest] {
-        authoredPRs.filter { pinnedPRIdentifiers.contains($0.pinIdentifier) }
-    }
-
-    var unpinnedAuthoredPRs: [PullRequest] {
-        authoredPRs.filter { !pinnedPRIdentifiers.contains($0.pinIdentifier) }
-    }
-
-    var reviewRequestPRs: [PullRequest] {
-        filteredPRs.filter { $0.category == .reviewRequest }
-    }
-
-    var pinnedReviewRequestPRs: [PullRequest] {
-        reviewRequestPRs.filter { pinnedPRIdentifiers.contains($0.pinIdentifier) }
-    }
-
-    var unpinnedReviewRequestPRs: [PullRequest] {
-        reviewRequestPRs.filter { !pinnedPRIdentifiers.contains($0.pinIdentifier) }
-    }
-
-    var mentionedPRs: [PullRequest] {
-        filterPRs(prList.mentionedPullRequests)
-    }
-    var directMentionPRs: [PullRequest] {
-        filterPRs(prList.directMentionPullRequests)
-    }
-
-    var groupedAuthoredPRs: [(String, [PullRequest])] {
-        groupByRepo(unpinnedAuthoredPRs)
-    }
-
-    var groupedReviewPRs: [(String, [PullRequest])] {
-        groupByRepo(unpinnedReviewRequestPRs)
-    }
-
-    var groupedMentionedPRs: [(String, [PullRequest])] {
-        groupByRepo(mentionedPRs)
-    }
-    var groupedDirectMentionPRs: [(String, [PullRequest])] {
-        groupByRepo(directMentionPRs)
-    }
-
-    private var filteredMergedPRs: [PullRequest] {
-        filterPRs(prList.mergedPullRequests)
-    }
-
-    /// Merged within last 24 hours (rolling window), deduped by PR id.
-    var mergedLast24hPRs: [PullRequest] {
-        let cutoff = Date().addingTimeInterval(-24 * 60 * 60)
-        var seen = Set<Int>()
-        let filtered = filteredMergedPRs.filter { pr in
-            guard let mergedAt = pr.mergedAt else { return false }
-            return mergedAt >= cutoff
-        }.filter { pr in
-            seen.insert(pr.id).inserted
-        }
-
-        return filtered.sorted { ($0.mergedAt ?? $0.updatedAt) > ($1.mergedAt ?? $1.updatedAt) }
-    }
-
-    var groupedMergedLast24hPRs: [(String, [PullRequest])] {
-        groupByRepo(mergedLast24hPRs, sortByMergedDate: true)
-    }
-
-    var summaryReadyToMerge: Int {
-        authoredPRs.filter {
-            $0.meetsReadyToMergeCriteria(
-                minimumApprovals: configuration.minimumApprovalsForReadyToMerge
-            )
-        }.count
-    }
-
-    var summaryChangesRequested: Int {
-        authoredPRs.filter { ($0.changesRequestedCount ?? 0) > 0 }.count
-    }
-
-    var summaryCIFailing: Int {
-        filteredPRs.filter { $0.ciStatus == .failure || $0.ciStatus == .unknown }.count
-    }
-
-    var summaryCIRunning: Int {
-        filteredPRs.filter { $0.ciIsRunning }.count
-    }
-
-    var sourcePRs: [PullRequest] {
-        var seen = Set<Int>()
-        return (prList.pullRequests + prList.mentionedPullRequests + prList.directMentionPullRequests + prList.mergedPullRequests)
-            .filter { seen.insert($0.id).inserted }
-    }
-
-    var facetChips: [FacetChip] {
-        let builder = FacetIndexBuilder(
-            sourcePRs: sourcePRs,
-            searchText: searchText,
-            selections: activeFacetSelections
-        )
-        var namesByField: [FacetFieldID: [String: String]] = [:]
-        for field in activeFacetSelections.keys {
-            namesByField[field] = Dictionary(
-                uniqueKeysWithValues: builder.options(for: field).map { ($0.key, $0.displayName) }
-            )
-        }
-        return activeFacetSelections.flatMap { field, keys in
-            keys.sorted().map { key in
-                FacetChip(
-                    field: field,
-                    key: key,
-                    displayName: namesByField[field]?[key] ?? key,
-                    provider: field.provider
-                )
-            }
-        }.sorted { $0.field.rawValue < $1.field.rawValue }
-    }
-    var searchLabelSuggestions: [FacetOption] {
-        let parsedSearch = PRSearchScope.parse(searchText)
-        guard parsedSearch.kind == .all else { return [] }
-        let query = FacetValues.normalized(parsedSearch.term)
-        guard !query.isEmpty else { return [] }
-
-        let builder = FacetIndexBuilder(
-            sourcePRs: sourcePRs,
-            searchText: "",
-            selections: activeFacetSelections
-        )
-        let suggestions = [FacetFieldID.githubLabel, .jiraLabel]
-            .flatMap { builder.options(for: $0) }
-            .filter { option in
-                !(activeFacetSelections[option.field] ?? []).contains(option.key) &&
-                    FacetValues.normalized(option.displayName).contains(query)
-            }
-            .sorted { lhs, rhs in
-                let lhsName = FacetValues.normalized(lhs.displayName)
-                let rhsName = FacetValues.normalized(rhs.displayName)
-                let lhsStartsWithQuery = lhsName.hasPrefix(query)
-                let rhsStartsWithQuery = rhsName.hasPrefix(query)
-                if lhsStartsWithQuery != rhsStartsWithQuery {
-                    return lhsStartsWithQuery
-                }
-                if lhs.count != rhs.count {
-                    return lhs.count > rhs.count
-                }
-                if lhs.provider != rhs.provider {
-                    return lhs.provider.rawValue < rhs.provider.rawValue
-                }
-                return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
-            }
-        return Array(suggestions.prefix(6))
-    }
+    var filteredPRs: [PullRequest] { panelProjection.filteredPRs }
+    var authoredPRs: [PullRequest] { panelProjection.authoredPRs }
+    var pinnedAuthoredPRs: [PullRequest] { panelProjection.pinnedAuthoredPRs }
+    var unpinnedAuthoredPRs: [PullRequest] { panelProjection.unpinnedAuthoredPRs }
+    var reviewRequestPRs: [PullRequest] { panelProjection.reviewRequestPRs }
+    var pinnedReviewRequestPRs: [PullRequest] { panelProjection.pinnedReviewRequestPRs }
+    var unpinnedReviewRequestPRs: [PullRequest] { panelProjection.unpinnedReviewRequestPRs }
+    var mentionedPRs: [PullRequest] { panelProjection.mentionedPRs }
+    var directMentionPRs: [PullRequest] { panelProjection.directMentionPRs }
+    var groupedAuthoredPRs: [(String, [PullRequest])] { panelProjection.groupedAuthoredPRs }
+    var groupedReviewPRs: [(String, [PullRequest])] { panelProjection.groupedReviewPRs }
+    var groupedMentionedPRs: [(String, [PullRequest])] { panelProjection.groupedMentionedPRs }
+    var groupedDirectMentionPRs: [(String, [PullRequest])] { panelProjection.groupedDirectMentionPRs }
+    var mergedLast24hPRs: [PullRequest] { panelProjection.mergedLast24hPRs }
+    var groupedMergedLast24hPRs: [(String, [PullRequest])] { panelProjection.groupedMergedLast24hPRs }
+    var summaryReadyToMerge: Int { panelProjection.summaryReadyToMerge }
+    var summaryChangesRequested: Int { panelProjection.summaryChangesRequested }
+    var summaryCIFailing: Int { panelProjection.summaryCIFailing }
+    var summaryCIRunning: Int { panelProjection.summaryCIRunning }
+    var sourcePRs: [PullRequest] { panelProjection.sourcePRs }
+    var facetChips: [FacetChip] { panelProjection.facetChips }
+    var searchLabelSuggestions: [FacetOption] { panelProjection.searchLabelSuggestions }
 
     func selectLabelSuggestion(_ option: FacetOption) {
         guard option.field == .githubLabel || option.field == .jiraLabel else { return }
@@ -557,7 +530,7 @@ final class PRListViewModel: ObservableObject {
 
 
     func facetOptions(for field: FacetFieldID) -> [FacetOption] {
-        FacetIndexBuilder(sourcePRs: sourcePRs, searchText: searchText, selections: activeFacetSelections).options(for: field)
+        panelProjection.facetOptions[field] ?? []
     }
 
     func toggleFacet(field: FacetFieldID, key: String) {
@@ -614,9 +587,7 @@ final class PRListViewModel: ObservableObject {
         savedViews = savedViewStore.views
     }
 
-    var summaryWaitingForMyReview: Int {
-        reviewRequestPRs.filter { $0.myReviewStatus == .waiting }.count
-    }
+    var summaryWaitingForMyReview: Int { panelProjection.summaryWaitingForMyReview }
 
 
     var totalUnresolvedCount: Int {
@@ -789,26 +760,12 @@ final class PRListViewModel: ObservableObject {
         prManager.togglePinPR(identifier)
         pinnedPRIdentifiers = prManager.pinnedPRIdentifiers
         logger.info("Pin toggled: \(identifier) → pinned=\(self.pinnedPRIdentifiers.contains(identifier)), total=\(self.pinnedPRIdentifiers.count)")
-
-        // Force SwiftUI to rebuild PR sections after context menu dismisses.
-        // Changing pinChangeToken invalidates the .id() on the list container in MainView,
-        // causing a full view tree rebuild that cannot be diff-optimized away.
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            guard let self else { return }
-            self.pinChangeToken = UUID()
-        }
     }
 
     // MARK: - Activity monitor
 
     func showActivity() {
         openActivity?()
-    }
-
-    /// The monitor itself, for views that subscribe to its published state directly.
-    var activityMonitorForView: PRActivityMonitor {
-        prManager.activityMonitor
     }
 
     func activityEvents(forPR prNodeID: String, limit: Int = 5) -> [PRActivityEvent] {
@@ -934,28 +891,4 @@ final class PRListViewModel: ObservableObject {
         openingPRIDs = updated
     }
 
-    private func filterPRs(_ prs: [PullRequest]) -> [PullRequest] {
-        let parsedSearch = PRSearchScope.parse(searchText)
-        return prs.filter {
-            FacetPredicate.matches(
-                $0,
-                parsedSearch: parsedSearch,
-                selections: activeFacetSelections
-            )
-        }
-    }
-
-    private func groupByRepo(_ prs: [PullRequest], sortByMergedDate: Bool = false) -> [(String, [PullRequest])] {
-        let grouped = Dictionary(grouping: prs) { $0.repoFullName }
-        return grouped
-            .map { repo, prs in
-                let sorted = prs.sorted {
-                    let lhsDate = sortByMergedDate ? ($0.mergedAt ?? $0.updatedAt) : $0.updatedAt
-                    let rhsDate = sortByMergedDate ? ($1.mergedAt ?? $1.updatedAt) : $1.updatedAt
-                    return lhsDate > rhsDate
-                }
-                return (repo, sorted)
-            }
-            .sorted { $0.0 < $1.0 }
-    }
 }

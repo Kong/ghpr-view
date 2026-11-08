@@ -1,27 +1,55 @@
 import SwiftUI
 import AppKit
 
-/// Native "待处理" surface: what needs the user's attention, why, with the evidence
-/// link and the manual action. Deliberately compact: action items are grouped per PR
-/// instead of one card per event.
+struct PRActivityActions {
+    var observe: () -> Void
+    var openURL: (URL) -> Void
+    var markHandled: ([String]) -> Void
+    var snooze: ([String], TimeInterval) -> Void
+    var setMuted: (MonitoredPR, Bool) -> Void
+    var setTracked: (MonitoredPR, Bool) -> Void
+    var retry: (DigestBatch) -> Void
+}
+
 struct PRActivityView: View {
     @ObservedObject var viewModel: PRListViewModel
-    @ObservedObject private var monitor: PRActivityMonitor
-    @State private var showsIncompleteSources = false
+    @ObservedObject var navigation: ActivityNavigation
 
-    init(viewModel: PRListViewModel) {
-        self.viewModel = viewModel
-        self.monitor = viewModel.activityMonitorForView
+    var body: some View {
+        PRActivityContent(
+            snapshot: viewModel.activity,
+            groups: viewModel.activityItemsByPR,
+            mutedIdentifiers: Set(viewModel.activity.monitoredPRs.filter(viewModel.isActivityMuted).map { $0.reference.identifier }),
+            actions: PRActivityActions(
+                observe: { viewModel.refreshActivity() },
+                openURL: { NSWorkspace.shared.open($0) },
+                markHandled: { viewModel.markActivityHandled($0) },
+                snooze: { viewModel.snoozeActivity($0, until: Date().addingTimeInterval($1)) },
+                setMuted: { viewModel.setActivityMuted($1, pr: $0) },
+                setTracked: { viewModel.setActivityTracking($0, tracked: $1) },
+                retry: { viewModel.retryActivityDigest($0) }
+            ), navigation: navigation
+        )
     }
+}
 
-    private var snapshot: PRActivitySnapshot { viewModel.activity }
+struct PRActivityContent: View {
+    let snapshot: PRActivitySnapshot
+    let groups: [(pr: MonitoredPR, items: [PRActionItem])]
+    let mutedIdentifiers: Set<String>
+    let actions: PRActivityActions
+    @ObservedObject var navigation: ActivityNavigation
+    @State private var showsIncompleteSources = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider()
+            ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
+                    notificationContext
+                        .id(ActivityNotificationTarget.context)
                     if let error = snapshot.errorMessage {
                         banner(error, symbol: "exclamationmark.triangle.fill", tint: .orange)
                     }
@@ -34,6 +62,9 @@ struct PRActivityView: View {
                 }
                 .padding(12)
             }
+            .onAppear { scrollToNotification(proxy) }
+            .onChange(of: navigation.requestRevision) { _ in scrollToNotification(proxy) }
+            }
         }
         .frame(minWidth: 520, minHeight: 420)
     }
@@ -43,14 +74,12 @@ struct PRActivityView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                Text("Activity")
-                    .font(.headline)
                 Text(statusText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button {
-                    viewModel.refreshActivity()
+                    actions.observe()
                 } label: {
                     Label("Observe now", systemImage: "arrow.clockwise")
                 }
@@ -193,7 +222,6 @@ struct PRActivityView: View {
 
     @ViewBuilder
     private var actionSection: some View {
-        let groups = viewModel.activityItemsByPR
         if groups.isEmpty {
             Text(snapshot.isEstablishingBaseline
                  ? String(localized: "The first observation is still running. Existing activity is recorded silently as a baseline, so you are not notified about old events.")
@@ -217,28 +245,27 @@ struct PRActivityView: View {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Button {
                     if let url = pr.url {
-                        NSWorkspace.shared.open(url)
+                        actions.openURL(url)
                     }
                 } label: {
                     Text("\(pr.reference.repoFullName)#\(pr.reference.number)")
                         .font(.system(size: 12, weight: .semibold))
                 }
                 .buttonStyle(.plain)
-                Text(pr.title)
-                    .font(.caption)
-                    .lineLimit(1)
-                    .foregroundStyle(.secondary)
                 Spacer()
                 menu(for: pr)
             }
+            Text(pr.title)
+                .font(.caption)
+                .lineLimit(2)
+                .foregroundStyle(.secondary)
 
             ForEach(reminders) { reminder in
                 itemRow(reminder, pr: pr)
             }
         }
-        .padding(10)
-        .background(Color.primary.opacity(0.04))
-        .cornerRadius(8)
+        .padding(.vertical, 6)
+        .overlay(alignment: .bottom) { Divider() }
     }
 
     private func itemRow(_ reminder: ActivityReminder, pr: MonitoredPR) -> some View {
@@ -260,6 +287,12 @@ struct PRActivityView: View {
                 }
                 Spacer()
             }
+            let timestamp = events.first?.occurredAt ?? reminder.stateUpdatedAt
+            Text("\(events.isEmpty ? "Reminder updated" : "Event") · \(timestamp.formatted(date: .abbreviated, time: .shortened))")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("\(events.isEmpty ? "Reminder updated" : "Event") \(fullTimestamp(timestamp))")
+                .help(fullTimestamp(timestamp))
 
             if let latest = events.first {
                 Text("\(PRActivityDigestFormatter.changeLabel(latest.kind))\(latest.actor.map { " — \($0)" } ?? "")")
@@ -281,8 +314,8 @@ struct PRActivityView: View {
 
             HStack(spacing: 8) {
                 if let url = reminder.evidenceURLs.first ?? pr.url {
-                    Button(openLabel(for: reminder)) {
-                        NSWorkspace.shared.open(url)
+                    Button("Open evidence") {
+                        actions.openURL(url)
                     }
                     .buttonStyle(.link)
                     .controlSize(.small)
@@ -292,7 +325,7 @@ struct PRActivityView: View {
                     Menu("More links") {
                         ForEach(Array(reminder.evidenceURLs.dropFirst().prefix(5)), id: \.absoluteString) { url in
                             Button(linkLabel(url)) {
-                                NSWorkspace.shared.open(url)
+                                actions.openURL(url)
                             }
                         }
                     }
@@ -301,13 +334,13 @@ struct PRActivityView: View {
                     .fixedSize()
                 }
                 Spacer()
-                Button("Dismiss reminder") { viewModel.markActivityHandled(reminder.itemIDs) }
+                Button("Dismiss reminder") { actions.markHandled(reminder.itemIDs) }
                     .controlSize(.small)
                     .help("Hides this reminder in ghpr only. It does not reply, resolve a thread, rerun CI, or change GitHub. New activity shows it again.")
                 Menu("Snooze") {
-                    Button("1 hour") { viewModel.snoozeActivity(reminder.itemIDs, until: Date().addingTimeInterval(3600)) }
-                    Button("Tomorrow") { viewModel.snoozeActivity(reminder.itemIDs, until: Date().addingTimeInterval(24 * 3600)) }
-                    Button("Next week") { viewModel.snoozeActivity(reminder.itemIDs, until: Date().addingTimeInterval(7 * 24 * 3600)) }
+                    Button("1 hour") { actions.snooze(reminder.itemIDs, 3600) }
+                    Button("24 hours") { actions.snooze(reminder.itemIDs, 24 * 3600) }
+                    Button("7 days") { actions.snooze(reminder.itemIDs, 7 * 24 * 3600) }
                 }
                 .controlSize(.small)
                 .frame(width: 90)
@@ -315,20 +348,23 @@ struct PRActivityView: View {
             }
         }
         .padding(.vertical, 3)
+        .id(ActivityNotificationTarget.reminder(id: reminder.id))
+        .accessibilityIdentifier("activity-reminder-\(reminder.id)")
+        .background(isTarget(reminder) ? Color.accentColor.opacity(0.08) : Color.clear)
     }
 
     private func menu(for pr: MonitoredPR) -> some View {
         Menu {
-            Button(viewModel.isActivityMuted(pr) ? "Unmute notifications" : "Mute notifications") {
-                viewModel.setActivityMuted(!viewModel.isActivityMuted(pr), pr: pr)
+            Button(mutedIdentifiers.contains(pr.reference.identifier) ? "Unmute notifications" : "Mute notifications") {
+                actions.setMuted(pr, !mutedIdentifiers.contains(pr.reference.identifier))
             }
             Button(pr.isExplicitlyTracked ? "Stop tracking" : "Track this PR") {
-                viewModel.setActivityTracking(pr, tracked: !pr.isExplicitlyTracked)
+                actions.setTracked(pr, !pr.isExplicitlyTracked)
             }
             Divider()
             Button("Open on GitHub") {
                 if let url = pr.url {
-                    NSWorkspace.shared.open(url)
+                    actions.openURL(url)
                 }
             }
         } label: {
@@ -338,18 +374,6 @@ struct PRActivityView: View {
         .frame(width: 24)
     }
 
-    private func openLabel(for reminder: ActivityReminder) -> String {
-        switch reminder.actionKinds.first {
-        case .reviewFeedback: return String(localized: "Open review")
-        case .fixCI: return String(localized: "Open failing check")
-        case .respondToMention: return String(localized: "Open mention")
-        case .reReview: return String(localized: "Open to review again")
-        case .resolveThread: return String(localized: "Open thread")
-        case .confirmCI: return String(localized: "Open CI")
-        case .review: return String(localized: "Open review request")
-        case nil: return String(localized: "Open on GitHub")
-        }
-    }
 
     private func linkLabel(_ url: URL) -> String {
         let tail = url.lastPathComponent
@@ -372,15 +396,14 @@ struct PRActivityView: View {
                             .font(.caption2)
                         Spacer()
                         Button("Stop tracking") {
-                            viewModel.setActivityTracking(pr, tracked: false)
+                            actions.setTracked(pr, false)
                         }
                         .controlSize(.small)
                     }
                 }
             }
-            .padding(10)
-            .background(Color.primary.opacity(0.03))
-            .cornerRadius(8)
+            .padding(.vertical, 6)
+            Divider()
         }
     }
 
@@ -391,7 +414,7 @@ struct PRActivityView: View {
             Text("Digest deliveries")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            ForEach(snapshot.batches.suffix(5).reversed()) { batch in
+            ForEach(displayedBatches) { batch in
                 VStack(alignment: .leading, spacing: 3) {
                     HStack {
                         Text(batch.createdAt.formatted(date: .abbreviated, time: .shortened))
@@ -402,7 +425,7 @@ struct PRActivityView: View {
                             .foregroundStyle(.secondary)
                         Spacer()
                         if batch.deliveries.contains(where: { $0.status == .failed || $0.status == .unknown }) {
-                            Button("Retry") { viewModel.retryActivityDigest(batch) }
+                            Button("Retry") { actions.retry(batch) }
                                 .controlSize(.small)
                         }
                     }
@@ -414,12 +437,73 @@ struct PRActivityView: View {
                 }
             }
         }
-        .padding(10)
-        .background(Color.primary.opacity(0.03))
-        .cornerRadius(8)
+        .padding(.vertical, 6)
     }
 
     // MARK: - Helpers
+    private var notificationContextValue: ActivityNotificationContext {
+        ActivityNavigation.resolve(batchID: navigation.digestBatchID, snapshot: snapshot)
+    }
+
+    private var displayedBatches: [DigestBatch] {
+        var batches = Array(snapshot.batches.suffix(5).reversed())
+        if case .available(let batch, _) = notificationContextValue,
+           !batches.contains(where: { $0.id == batch.id }) {
+            batches.insert(batch, at: 0)
+        }
+        return batches
+    }
+
+    @ViewBuilder
+    private var notificationContext: some View {
+        switch notificationContextValue {
+        case .none:
+            EmptyView()
+        case .missing:
+            Text("This notification is no longer available in local history")
+                .font(.caption)
+                .accessibilityIdentifier("activity-digest-context")
+        case .available(let batch, let items):
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Notification · \(batch.createdAt.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.caption.weight(.semibold))
+                    .accessibilityLabel("Notification \(fullTimestamp(batch.createdAt))")
+                ForEach(batch.entries) { entry in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(entry.reference.repoFullName)#\(entry.reference.number) · \(entry.reasons.map(PRActivityDigestFormatter.reasonLabel).joined(separator: ", "))")
+                        let current = items.filter { entry.actionItemIDs.contains($0.id) }
+                        Text(current.isEmpty ? "No longer in current reminders" : current.map { PRActivityDigestFormatter.stateLabel($0.state) }.joined(separator: " · "))
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.caption2)
+                }
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.accentColor.opacity(0.08))
+            .accessibilityIdentifier("activity-digest-context")
+        }
+    }
+
+    private func isTarget(_ reminder: ActivityReminder) -> Bool {
+        guard case .available(let batch, _) = notificationContextValue else { return false }
+        return !Set(batch.coveredActionItemIDs).isDisjoint(with: reminder.itemIDs)
+    }
+
+    private func scrollToNotification(_ proxy: ScrollViewProxy) {
+        let reminders = groups.flatMap { PRActivityEngine.reminders(from: $0.items) }
+        guard let target = ActivityNavigation.scrollTarget(
+            batchID: navigation.digestBatchID, snapshot: snapshot, reminders: reminders
+        ) else { return }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { proxy.scrollTo(target, anchor: .top) }
+    }
+
+    private func fullTimestamp(_ date: Date) -> String {
+        date.formatted(.dateTime.year().month().day().hour().minute().second().timeZone(.identifier(.long)))
+    }
+
 
     private func banner(_ text: String, symbol: String, tint: Color) -> some View {
         HStack(alignment: .top, spacing: 6) {

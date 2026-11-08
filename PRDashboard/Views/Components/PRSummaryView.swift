@@ -38,7 +38,7 @@ struct PRSummaryView: View {
                 Segment(
                     icon: "xmark.circle.fill",
                     color: .red,
-                    label: String(localized: "\(ciFailing) CI failing")
+                    label: String(localized: "\(ciFailing) CI failed or unknown")
                 )
             )
         }
@@ -46,7 +46,7 @@ struct PRSummaryView: View {
             result.append(
                 Segment(
                     icon: "clock.circle.fill",
-                    color: .yellow,
+                    color: .orange,
                     label: String(localized: "\(ciRunning) CI running")
                 )
             )
@@ -64,31 +64,73 @@ struct PRSummaryView: View {
     }
 
     var body: some View {
-        HStack(spacing: 4) {
-            if segments.isEmpty {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 10))
-                    .foregroundColor(.green)
-                Text("All clear")
-                    .font(.system(size: 11))
+        let items = segments
+        SummaryFlowLayout(spacing: 8) {
+            if items.isEmpty {
+                Label("No summary items", systemImage: "minus.circle")
                     .foregroundColor(.secondary)
+                    .accessibilityHint("This summary does not establish whether there is other work to do.")
             } else {
-                ForEach(Array(segments.enumerated()), id: \.offset) { index, segment in
-                    if index > 0 {
-                        Text("·")
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary.opacity(0.6))
+                ForEach(items, id: \.icon) { segment in
+                    Label {
+                        Text(segment.label)
+                            .foregroundColor(.primary)
+                    } icon: {
+                        Image(systemName: segment.icon)
+                            .foregroundColor(segment.color)
                     }
-                    Image(systemName: segment.icon)
-                        .font(.system(size: 10))
-                        .foregroundColor(segment.color)
-                    Text(segment.label)
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
+                    .accessibilityElement(children: .combine)
+                    .help(summaryExplanation)
                 }
             }
         }
+        .font(.system(size: 11))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .help(summaryExplanation)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("PR summary")
+        .accessibilityHint(summaryExplanation)
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
+    }
+
+    private var summaryExplanation: String {
+        String(localized: "Each count is the number of PRs in the current filter. Categories can overlap. CI failed or unknown includes both failed and unknown CI status. Ready to merge means the configured criteria are met; it does not establish merge permission.")
+    }
+}
+
+/// Keeps each summary item readable and wraps items instead of squeezing five columns.
+private struct SummaryFlowLayout: Layout {
+    let spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrange(subviews, width: proposal.width ?? .infinity, origin: nil)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        _ = arrange(subviews, width: bounds.width, origin: bounds.origin)
+    }
+
+    private func arrange(_ subviews: Subviews, width: CGFloat, origin: CGPoint?) -> CGSize {
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var lineHeight: CGFloat = 0
+        var usedWidth: CGFloat = 0
+        for subview in subviews {
+            let itemProposal = ProposedViewSize(width: width.isFinite ? width : nil, height: nil)
+            let size = subview.sizeThatFits(itemProposal)
+            if x > 0, x + size.width > width {
+                x = 0
+                y += lineHeight + spacing
+                lineHeight = 0
+            }
+            if let origin {
+                subview.place(at: CGPoint(x: origin.x + x, y: origin.y + y), anchor: .topLeading, proposal: itemProposal)
+            }
+            usedWidth = max(usedWidth, x + size.width)
+            lineHeight = max(lineHeight, size.height)
+            x += size.width + spacing
+        }
+        return CGSize(width: usedWidth, height: y + lineHeight)
     }
 }

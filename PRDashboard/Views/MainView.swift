@@ -1,113 +1,54 @@
 import AppKit
 import SwiftUI
-import AppKit
 
 struct MainView: View {
     @ObservedObject var viewModel: PRListViewModel
     @ObservedObject var onboardingManager: OnboardingManager
     var presentationCoordinator: AppPresentationCoordinator? = nil
     @ObservedObject var extensionPlatformController: ExtensionPlatformController
-    @StateObject private var tooltipPresenter = HoverTooltipPresenter()
-    @State private var firstVisibleApprovalPRID: Int?
-    @State private var footerTimelineAnchor = Date()
-    @State private var firstVisibleReviewStatusPRID: Int?
-    @State private var showSaveViewSheet = false
-    @State private var savedViewName = ""
-    @State private var expandedSections: Set<PRSectionID> = Set(PRSectionID.allCases)
+    @ObservedObject var interaction: PanelInteractionCoordinator
     @State private var extensionActionError: String?
-
-    private enum PRSectionID: Hashable, CaseIterable {
-        case authored
-        case reviewRequests
-        case mentioned
-        case directMentions
-        case mergedToday
-
-        var title: LocalizedStringKey {
-            switch self {
-            case .authored:
-                return "My PRs"
-            case .reviewRequests:
-                return "Review Requests"
-            case .mentioned:
-                return "Mentioned PRs"
-            case .directMentions:
-                return "Direct Mentions"
-            case .mergedToday:
-                return "Merged Today"
-            }
-        }
-    }
-
-    private var searchSuggestions: [PRSearchScope.Suggestion] {
-        PRSearchScope.suggestions(for: viewModel.searchText)
-    }
+    @State private var localPresentationRevision: UInt64 = 0
+    @State private var panelClock = Date()
 
     var body: some View {
-        VStack(spacing: 0) {
+        Group {
             if viewModel.authState.isAuthenticated {
-                // Header
-                headerView
-                if viewModel.isFacetPanelPresented {
-                    FacetFilterPanel(viewModel: viewModel) { showSaveViewSheet = true }
-                }
-                Divider()
-
-                if viewModel.prList.isLoading && !viewModel.prList.hasUsableData {
-                    // Loading state
-                    loadingView
-                } else if !viewModel.prList.hasUsableData, let error = viewModel.prList.error {
-                    // Error state
-                    errorView(error)
-                } else if !viewModel.prList.hasUsableData {
-                    // Empty state
-                    emptyView
-                } else {
-                    // PR list
-                    prListView
-                }
-
-                if let extensionActionError {
-                    HStack(spacing: 7) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(.orange)
-                        Text(extensionActionError)
-                            .font(.caption)
-                            .lineLimit(2)
-                        Spacer(minLength: 4)
-                        Button {
-                            self.extensionActionError = nil
-                        } label: {
-                            Image(systemName: "xmark")
+                PRPanelView(
+                    snapshot: panelSnapshot,
+                    actions: panelActions,
+                    searchText: Binding(
+                        get: { viewModel.searchText },
+                        set: { query in
+                            viewModel.searchText = query
+                            submitUserIntent()
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Dismiss Skill error")
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color.orange.opacity(0.1))
-                }
-
-                Divider()
-
-                // Footer
-                footerView
+                    ),
+                    isFacetPanelPresented: $viewModel.isFacetPanelPresented,
+                    interaction: interaction,
+                    onboardingManager: onboardingManager
+                )
             } else {
-                // Auth view
                 AuthView(viewModel: viewModel)
+                    .frame(width: 400, height: 500)
             }
         }
-        .frame(width: 400, height: 500)
-        .coordinateSpace(name: HoverTooltipCoordinateSpace.name)
-        .environment(\.hoverTooltipPresenter, tooltipPresenter)
-        .overlay(alignment: .topLeading) {
-            HoverTooltipOverlay(presenter: tooltipPresenter)
+        .background {
+            if interaction.isPresented && interaction.isWindowActive {
+                TimelineView(.periodic(from: panelClock, by: 10)) { context in
+                    Color.clear
+                        .onChange(of: context.date) { panelClock = $0 }
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
         }
-        .onAppear(perform: syncOnboardingState)
-        .onChange(of: onboardingAvailableSteps) { _ in
-            syncOnboardingState()
+        .onReceive(extensionPlatformController.objectWillChange) { _ in
+            localPresentationRevision &+= 1
         }
-        .onPreferenceChange(FirstApprovalBadgeIDPreferenceKey.self) { firstVisibleApprovalPRID = $0 }
+        .onChange(of: extensionActionError) { _ in
+            localPresentationRevision &+= 1
+        }
         .alert(item: $viewModel.jiraPrompt) { prompt in
             switch prompt {
             case .setup(let key):
@@ -140,452 +81,168 @@ struct MainView: View {
                 )
             }
         }
-        .sheet(isPresented: $showSaveViewSheet) {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Save Current Filters").font(.headline)
-                TextField("View name", text: $savedViewName)
-                HStack {
-                    Spacer()
-                    Button("Cancel") {
-                        savedViewName = ""
-                        showSaveViewSheet = false
-                    }
-                    Button("Save") {
-                        guard viewModel.saveCurrentView(name: savedViewName) != nil else { return }
-                        savedViewName = ""
-                        showSaveViewSheet = false
-                    }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(savedViewName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-            }.padding(20).frame(width: 280)
-        }
-        .onPreferenceChange(FirstReviewStatusBadgeIDPreferenceKey.self) { firstVisibleReviewStatusPRID = $0 }
     }
 
-    // MARK: - Header
-
-    private var headerView: some View {
-        let facetChips = viewModel.facetChips
-        let labelSuggestions = viewModel.searchLabelSuggestions
-        return HStack(alignment: .center, spacing: 6) {
-            // Search field
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 4) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundColor(.secondary)
-                    TextField("Search PRs, repos, authors, Jira keys...", text: $viewModel.searchText)
-                        .textFieldStyle(.plain)
-                        .frame(maxWidth: .infinity)
-                    if !viewModel.searchText.isEmpty {
-                        Button(action: { viewModel.searchText = "" }) {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundColor(.secondary)
-                        }
-                        .buttonStyle(.borderless)
-                    }
-                    Button(action: { viewModel.isFacetPanelPresented.toggle() }) {
-                        if viewModel.isFacetPanelPresented {
-                            if NSImage(
-                                systemSymbolName: "xmark",
-                                accessibilityDescription: nil
-                            ) != nil {
-                                Image(systemName: "xmark")
-                            } else {
-                                Text("×")
-                            }
-                        } else if NSImage(
-                            systemSymbolName: "line.3.horizontal.decrease",
-                            accessibilityDescription: nil
-                        ) != nil {
-                            Image(systemName: "line.3.horizontal.decrease")
-                        } else if NSImage(
-                            systemSymbolName: "slider.horizontal.3",
-                            accessibilityDescription: nil
-                        ) != nil {
-                            Image(systemName: "slider.horizontal.3")
-                        } else {
-                            Text("≡")
-                        }
-                    }
-                    .buttonStyle(.borderless)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 28)
-                    .help(viewModel.isFacetPanelPresented ? "Close Filters" : "Filter")
-                    .accessibilityLabel(viewModel.isFacetPanelPresented ? "Close Filters" : "Filter")
-                }
-                .padding(6)
-                .background(Color.primary.opacity(0.05))
-                .cornerRadius(6)
-
-                if !searchSuggestions.isEmpty {
-                    HStack(spacing: 4) {
-                        ForEach(searchSuggestions) { suggestion in
-                            Button {
-                                viewModel.searchText = suggestion.query
-                            } label: {
-                                Label(suggestion.title, systemImage: suggestion.systemImage)
-                            }
-                            .buttonStyle(.borderless)
-                            .controlSize(.small)
-                            .help("Filter by \(suggestion.query)")
-                        }
-                    }
-                    .font(.caption)
-                }
-                if !labelSuggestions.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 4) {
-                            ForEach(labelSuggestions) { option in
-                                Button {
-                                    viewModel.selectLabelSuggestion(option)
-                                } label: {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: option.field.symbolName)
-                                        Text(option.displayName).lineLimit(1)
-                                        Text(option.field.providerTitle)
-                                            .foregroundColor(.secondary)
-                                        Text("\(option.count)")
-                                            .foregroundColor(.secondary)
-                                            .monospacedDigit()
-                                    }
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 3)
-                                    .background(Color.accentColor.opacity(0.08))
-                                    .cornerRadius(5)
-                                }
-                                .buttonStyle(.plain)
-                                .help("Filter by \(option.field.providerTitle) label \(option.displayName)")
-                            }
-                        }
-                    }
-                    .font(.caption)
-                }
-                if !facetChips.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 4) {
-                            ForEach(facetChips.prefix(3)) { chip in
-                                HStack(spacing: 3) {
-                                    Image(systemName: chip.field.symbolName)
-                                    Text(chip.displayName).lineLimit(1)
-                                    Button {
-                                        viewModel.toggleFacet(field: chip.field, key: chip.key)
-                                    } label: {
-                                        Image(systemName: "xmark")
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                                .font(.caption2)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 3)
-                                .background(Color.accentColor.opacity(0.12))
-                                .cornerRadius(4)
-                            }
-                            if facetChips.count > 3 {
-                                Text("+\(facetChips.count - 3)")
-                                    .font(.caption2)
-                            }
-                        }
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .onboardingAnchor(onboardingManager, step: .filter)
-
-            Button(action: { viewModel.showActivity() }) {
-                HStack(spacing: 3) {
-                    Image(systemName: "tray.full")
-                        .font(.system(size: 16, weight: .medium))
-                    if viewModel.actionableActivityCount > 0 {
-                        Text("\(viewModel.actionableActivityCount)")
-                            .font(.caption2)
-                            .monospacedDigit()
-                            .foregroundColor(.secondary)
-                    }
-                }
-                .frame(height: 28)
-            }
-            .buttonStyle(.borderless)
-            .help("PR activity that needs attention")
-            .accessibilityLabel("Activity")
-
-            Button(action: { viewModel.refresh() }) {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 16, weight: .medium))
-                    .frame(width: 28, height: 28)
-            }
-            .buttonStyle(.borderless)
-            .keyboardShortcut("r", modifiers: .command)
-            .disabled(viewModel.prList.isLoading)
-
-            Button(action: { viewModel.showSettings() }) {
-                Image(systemName: "gear")
-                    .font(.system(size: 16, weight: .medium))
-                    .frame(width: 28, height: 28)
-            }
-            .buttonStyle(.borderless)
-            .onboardingAnchor(onboardingManager, step: .repoFilter)
-        }
-        .padding(10)
-    }
-
-
-    // MARK: - PR List
-
-    private var prListView: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                if let error = viewModel.prList.error {
-                    staleDataBanner(error)
-                }
-
-                PRSummaryView(
-                    readyToMerge: viewModel.summaryReadyToMerge,
-                    changesRequested: viewModel.summaryChangesRequested,
-                    ciFailing: viewModel.summaryCIFailing,
-                    ciRunning: viewModel.summaryCIRunning,
-                    toReview: viewModel.summaryWaitingForMyReview
+    private var panelSnapshot: PRPanelSnapshot {
+        let projection = viewModel.panelProjection
+        let runnableSkills = extensionPlatformController.runnableRevisionSkills()
+        var rowExtensions: [Int: PRRowExtensionState] = [:]
+        for section in PRSectionID.allCases {
+            for id in projection.displayedRowIDs(for: section) {
+                guard rowExtensions[id.prID] == nil, let pr = projection.pr(for: id) else { continue }
+                rowExtensions[id.prID] = PRRowExtensionState(
+                    runnableSkills: runnableSkills,
+                    extensionRun: extensionPlatformController.activeRun(repository: pr.repoFullName, number: pr.number),
+                    extensionAnalysis: extensionPlatformController.latestAnalysis(repository: pr.repoFullName, number: pr.number),
+                    extensionTags: extensionPlatformController.tags(repository: pr.repoFullName, number: pr.number)
                 )
-
-
-                collapsibleSection(.authored, count: viewModel.authoredPRs.count, onboardingStep: .myPRs) {
-                    // Pinned PRs at top
-                    if !viewModel.pinnedAuthoredPRs.isEmpty {
-                        ForEach(viewModel.pinnedAuthoredPRs) { pr in
-                            PRRowView(
-                                pr: pr,
-                                onOpen: { viewModel.openPR(pr) },
-                                onOpenJira: { viewModel.openJiraIssue($0) },
-                                onCopyURL: { viewModel.copyURL(pr) },
-                                onMarkReviewCommentsRead: { viewModel.markReviewCommentsRead(pr) },
-                                onMarkReviewCommentsUnread: { viewModel.markReviewCommentsUnread(pr) },
-                                onRerunFailedCI: { viewModel.rerunFailedCI(pr) },
-                                onUpdateBranchWithRebase: { viewModel.updateBranchWithRebase(pr) },
-                                onTogglePin: { viewModel.togglePin(pr) },
-                                onAnalyzeCIFailure: { viewModel.openPRChecks(pr) },
-                                onOpenRawDiagnostics: { openRawDiagnostics(for: pr) },
-                                onRunSkill: { runExtensionSkill($0, for: pr) },
-                                onInstallBrowserUserscript: browserUserscriptInstallAction,
-                                onOpenBrowserIntegrationSettings: browserIntegrationSettingsAction,
-                                runnableSkills: extensionPlatformController.runnableRevisionSkills(),
-                                extensionRun: extensionPlatformController.activeRun(repository: pr.repoFullName, number: pr.number),
-                                extensionAnalysis: extensionPlatformController.latestAnalysis(repository: pr.repoFullName, number: pr.number),
-                                extensionTags: extensionPlatformController.tags(repository: pr.repoFullName, number: pr.number),
-                                isPinned: true,
-                                isOpening: viewModel.isOpeningPR(pr),
-                                isUpdatingBranch: viewModel.isUpdatingBranch(pr),
-                                showCIStatus: true,
-                                showMyReviewStatus: viewModel.configuration.showMyReviewStatus,
-                                showCmuxStatus: viewModel.configuration.openAtCmuxFirst,
-                                jiraMetadataEnabled: viewModel.jiraConnectionState == .configured,
-                                searchText: viewModel.searchText,
-                                onboardingManager: onboardingManager,
-                                approvalOnboardingPRID: firstVisibleApprovalPRID,
-                                reviewStatusOnboardingPRID: firstVisibleReviewStatusPRID
-                            )
-                        }
-                    }
-
-                    // Unpinned PRs grouped by repo
-                    ForEach(viewModel.groupedAuthoredPRs, id: \.0) { repo, prs in
-                        repoSection(repo: repo, prs: prs, showPin: true, showReviewCommentActions: true)
-                            .id("authored-\(repo)")
-                    }
-                }
-
-                collapsibleSection(.reviewRequests, count: viewModel.reviewRequestPRs.count, onboardingStep: .reviewRequests) {
-                    if !viewModel.pinnedReviewRequestPRs.isEmpty {
-                        ForEach(viewModel.pinnedReviewRequestPRs) { pr in
-                            PRRowView(
-                                pr: pr,
-                                onOpen: { viewModel.openPR(pr) },
-                                onOpenJira: { viewModel.openJiraIssue($0) },
-                                onCopyURL: { viewModel.copyURL(pr) },
-                                onRerunFailedCI: { viewModel.rerunFailedCI(pr) },
-                                onUpdateBranchWithRebase: { viewModel.updateBranchWithRebase(pr) },
-                                onLoadHoverDetail: { viewModel.loadHoverDetailIfNeeded(pr) },
-                                onTogglePin: { viewModel.togglePin(pr) },
-                                onAnalyzeCIFailure: { viewModel.openPRChecks(pr) },
-                                onOpenRawDiagnostics: { openRawDiagnostics(for: pr) },
-                                onRunSkill: { runExtensionSkill($0, for: pr) },
-                                onInstallBrowserUserscript: browserUserscriptInstallAction,
-                                onOpenBrowserIntegrationSettings: browserIntegrationSettingsAction,
-                                runnableSkills: extensionPlatformController.runnableRevisionSkills(),
-                                extensionRun: extensionPlatformController.activeRun(repository: pr.repoFullName, number: pr.number),
-                                extensionAnalysis: extensionPlatformController.latestAnalysis(repository: pr.repoFullName, number: pr.number),
-                                extensionTags: extensionPlatformController.tags(repository: pr.repoFullName, number: pr.number),
-                                isPinned: true,
-                                isOpening: viewModel.isOpeningPR(pr),
-                                isUpdatingBranch: viewModel.isUpdatingBranch(pr),
-                                isLoadingHoverDetail: viewModel.isLoadingHoverDetail(pr),
-                                showCIStatus: true,
-                                showMyReviewStatus: viewModel.configuration.showMyReviewStatus,
-                                showCmuxStatus: viewModel.configuration.openAtCmuxFirst,
-                                jiraMetadataEnabled: viewModel.jiraConnectionState == .configured,
-                                searchText: viewModel.searchText,
-                                onboardingManager: onboardingManager,
-                                approvalOnboardingPRID: firstVisibleApprovalPRID,
-                                reviewStatusOnboardingPRID: firstVisibleReviewStatusPRID
-                            )
-                        }
-                    }
-
-                    ForEach(viewModel.groupedReviewPRs, id: \.0) { repo, prs in
-                        repoSection(repo: repo, prs: prs, showPin: true)
-                            .id("review-\(repo)")
-                    }
-                }
-
-                collapsibleSection(.mentioned, count: viewModel.mentionedPRs.count) {
-                    ForEach(viewModel.groupedMentionedPRs, id: \.0) { repo, prs in
-                        repoSection(repo: repo, prs: prs)
-                            .id("mentioned-\(repo)")
-                    }
-                }
-                collapsibleSection(.directMentions, count: viewModel.directMentionPRs.count) {
-                    ForEach(viewModel.groupedDirectMentionPRs, id: \.0) { repo, prs in
-                        repoSection(repo: repo, prs: prs)
-                            .id("direct-mentions-\(repo)")
-                    }
-                }
-
-                collapsibleSection(.mergedToday, count: viewModel.mergedLast24hPRs.count, onboardingStep: .mergedToday) {
-                    ForEach(viewModel.groupedMergedLast24hPRs, id: \.0) { repo, prs in
-                        repoSection(repo: repo, prs: prs, showCIStatus: false, showConflictStatus: false)
-                            .id("merged-\(repo)")
-                    }
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-        }
-        .id(viewModel.pinChangeToken)
-    }
-
-    @ViewBuilder
-    private func collapsibleSection<Content: View>(
-        _ section: PRSectionID,
-        count: Int,
-        onboardingStep: OnboardingManager.Step? = nil,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        if count > 0 {
-            sectionHeader(section, count: count, onboardingStep: onboardingStep)
-
-            if isExpanded(section) {
-                content()
-                    .transition(.opacity)
             }
         }
+        return PRPanelSnapshot(
+            prList: viewModel.prList,
+            projection: projection,
+            rateLimitInfo: viewModel.rateLimitInfo,
+            configuration: viewModel.configuration,
+            jiraConnectionState: viewModel.jiraConnectionState,
+            pinnedIdentifiers: viewModel.pinnedPRIdentifiers,
+            activeFacetSelections: viewModel.activeFacetSelections,
+            activityReminderCount: viewModel.actionableActivityCount,
+            openingPRIDs: viewModel.openingPRIDs,
+            updatingBranchPRIDs: viewModel.updatingBranchPRIDs,
+            loadingHoverDetailPRIDs: viewModel.loadingHoverDetailPRIDs,
+            facetChips: projection.facetChips,
+            facetOptions: projection.facetOptions,
+            labelSuggestions: projection.searchLabelSuggestions,
+            savedViews: viewModel.savedViews,
+            now: Date(),
+            rowExtensions: rowExtensions,
+            actionError: extensionActionError,
+            presentationRevision: viewModel.panelPublicationRevision &+ localPresentationRevision
+        )
     }
 
-    private func sectionHeader(
-        _ section: PRSectionID,
-        count: Int,
-        onboardingStep: OnboardingManager.Step? = nil
-    ) -> some View {
-        let expanded = isExpanded(section)
-        let header = Button {
-            toggleSection(section)
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(.secondary.opacity(0.8))
-                    .frame(width: 10)
-
-                Text(section.title)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.secondary)
-
-                Text("(\(count))")
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary.opacity(0.7))
-
-                Spacer()
-            }
-            .padding(.horizontal, 8)
-            .padding(.top, 12)
-            .padding(.bottom, 4)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(expanded ? "Collapse section" : "Expand section")
-        .accessibilityLabel(Text(section.title))
-        .accessibilityValue(expanded ? Text("Expanded") : Text("Collapsed"))
-
-        return Group {
-            if let onboardingStep {
-                header.onboardingAnchor(onboardingManager, step: onboardingStep)
-            } else {
-                header
-            }
-        }
+    private var panelActions: PRPanelActions {
+        PRPanelActions(
+            refresh: {
+                viewModel.refresh()
+                submitUserIntent()
+            },
+            openActivity: { viewModel.showActivity() },
+            openSettings: { viewModel.showSettings() },
+            rowActions: rowActions,
+            toggleFacet: { field, key in
+                viewModel.toggleFacet(field: field, key: key)
+                submitUserIntent()
+            },
+            clearFacetField: {
+                viewModel.clearFacetField($0)
+                submitUserIntent()
+            },
+            clearAllFacets: {
+                viewModel.clearAllFacets()
+                submitUserIntent()
+            },
+            selectLabelSuggestion: {
+                viewModel.selectLabelSuggestion($0)
+                submitUserIntent()
+            },
+            saveCurrentView: { viewModel.saveCurrentView(name: $0) },
+            applySavedView: {
+                viewModel.applySavedView($0)
+                submitUserIntent()
+            },
+            renameSavedView: { viewModel.renameSavedView($0, name: $1) },
+            deleteSavedView: { viewModel.deleteSavedView($0) },
+            dismissActionError: { extensionActionError = nil }
+        )
     }
 
-    private func isExpanded(_ section: PRSectionID) -> Bool {
-        expandedSections.contains(section)
+    private func submitUserIntent() {
+        interaction.receive(snapshot: panelSnapshot, reason: .userIntent)
     }
 
-    private func toggleSection(_ section: PRSectionID) {
-        withAnimation(.easeInOut(duration: 0.16)) {
-            if expandedSections.contains(section) {
-                expandedSections.remove(section)
-            } else {
-                expandedSections.insert(section)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func repoSection(
-        repo: String,
-        prs: [PullRequest],
-        showCIStatus: Bool = true,
-        showPin: Bool = false,
-        showConflictStatus: Bool = true,
-        showReviewCommentActions: Bool = false
-    ) -> some View {
-        ForEach(prs) { pr in
-            PRRowView(
-                pr: pr,
-                onOpen: { viewModel.openPR(pr) },
-                onOpenJira: { viewModel.openJiraIssue($0) },
-                onCopyURL: { viewModel.copyURL(pr) },
-                onMarkReviewCommentsRead: showReviewCommentActions ? { viewModel.markReviewCommentsRead(pr) } : nil,
-                onMarkReviewCommentsUnread: showReviewCommentActions ? { viewModel.markReviewCommentsUnread(pr) } : nil,
-                onRerunFailedCI: { viewModel.rerunFailedCI(pr) },
-                onUpdateBranchWithRebase: { viewModel.updateBranchWithRebase(pr) },
-                onLoadHoverDetail: { viewModel.loadHoverDetailIfNeeded(pr) },
-                onTogglePin: showPin ? { viewModel.togglePin(pr) } : nil,
-                onAnalyzeCIFailure: { viewModel.openPRChecks(pr) },
-                onOpenRawDiagnostics: { openRawDiagnostics(for: pr) },
-                onRunSkill: { runExtensionSkill($0, for: pr) },
-                onInstallBrowserUserscript: browserUserscriptInstallAction,
-                onOpenBrowserIntegrationSettings: browserIntegrationSettingsAction,
-                runnableSkills: extensionPlatformController.runnableRevisionSkills(),
-                extensionRun: extensionPlatformController.activeRun(repository: pr.repoFullName, number: pr.number),
-                extensionAnalysis: extensionPlatformController.latestAnalysis(repository: pr.repoFullName, number: pr.number),
-                extensionTags: extensionPlatformController.tags(repository: pr.repoFullName, number: pr.number),
-                isPinned: showPin && viewModel.isPinned(pr),
-                isOpening: viewModel.isOpeningPR(pr),
-                isUpdatingBranch: viewModel.isUpdatingBranch(pr),
-                isLoadingHoverDetail: viewModel.isLoadingHoverDetail(pr),
-                showCIStatus: showCIStatus,
-                showConflictStatus: showConflictStatus,
-                showMyReviewStatus: viewModel.configuration.showMyReviewStatus,
-                showCmuxStatus: viewModel.configuration.openAtCmuxFirst,
-                jiraMetadataEnabled: viewModel.jiraConnectionState == .configured,
-                searchText: viewModel.searchText,
-                onboardingManager: onboardingManager,
-                approvalOnboardingPRID: firstVisibleApprovalPRID,
-                reviewStatusOnboardingPRID: firstVisibleReviewStatusPRID
-            )
+    private func withLatestPR(
+        _ id: Int, capturedHead: String? = nil, write: Bool = false,
+        menuCapture: PanelMenuCapture? = nil,
+        perform: (PullRequest) -> Void
+    ) {
+        let head = capturedMenuHead(id, fallback: capturedHead, capture: menuCapture)
+        switch viewModel.resolvePRAction(id: id, capturedHeadCommitOID: head, requiresUnchangedHead: write) {
+        case .success(let pr): perform(pr)
+        case .failure(let error): extensionActionError = error.message
         }
     }
+    private func capturedMenuHead(_ id: Int, fallback: String?, capture: PanelMenuCapture?) -> String? {
+        if let menuPR = capture?.fact(for: id) { return menuPR.headCommitOid }
+        return fallback
+    }
 
+    private func rowActions(_ id: Int) -> PRRowActions {
+        let menuCapture = interaction.menuCapture
+        let displayed = menuCapture.fact(for: id)
+            ?? PRPanelActionResolver.latestPR(id: id, in: viewModel.prList)
+        let head = displayed?.headCommitOid
+        let analysisAvailable = displayed.map {
+            extensionPlatformController.latestAnalysis(repository: $0.repoFullName, number: $0.number) != nil
+        } ?? false
+        return PRRowActions(
+            onOpen: { withLatestPR(id) { viewModel.openPR($0) } },
+            onOpenJira: { requestedKey in
+                withLatestPR(id) { pr in
+                    guard let key = PRPanelActionResolver.jiraIssueKey(requested: requestedKey, for: pr) else {
+                        extensionActionError = "Jira issue no longer available for this PR"
+                        return
+                    }
+                    viewModel.openJiraIssue(key)
+                }
+            },
+            onCopyURL: { withLatestPR(id) { viewModel.copyURL($0) } },
+            onMarkReviewCommentsRead: (displayed?.unreadUnresolvedCount ?? 0) > 0 ? {
+                withLatestPR(id, capturedHead: head, write: true, menuCapture: menuCapture) { pr in
+                    guard pr.unreadUnresolvedCount > 0 else { return }
+                    viewModel.markReviewCommentsRead(pr)
+                }
+            } : nil,
+            onMarkReviewCommentsUnread: (displayed?.readUnresolvedCount ?? 0) > 0 ? {
+                withLatestPR(id, capturedHead: head, write: true, menuCapture: menuCapture) { pr in
+                    guard pr.readUnresolvedCount > 0 else { return }
+                    viewModel.markReviewCommentsUnread(pr)
+                }
+            } : nil,
+            onRerunFailedCI: displayed?.category == .authored && ((displayed?.checkFailureCount ?? 0) > 0 || analysisAvailable) ? {
+                withLatestPR(id, capturedHead: head, write: true, menuCapture: menuCapture) { pr in
+                    guard pr.category == .authored,
+                          pr.checkFailureCount > 0 || extensionPlatformController.latestAnalysis(repository: pr.repoFullName, number: pr.number) != nil else { return }
+                    viewModel.rerunFailedCI(pr)
+                }
+            } : nil,
+            onUpdateBranchWithRebase: displayed?.category == .authored ? {
+                withLatestPR(id, capturedHead: head, write: true, menuCapture: menuCapture) { pr in
+                    guard pr.category == .authored else { return }
+                    viewModel.updateBranchWithRebase(pr)
+                }
+            } : nil,
+            onLoadHoverDetail: { withLatestPR(id) { viewModel.loadHoverDetailIfNeeded($0) } },
+            onTogglePin: {
+                withLatestPR(id, capturedHead: head, write: true, menuCapture: menuCapture) {
+                    viewModel.togglePin($0)
+                    submitUserIntent()
+                }
+            },
+            onAnalyzeCIFailure: (displayed?.checkFailureCount ?? 0) > 0 ? {
+                withLatestPR(id) { pr in
+                    guard pr.checkFailureCount > 0 else { return }
+                    viewModel.openPRChecks(pr)
+                }
+            } : nil,
+            onOpenRawDiagnostics: analysisAvailable ? { withLatestPR(id) { openRawDiagnostics(for: $0) } } : nil,
+            onRunSkill: extensionPlatformController.runnableRevisionSkills().isEmpty ? nil : { skillID in
+                runExtensionSkill(skillID, prID: id, capturedHead: head, menuCapture: menuCapture)
+            },
+            onInstallBrowserUserscript: browserUserscriptInstallAction,
+            onOpenBrowserIntegrationSettings: browserIntegrationSettingsAction
+        )
+    }
     private var browserUserscriptInstallAction: (() -> Void)? {
         guard extensionPlatformController.officialUserscriptClient == nil,
               let url = extensionPlatformController.installUserscriptURL() else {
@@ -605,15 +262,22 @@ struct MainView: View {
         }
     }
 
-    private func runExtensionSkill(_ id: String, for pr: PullRequest) {
+    private func runExtensionSkill(_ skillID: String, prID: Int, capturedHead: String?, menuCapture: PanelMenuCapture) {
+        let head = capturedMenuHead(prID, fallback: capturedHead, capture: menuCapture)
         Task { @MainActor in
             do {
+                let pr = try viewModel.resolvePRAction(
+                    id: prID, capturedHeadCommitOID: head, requiresUnchangedHead: true
+                ).get()
+                guard extensionPlatformController.runnableRevisionSkills().contains(where: { $0.id == skillID }) else { return }
                 try await extensionPlatformController.runRevisionSkill(
-                    id: id,
+                    id: skillID,
                     repository: pr.repoFullName,
                     number: pr.number
                 )
                 extensionActionError = nil
+            } catch let error as PRPanelActionError {
+                extensionActionError = error.message
             } catch {
                 extensionActionError = error.localizedDescription
             }
@@ -629,213 +293,6 @@ struct MainView: View {
             return
         }
         NSWorkspace.shared.open(url)
-    }
-
-    // MARK: - States
-
-    private var loadingView: some View {
-        VStack(spacing: 12) {
-            ProgressView()
-                .scaleEffect(0.8)
-            Text("Loading pull requests...")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func errorView(_ error: Error) -> some View {
-        VStack(spacing: 12) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 32))
-                .foregroundColor(.orange)
-
-            Text("Failed to load PRs")
-                .font(.headline)
-
-            Text(error.localizedDescription)
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-
-            Button("Retry") {
-                viewModel.refresh()
-            }
-            .buttonStyle(.bordered)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding()
-    }
-
-    private func staleDataBanner(_ error: Error) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundColor(.orange)
-                .padding(.top, 2)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Refresh failed")
-                    .font(.system(size: 12, weight: .semibold))
-
-                Text("Showing data updated \(formatRelativeTime(viewModel.prList.lastUpdated)).")
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
-
-                Text(error.localizedDescription)
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Spacer(minLength: 8)
-
-            Button("Retry") {
-                viewModel.refresh()
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-        }
-        .padding(10)
-        .background(Color.orange.opacity(0.12))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.orange.opacity(0.35), lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .padding(.horizontal, 8)
-        .padding(.top, 4)
-    }
-
-    private var emptyView: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "tray")
-                .font(.system(size: 32))
-                .foregroundColor(.secondary)
-
-            Text("No pull requests")
-                .font(.headline)
-
-            Text("You have no open PRs or review requests")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    // MARK: - Footer
-
-    private var footerView: some View {
-        HStack {
-            if viewModel.prList.isLoading {
-                ProgressView()
-                    .scaleEffect(0.5)
-                Text("Updating...")
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
-            } else {
-                // Use TimelineView to update relative time every 10 seconds
-                TimelineView(.periodic(from: footerTimelineAnchor, by: 10)) { _ in
-                    Text("Updated \(formatRelativeTime(viewModel.prList.lastUpdated))")
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
-                }
-            }
-
-            Spacer()
-
-            // Rate limit indicator
-            HStack(spacing: 4) {
-                Image(systemName: "arrow.up.arrow.down")
-                    .font(.system(size: 9))
-                Text("\(viewModel.rateLimitInfo.remaining)/\(viewModel.rateLimitInfo.limit)")
-                    .font(.system(size: 10))
-            }
-            .foregroundColor(viewModel.rateLimitInfo.isLow ? .orange : .secondary)
-            .help(
-                String(
-                    localized:
-                        "API rate limit: \(viewModel.rateLimitInfo.remaining) remaining of \(viewModel.rateLimitInfo.limit)"
-                )
-            )
-
-            if viewModel.totalUnresolvedCount > 0 {
-                let unresolvedView = HStack(spacing: 4) {
-                    Image(systemName: "bubble.left.and.bubble.right")
-                        .font(.system(size: 10))
-                    Text("\(viewModel.totalUnresolvedCount) unresolved")
-                        .font(.system(size: 10))
-                }
-                .foregroundColor(.orange)
-                .delayedHoverTooltip(
-                    String(localized: "This is the total unresolved comments you received.")
-                )
-
-                unresolvedView.onboardingAnchor(
-                    onboardingManager,
-                    step: .unresolvedComments,
-                    arrow: .top
-                )
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-    }
-
-    private static let relativeDateFormatter: RelativeDateTimeFormatter = {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .abbreviated
-        return f
-    }()
-
-    private func formatRelativeTime(_ date: Date) -> String {
-        Self.relativeDateFormatter.localizedString(for: date, relativeTo: Date())
-    }
-
-    private var orderedVisiblePRs: [PullRequest] {
-        viewModel.pinnedAuthoredPRs
-            + viewModel.groupedAuthoredPRs.flatMap(\.1)
-            + viewModel.pinnedReviewRequestPRs
-            + viewModel.groupedReviewPRs.flatMap(\.1)
-            + viewModel.groupedMentionedPRs.flatMap(\.1)
-            + viewModel.groupedDirectMentionPRs.flatMap(\.1)
-            + viewModel.groupedMergedLast24hPRs.flatMap(\.1)
-    }
-
-    private var onboardingAvailableSteps: Set<OnboardingManager.Step> {
-        guard viewModel.authState.isAuthenticated, viewModel.prList.hasUsableData else {
-            return []
-        }
-
-        var steps: Set<OnboardingManager.Step> = [.filter, .repoFilter]
-
-        if !viewModel.authoredPRs.isEmpty {
-            steps.insert(.myPRs)
-        }
-        if !viewModel.reviewRequestPRs.isEmpty {
-            steps.insert(.reviewRequests)
-        }
-        if !viewModel.mergedLast24hPRs.isEmpty {
-            steps.insert(.mergedToday)
-        }
-        if viewModel.totalUnresolvedCount > 0 {
-            steps.insert(.unresolvedComments)
-        }
-        if firstVisibleReviewStatusPRID != nil {
-            steps.insert(.myReviewStatus)
-        }
-        if firstVisibleApprovalPRID != nil {
-            steps.insert(.approvals)
-        }
-
-        return steps
-    }
-
-    private func syncOnboardingState() {
-        onboardingManager.updateAvailableSteps(onboardingAvailableSteps)
-
-        if viewModel.prList.hasUsableData {
-            onboardingManager.startIfNeeded()
-        }
     }
 }
 

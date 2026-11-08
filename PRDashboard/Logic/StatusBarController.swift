@@ -6,19 +6,26 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
     private var statusBar: NSStatusBar
     private var statusItem: NSStatusItem
     private var popover: NSPopover
-    private weak var prManager: PRManagerType?
+    private let onWillShow: () -> Void
+    private let onWillClose: () -> Void
     private let onCheckForUpdates: () -> Void
     private let defaultPopoverBehavior: NSPopover.Behavior
 
     private var eventMonitor: Any?
     private var hoverDetailVisibilityObserver: NSObjectProtocol?
     private var isHoverDetailPanelVisible = false
+    private(set) var openingFromKeyboard = false
+    private var previousApplication: NSRunningApplication?
+    private weak var previousWindow: NSWindow?
+    private weak var previousResponder: NSResponder?
+    private var shouldRestoreFocus = false
 
-    init(popover: NSPopover, prManager: PRManagerType, onCheckForUpdates: @escaping () -> Void) {
+    init(popover: NSPopover, onWillShow: @escaping () -> Void, onWillClose: @escaping () -> Void, onCheckForUpdates: @escaping () -> Void) {
         self.statusBar = NSStatusBar.system
         self.statusItem = statusBar.statusItem(withLength: NSStatusItem.variableLength)
         self.popover = popover
-        self.prManager = prManager
+        self.onWillShow = onWillShow
+        self.onWillClose = onWillClose
         self.onCheckForUpdates = onCheckForUpdates
         self.defaultPopoverBehavior = popover.behavior
 
@@ -105,9 +112,7 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
     }
 
     @objc private func handleClick(_ sender: AnyObject) {
-        guard let event = NSApp.currentEvent else { return }
-
-        if event.type == .rightMouseUp {
+        if NSApp.currentEvent?.type == .rightMouseUp {
             statusItem.menu = setupMenu()
             statusItem.button?.performClick(nil)
             statusItem.menu = nil
@@ -119,9 +124,12 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
     private func setupEventMonitor() {
         // Close popover when clicking outside
         eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-            if let self = self, self.popover.isShown {
-                self.hidePopover(self)
-            }
+            guard let self, self.popover.isShown, !MenuTracker.shared.isTracking else { return }
+            let window = self.popover.contentViewController?.view.window
+            guard window?.attachedSheet == nil,
+                  (window?.firstResponder as? NSTextView)?.hasMarkedText() != true,
+                  window?.childWindows?.contains(where: { $0.isVisible }) != true else { return }
+            self.hidePopover(self, restoringFocus: false)
         }
     }
 
@@ -132,7 +140,8 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
             queue: .main
         ) { [weak self] notification in
             let isVisible = notification.userInfo?[PRHoverDetailPanelVisibilityKey.isVisible] as? Bool == true
-            Task { @MainActor [weak self] in
+            // Delivered on the main queue before a focused Details panel becomes key.
+            MainActor.assumeIsolated {
                 self?.isHoverDetailPanelVisible = isVisible
                 self?.updatePopoverBehaviorForHoverDetail()
             }
@@ -146,8 +155,14 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
         }
     }
 
-    func updateBadge(count: Int) {
+    func updateBadge(prList: PRList) {
         guard let button = statusItem.button else { return }
+        let count = prList.menuNotificationCount
+        button.setAccessibilityLabel(String(localized: "Pull Requests"))
+        button.setAccessibilityValue(
+            "\(prList.authoredUnreadUnresolvedCount) unread unresolved threads on your PRs, " +
+            "\(prList.unansweredDirectMentionCount) unanswered direct mentions"
+        )
 
         if count > 0 {
             if let image = NSImage(systemSymbolName: "arrow.triangle.pull", accessibilityDescription: nil) {
@@ -168,7 +183,7 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
 
     @objc func togglePopover(_ sender: AnyObject) {
         if popover.isShown {
-            hidePopover(sender)
+            hidePopover(sender, restoringFocus: true)
         } else {
             showPopover(sender)
         }
@@ -176,12 +191,19 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
 
     func showPopover(_ sender: AnyObject) {
         guard let button = statusItem.button else { return }
+        let event = NSApp.currentEvent
+        openingFromKeyboard = event == nil || event?.type == .keyDown
+        previousApplication = NSWorkspace.shared.frontmostApplication
+        previousWindow = NSApp.keyWindow
+        previousResponder = previousWindow?.firstResponder
+        shouldRestoreFocus = false
 
         button.highlight(true)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .maxY)
     }
 
-    func hidePopover(_ sender: AnyObject) {
+    func hidePopover(_ sender: AnyObject, restoringFocus: Bool) {
+        shouldRestoreFocus = restoringFocus
         popover.performClose(sender)
         statusItem.button?.highlight(false)
     }
@@ -189,15 +211,34 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
     // MARK: - NSPopoverDelegate
 
     func popoverWillShow(_ notification: Notification) {
-        prManager?.enablePolling(true)
+        onWillShow()
         updatePopoverBehaviorForHoverDetail()
     }
 
     func popoverWillClose(_ notification: Notification) {
-        // Keep polling active in background for notifications
-        // prManager?.enablePolling(false)
+        onWillClose()
+        PRRowView.closeDetails()
         isHoverDetailPanelVisible = false
         updatePopoverBehaviorForHoverDetail()
         statusItem.button?.highlight(false)
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        defer {
+            shouldRestoreFocus = false
+            previousApplication = nil
+            previousWindow = nil
+            previousResponder = nil
+        }
+        guard shouldRestoreFocus else { return }
+        if let application = previousApplication, !application.isTerminated,
+           application.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+            application.activate(options: [])
+        } else if let window = previousWindow, window.isVisible {
+            window.makeKeyAndOrderFront(nil)
+            if let responder = previousResponder {
+                window.makeFirstResponder(responder)
+            }
+        }
     }
 }

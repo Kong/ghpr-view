@@ -37,7 +37,11 @@ final class NotificationManager: NSObject, ObservableObject {
     @Published private(set) var isAuthorized = false
     var openURL: (@MainActor (URL) -> Void)?
     /// Opens the native activity entry when the user activates a digest notification.
-    var openActivity: (@MainActor () -> Void)?
+    var openActivity: (@MainActor (String?) -> Void)?
+
+    static func activityBatchID(from userInfo: [AnyHashable: Any]) -> String? {
+        userInfo[digestBatchUserInfoKey] as? String
+    }
 
     private let notificationCenter: UNUserNotificationCenter?
     private var mutedPRIdentifiers: Set<String> = []
@@ -199,7 +203,7 @@ extension NotificationManager: UNUserNotificationCenterDelegate {
         case Self.openActivityActionIdentifier, UNNotificationDefaultActionIdentifier:
             if isDigest, let openActivity {
                 Task { @MainActor in
-                    openActivity()
+                    openActivity(Self.activityBatchID(from: userInfo))
                 }
             } else if let urlString = userInfo["pr_url"] as? String,
                       let url = URL(string: urlString) {

@@ -305,6 +305,83 @@ final class PRActivityModelsTests: XCTestCase {
     }
 
 
+    @MainActor
+    func testNotificationRoutingPreservesBatchAndCurrentHistoryStates() throws {
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let states: [PRActionState] = [.open, .handled, .snoozed, .recovered, .superseded]
+        let items = states.enumerated().map { index, state in
+            PRActionItem(id: "item-\(index)", prNodeID: "PR_1", reference: PullRequestReference(owner: "example", repo: "project", number: 1), reasons: [.authoredPRCIFailure], actionKinds: [.fixCI], eventIDs: ["event-\(index)"], revision: .empty, state: state, createdAt: date, stateUpdatedAt: date, snoozedUntil: state == .snoozed ? date.addingTimeInterval(3600) : nil, coveredEventIDs: [], evidenceURLs: [])
+        }
+        let selected = DigestBatch(id: "selected", createdAt: date, entries: [], coveredEventIDs: [], coveredActionItemIDs: items.map(\.id), omittedEntryCount: 0, deliveries: [])
+        var snapshot = PRActivitySnapshot.idle
+        snapshot.actionItems = items
+        snapshot.batches = [selected] + (0..<6).map { index in
+            DigestBatch(id: "new-\(index)", createdAt: date.addingTimeInterval(Double(index + 1)), entries: [], coveredEventIDs: [], coveredActionItemIDs: [], omittedEntryCount: 0, deliveries: [])
+        }
+        let before = snapshot
+        guard case .available(let batch, let resolved) = ActivityNavigation.resolve(batchID: selected.id, snapshot: snapshot) else {
+            return XCTFail("A selected batch outside the five recent deliveries must resolve")
+        }
+        XCTAssertEqual(batch, selected)
+        XCTAssertEqual(resolved.map(\.state), states)
+        XCTAssertEqual(snapshot, before, "Routing cannot reopen, dismiss, or otherwise mutate reminders")
+        guard case .none = ActivityNavigation.resolve(batchID: nil, snapshot: snapshot) else { return XCTFail("Ordinary entry has no notification context") }
+        guard case .missing(let missing) = ActivityNavigation.resolve(batchID: "expired", snapshot: snapshot) else { return XCTFail("Missing history needs an explanation") }
+        XCTAssertEqual(missing, "expired")
+        let navigation = ActivityNavigation(digestBatchID: selected.id)
+        let revision = navigation.requestRevision
+        navigation.digestBatchID = selected.id
+        XCTAssertEqual(navigation.requestRevision, revision + 1)
+        navigation.digestBatchID = selected.id
+        XCTAssertEqual(navigation.requestRevision, revision + 2, "Reopening the same notification is a fresh reveal request")
+        navigation.digestBatchID = nil
+        XCTAssertNil(navigation.digestBatchID)
+        XCTAssertEqual(navigation.requestRevision, revision + 3)
+        navigation.digestBatchID = nil
+        XCTAssertEqual(navigation.requestRevision, revision + 4)
+        let reminders = PRActivityEngine.reminders(from: items.filter { $0.isActionable(now: date) })
+        let openReminder = try XCTUnwrap(reminders.first)
+        XCTAssertEqual(ActivityNavigation.scrollTarget(batchID: selected.id, snapshot: snapshot, reminders: reminders), .reminder(id: openReminder.id))
+        XCTAssertEqual(ActivityNavigation.scrollTarget(batchID: "expired", snapshot: snapshot, reminders: reminders), .context)
+        XCTAssertNil(ActivityNavigation.scrollTarget(batchID: nil, snapshot: snapshot, reminders: reminders))
+        for state in states where state != .open {
+            var historical = snapshot
+            historical.actionItems = items.filter { $0.state == state }
+            let visible = PRActivityEngine.reminders(from: historical.actionItems.filter { $0.isActionable(now: date) })
+            XCTAssertTrue(visible.isEmpty)
+            XCTAssertEqual(ActivityNavigation.scrollTarget(batchID: selected.id, snapshot: historical, reminders: visible), .context, "A \(state) notification must reveal its historical context")
+        }
+        XCTAssertEqual(ActivityNavigation.scrollTarget(batchID: selected.id, snapshot: snapshot, reminders: []), .context, "A notification outside the currently visible groups still reveals its context")
+        XCTAssertEqual(NotificationManager.activityBatchID(from: ["digest_batch_id": selected.id]), selected.id)
+        XCTAssertNil(NotificationManager.activityBatchID(from: ["digestBatchID": selected.id]))
+        XCTAssertNil(NotificationManager.activityBatchID(from: ["digest_batch_id": 12]))
+    }
+
+    func testNativeDigestLimitsEntriesCountsRemainderAndOmitsPrivateContent() {
+        let entries = (1...5).map { number in
+            DigestEntry(prNodeID: "PR_\(number)", reference: PullRequestReference(owner: "example", repo: "project", number: number), title: "PRIVATE_TITLE_\(number)", reasons: [.authoredPRCIFailure], actionKinds: [.fixCI], changeKinds: [.ciCheckFailed], eventCount: 99, actionItemIDs: ["item-\(number)"], evidenceURLs: [])
+        }
+        var batch = DigestBatch(id: "batch", createdAt: Date(timeIntervalSince1970: 1_700_000_000), entries: entries, coveredEventIDs: [], coveredActionItemIDs: [], omittedEntryCount: 7, deliveries: [])
+        let body = PRActivityDigestFormatter.nativeBody(for: batch)
+        let lines = body.split(separator: "\n")
+        XCTAssertEqual(lines.count, 4)
+        for number in 1...3 { XCTAssertTrue(body.contains("example/project#\(number)")) }
+        for number in 4...5 { XCTAssertFalse(body.contains("example/project#\(number)")) }
+        XCTAssertTrue(lines.last?.contains("9") == true, "Two hidden entries plus seven omitted PRs")
+        XCTAssertFalse(body.contains("PRIVATE_TITLE"))
+        XCTAssertFalse(body.contains("99"), "Events are not PR counts")
+        XCTAssertEqual(PRActivityDigestFormatter.nativeTitle(for: batch), "5 PRs need attention (+7 more)")
+        let slack = PRActivityDigestFormatter.slackText(for: batch)
+        XCTAssertTrue(slack.hasPrefix("*5 PRs need attention*"), "Native overflow wording must not change the Slack protocol")
+        XCTAssertTrue(slack.contains("PRIVATE_TITLE_5"))
+        batch.entries = Array(entries.prefix(1))
+        batch.omittedEntryCount = 0
+        XCTAssertEqual(PRActivityDigestFormatter.nativeBody(for: batch).split(separator: "\n").count, 1)
+        XCTAssertEqual(PRActivityDigestFormatter.nativeTitle(for: batch), "1 PR needs attention")
+        batch.entries = []
+        XCTAssertTrue(PRActivityDigestFormatter.nativeBody(for: batch).isEmpty)
+    }
+
     // MARK: - Helpers
 
     private func makeEvent(prNodeID: String, id: String) -> PRActivityEvent {

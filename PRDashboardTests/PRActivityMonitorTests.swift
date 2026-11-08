@@ -1205,6 +1205,65 @@ final class PRActivityMonitorTests: XCTestCase {
 
     // MARK: - Store failure
 
+    func testFailedDismissRetainsReminderAndPublishesErrorUntilRetryCommits() async throws {
+        try await assertReminderWriteFailure(snooze: false)
+    }
+
+    func testFailedSnoozeRetainsReminderAndPublishesErrorUntilRetryCommits() async throws {
+        try await assertReminderWriteFailure(snooze: true)
+    }
+
+    private func assertReminderWriteFailure(snooze: Bool) async throws {
+        let channel = deliveredChannel()
+        let store = PRActivityStore(directoryURL: directory)
+        let (monitor, fake) = makeMonitor(store: store, channels: [channel])
+        await seedActionableItem(monitor, fake)
+        let before = try XCTUnwrap(monitor.snapshot.actionItems.first)
+        XCTAssertEqual(before.state, .open)
+        let savedDirectory = directory.appendingPathExtension("saved")
+        try FileManager.default.moveItem(at: directory, to: savedDirectory)
+        var restored = false
+        defer {
+            if !restored {
+                try? FileManager.default.removeItem(at: directory)
+                try? FileManager.default.moveItem(at: savedDirectory, to: directory)
+            }
+        }
+        try Data("blocked directory".utf8).write(to: directory)
+        now = now.addingTimeInterval(10)
+        let until = now.addingTimeInterval(3600)
+        if snooze {
+            monitor.snooze(itemIDs: [before.id], until: until)
+        } else {
+            monitor.markHandled(itemIDs: [before.id])
+        }
+        XCTAssertEqual(monitor.snapshot.actionItems.first, before)
+        XCTAssertEqual(monitor.currentStateForTesting()?.actionItems.first, before)
+        XCTAssertFalse(monitor.snapshot.errorMessage?.isEmpty ?? true)
+        XCTAssertTrue(channel.deliveredBatches.isEmpty)
+
+        try FileManager.default.removeItem(at: directory)
+        try FileManager.default.moveItem(at: savedDirectory, to: directory)
+        restored = true
+        now = now.addingTimeInterval(10)
+        if snooze {
+            monitor.snooze(itemIDs: [before.id], until: until)
+        } else {
+            monitor.markHandled(itemIDs: [before.id])
+        }
+        let committed = try XCTUnwrap(monitor.snapshot.actionItems.first)
+        XCTAssertEqual(committed.state, snooze ? .snoozed : .handled)
+        XCTAssertEqual(committed.stateUpdatedAt, now)
+        XCTAssertEqual(committed.snoozedUntil, snooze ? until : nil)
+        XCTAssertEqual(committed.coveredEventIDs, before.eventIDs)
+        XCTAssertEqual(Set(committed.coveredEventIDs).count, committed.coveredEventIDs.count)
+        XCTAssertEqual(monitor.snapshot.actionItems.count, 1)
+        XCTAssertNil(monitor.snapshot.errorMessage)
+        let account = try XCTUnwrap(monitor.snapshot.account)
+        XCTAssertEqual(try store.load(account: account)?.actionItems, [committed])
+        XCTAssertTrue(channel.deliveredBatches.isEmpty)
+    }
+
     func testFailedPersistDoesNotAdvanceCommittedObservation() async throws {
         let unwritableDirectory = URL(fileURLWithPath: "/dev/null/ghpr-activity")
         let brokenStore = PRActivityStore(directoryURL: unwritableDirectory)
