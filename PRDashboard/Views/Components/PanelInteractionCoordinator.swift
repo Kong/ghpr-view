@@ -61,6 +61,9 @@ final class PanelInteractionCoordinator: ObservableObject {
     @Published private(set) var commitRevision: UInt64 = 0
     @Published private(set) var displayedSearchText = ""
     @Published private(set) var displayedFacetPanel = false
+    /// Space the current window top leaves for the panel, capped at full height.
+    @Published private(set) var maximumContentHeight: CGFloat = PanelMetrics.expandedHeight
+    private var requestedContentSize = NSSize(width: PanelMetrics.width, height: PanelMetrics.height)
     private var pendingSearchText: String?
     private var pendingFacetPanel: Bool?
     private var latestLayoutSearchText = ""
@@ -91,6 +94,7 @@ final class PanelInteractionCoordinator: ObservableObject {
     private var keyObserver: NSObjectProtocol?
     private weak var window: NSWindow?
     private weak var focusView: NSView?
+    private weak var popover: NSPopover?
     private var keyboardPresentationPending = false
 
     var onRequestClose: (() -> Void)?
@@ -170,6 +174,55 @@ final class PanelInteractionCoordinator: ObservableObject {
         if let focusView { self.focusView = focusView }
         if window == nil { self.focusView = nil }
         if keyboardPresentationPending { focusFirstRow() }
+        updateMaximumContentHeight()
+        applyRequestedContentSize()
+    }
+
+    func bind(popover: NSPopover?) {
+        self.popover = popover
+        applyRequestedContentSize()
+    }
+
+    /// The panel keeps its top edge; only the space below it can vary.
+    func updateMaximumContentHeight() {
+        guard let window, window.isVisible, let screen = window.screen ?? NSScreen.main else { return }
+        let visible = screen.visibleFrame
+        let frame = window.frame
+        guard frame.height > 0, visible.height > 0, frame.maxY > visible.minY else { return }
+        let chrome = max(0, frame.height - (window.contentView?.bounds.height ?? frame.height))
+        let available = min(frame.maxY, visible.maxY) - visible.minY - chrome - 8
+        let budget = min(max(available, 0), PanelMetrics.expandedHeight)
+        guard abs(budget - maximumContentHeight) >= 0.5 else { return }
+        maximumContentHeight = budget
+    }
+
+    func resizePanel(to size: NSSize) {
+        guard size.width > 0, size.height > 0 else { return }
+        requestedContentSize = size
+        applyRequestedContentSize()
+    }
+
+    private func applyRequestedContentSize() {
+        let size = requestedContentSize
+        if let popover {
+            guard popover.isShown else { return }
+            let current = popover.contentSize
+            guard abs(current.width - size.width) >= 0.5 || abs(current.height - size.height) >= 0.5 else { return }
+            // The interpolated SwiftUI layout already eases this size; AppKit must
+            // not start a second animation for the same frame.
+            let animates = popover.animates
+            popover.animates = false
+            popover.contentSize = size
+            popover.animates = animates
+            return
+        }
+        // Only the explicit DEBUG component window owns its frame directly.
+        guard let window, window.isVisible else { return }
+        let contentRect = window.contentRect(forFrameRect: window.frame)
+        guard abs(contentRect.width - size.width) >= 0.5 || abs(contentRect.height - size.height) >= 0.5 else { return }
+        let frame = window.frameRect(forContentRect: NSRect(origin: contentRect.origin, size: size))
+        window.setFrame(NSRect(x: window.frame.minX, y: window.frame.maxY - frame.height, width: frame.width, height: frame.height),
+                        display: true, animate: false)
     }
 
     func receive(_ projection: PRPanelProjection, reason: PRPanelUpdateReason) {
@@ -272,6 +325,13 @@ final class PanelInteractionCoordinator: ObservableObject {
         pendingFacetPanel = presented
         pendingStructure = pendingStructure ?? displayedStructure
         requestCommit(reason: .userIntent)
+    }
+
+    /// Single entry point for the Filter control. The intent commits on the next
+    /// main turn, so the same press also completes its own pointer lock.
+    func toggleFacetPanel() {
+        updateFacetPanel(!latestLayoutFacetPanel)
+        endPointerInteractionAfterDispatch()
     }
 
     func setPointerInsideList(_ inside: Bool) {
@@ -521,6 +581,7 @@ final class PanelInteractionCoordinator: ObservableObject {
                     guard let self, self.isPresented else { return }
                     self.isWindowActive = true
                     self.installMonitors()
+                    self.updateMaximumContentHeight()
                 }
             }
         }
@@ -554,6 +615,13 @@ final class PanelInteractionCoordinator: ObservableObject {
                 self.setLiveScrolling(false)
             }
         })
+        // A budget that no longer matches the screen must follow the panel, not
+        // each resize, so animating the height cannot feed itself.
+        for name in [NSWindow.didChangeScreenNotification, NSApplication.didChangeScreenParametersNotification] {
+            observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.updateMaximumContentHeight() }
+            })
+        }
     }
 
     private func removeMonitors(keepingKeyObserver: Bool = false) {
@@ -639,6 +707,9 @@ final class PanelInteractionCoordinator: ObservableObject {
         let generation = pointerGeneration
         DispatchQueue.main.async { [weak self] in
             guard let self, self.pointerGeneration == generation else { return }
+            // A native borderless button may run its action without the local
+            // mouse-up monitor; only a released button may end this press.
+            guard NSEvent.pressedMouseButtons == 0 else { return }
             self.setInteraction(.pointer, active: false)
         }
     }
@@ -713,12 +784,18 @@ final class PanelInteractionCoordinator: ObservableObject {
 
 struct PanelWindowBinding: NSViewRepresentable {
     let interaction: PanelInteractionCoordinator
+    let contentSize: NSSize
     func makeNSView(context: Context) -> PanelFocusView {
         let view = PanelFocusView()
         view.interaction = interaction
+        view.requestedContentSize = contentSize
         return view
     }
-    func updateNSView(_ view: PanelFocusView, context: Context) { view.interaction = interaction }
+    func updateNSView(_ view: PanelFocusView, context: Context) {
+        view.interaction = interaction
+        view.requestedContentSize = contentSize
+        view.applyRequestedContentSize()
+    }
     static func dismantleNSView(_ view: PanelFocusView, coordinator: ()) {
         view.interaction?.setPresented(false)
         view.interaction?.bind(window: nil)
@@ -727,11 +804,18 @@ struct PanelWindowBinding: NSViewRepresentable {
 
 final class PanelFocusView: NSView {
     weak var interaction: PanelInteractionCoordinator?
+    /// The view can be built before it has a window; keep the size until then.
+    var requestedContentSize: NSSize = .zero
     override var acceptsFirstResponder: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         interaction?.bind(window: window, focusView: self)
+        applyRequestedContentSize()
+    }
+    func applyRequestedContentSize() {
+        guard window != nil, requestedContentSize.height > 0 else { return }
+        interaction?.resizePanel(to: requestedContentSize)
     }
 }
 struct PanelScrollViewBinding: NSViewRepresentable {

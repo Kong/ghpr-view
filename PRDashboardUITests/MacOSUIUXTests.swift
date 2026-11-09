@@ -5,10 +5,11 @@ import CoreGraphics
 final class MacOSUIUXTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
-    private func launch(count: Int = 20, appearance: String? = nil) -> XCUIApplication {
+    private func launch(count: Int = 20, appearance: String? = nil, reduceMotion: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing-uiux", "--uiux-count=\(count)"]
         if let appearance { app.launchArguments.append("--uiux-appearance=\(appearance)") }
+        if reduceMotion { app.launchArguments.append("--uiux-reduce-motion") }
         app.launch()
         XCTAssertTrue(app.windows["UIUX Fixtures"].waitForExistence(timeout: 8))
         return app
@@ -30,6 +31,24 @@ final class MacOSUIUXTests: XCTestCase {
         }
         let result = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: log)], timeout: 5)
         XCTAssertEqual(result, .completed, "Expected fixture intent: \(text)", file: file, line: line)
+    }
+
+    private func logText(_ app: XCUIApplication) -> String {
+        let log = element(app, "uiux-action-log")
+        return (log.value as? String) ?? log.label
+    }
+
+    private func occurrences(_ app: XCUIApplication, of text: String) -> Int {
+        logText(app).components(separatedBy: text).count - 1
+    }
+
+    /// Waits for the animated panel height to settle before frames are measured.
+    private func waitForHeight(_ element: XCUIElement, _ height: CGFloat,
+                               file: StaticString = #filePath, line: UInt = #line) {
+        let predicate = NSPredicate { _, _ in abs(element.frame.height - height) <= 2 }
+        let result = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: nil)], timeout: 5)
+        XCTAssertEqual(result, .completed, "Expected height \(height), measured \(element.frame.height)",
+                       file: file, line: line)
     }
 
 
@@ -238,6 +257,138 @@ final class MacOSUIUXTests: XCTestCase {
             $0.contains("openPR(") && !$0.contains("rejected")
         }
         XCTAssertTrue(successfulOpens.isEmpty, "A removed pressed slot cannot activate a neighboring PR; rejected intents are allowed")
+    }
+
+    func testFilterFirstClickRevealsContentAndPreservesListViewport() {
+        let app = launch(count: 20)
+        defer { app.terminate() }
+        open(app)
+        let panel = element(app, "uiux-panel")
+        let list = element(app, "panel-pr-list")
+        let filter = element(app, "panel-filter")
+        XCTAssertTrue(list.waitForExistence(timeout: 5))
+        waitForHeight(panel, 500)
+        XCTAssertEqual(panel.frame.width, 400, accuracy: 2)
+        XCTAssertEqual(filter.value as? String, "Collapsed")
+        XCTAssertFalse(element(app, "panel-facet-panel").exists)
+
+        let firstRow = element(app, "pr-row-1001")
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 5))
+        let footer = element(app, "panel-quota")
+        XCTAssertTrue(footer.waitForExistence(timeout: 5))
+        XCTAssertTrue(footer.isHittable, "The footer starts inside the popover")
+        let rowIDBefore = firstRow.identifier
+        let listHeightBefore = list.frame.height
+        let rowOffsetBefore = firstRow.frame.minY - list.frame.minY
+        let topBefore = panel.frame.minY
+        let footerBefore = footer.frame.minY
+
+        filter.click()
+        let facet = element(app, "panel-facet-panel")
+        XCTAssertTrue(facet.waitForExistence(timeout: 5), "One click alone must reveal the filter section")
+        let saveView = app.buttons["Save View"]
+        XCTAssertTrue(saveView.waitForExistence(timeout: 5), "The revealed section must be the real filter panel")
+        let clickable = NSPredicate { _, _ in saveView.isHittable }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: clickable, object: nil)], timeout: 5), .completed,
+                       "Revealed filters must accept clicks without a tab switch")
+        XCTAssertEqual(filter.value as? String, "Expanded")
+
+        waitForHeight(panel, 680)
+        XCTAssertEqual(list.frame.height, listHeightBefore, accuracy: 2, "Expanding must not shrink the list viewport")
+        XCTAssertEqual(firstRow.frame.minY - list.frame.minY, rowOffsetBefore, accuracy: 2,
+                       "The list must keep its scroll position")
+        XCTAssertEqual(panel.frame.minY, topBefore, accuracy: 2, "Only the bottom edge may move")
+        XCTAssertEqual(footer.frame.minY - footerBefore, 180, accuracy: 2, "The list moves down by the filter height")
+        XCTAssertTrue(footer.isHittable, "The host window must grow, or the footer would be clipped")
+        XCTAssertEqual(element(app, "pr-row-1001").identifier, rowIDBefore)
+        XCTAssertEqual(element(app, "panel-category-all").value as? String, "Selected")
+
+        filter.click()
+        XCTAssertTrue(facet.waitForNonExistence(timeout: 5), "The second click must remove the filter section")
+        XCTAssertEqual(filter.value as? String, "Collapsed")
+        waitForHeight(panel, 500)
+        XCTAssertEqual(list.frame.height, listHeightBefore, accuracy: 2)
+        XCTAssertEqual(firstRow.frame.minY - list.frame.minY, rowOffsetBefore, accuracy: 2)
+        XCTAssertEqual(footer.frame.minY, footerBefore, accuracy: 2)
+        XCTAssertEqual(panel.frame.minY, topBefore, accuracy: 2)
+
+        filter.click()
+        XCTAssertTrue(facet.waitForExistence(timeout: 5))
+        waitForHeight(panel, 680)
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(panel.waitForNonExistence(timeout: 5))
+        open(app)
+        XCTAssertTrue(element(app, "panel-facet-panel").waitForExistence(timeout: 5),
+                      "Reopening must keep the expanded filters without a tab switch")
+        XCTAssertEqual(element(app, "panel-filter").value as? String, "Expanded")
+        waitForHeight(element(app, "uiux-panel"), 680)
+    }
+
+    func testRefreshClickAndShortcutShowBusyStateAndRecover() {
+        let app = launch(count: 20)
+        defer { app.terminate() }
+        open(app)
+        let refresh = element(app, "panel-refresh")
+        XCTAssertTrue(refresh.waitForExistence(timeout: 5))
+        XCTAssertEqual(refresh.value as? String, "Ready")
+        XCTAssertTrue(refresh.isEnabled)
+        app.typeKey("f", modifierFlags: .command)
+        app.typeText("jira:DEMO-42")
+        XCTAssertTrue(element(app, "pr-row-1001").waitForExistence(timeout: 5))
+        let before = occurrences(app, of: "scenario Refresh")
+
+        refresh.click()
+        expectLog(app, "scenario Refresh")
+        XCTAssertEqual(occurrences(app, of: "scenario Refresh"), before + 1,
+                       "One click must produce exactly one refresh")
+        XCTAssertEqual(refresh.value as? String, "Refreshing")
+        XCTAssertFalse(refresh.isEnabled, "The control stays disabled while the request is busy")
+        XCTAssertEqual(element(app, "panel-search").value as? String, "jira:DEMO-42")
+        XCTAssertEqual(element(app, "panel-category-all").value as? String, "Selected")
+        XCTAssertTrue(element(app, "pr-row-1001").exists, "Refreshing keeps the rows that were already visible")
+
+        // First Escape clears the query, the next closes the panel.
+        app.typeKey(.escape, modifierFlags: [])
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(element(app, "uiux-panel").waitForNonExistence(timeout: 5))
+        app.windows["UIUX Fixtures"].buttons["uiux-scenario-Recover"].click()
+        open(app)
+        let reopened = element(app, "panel-refresh")
+        XCTAssertTrue(reopened.waitForExistence(timeout: 5))
+        let ready = NSPredicate { _, _ in (reopened.value as? String) == "Ready" }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: ready, object: nil)], timeout: 5), .completed,
+                       "Recovered data must re-enable the control")
+        XCTAssertTrue(reopened.isEnabled)
+
+        let afterRecover = occurrences(app, of: "scenario Refresh")
+        app.typeKey("r", modifierFlags: .command)
+        let shortcut = NSPredicate { _, _ in self.occurrences(app, of: "scenario Refresh") == afterRecover + 1 }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: shortcut, object: nil)], timeout: 5), .completed,
+                       "Cmd-R must produce exactly one refresh")
+    }
+
+    func testFilterAndRefreshRespectReducedMotion() {
+        let app = launch(count: 20, reduceMotion: true)
+        defer { app.terminate() }
+        open(app)
+        let panel = element(app, "uiux-panel")
+        let filter = element(app, "panel-filter")
+        waitForHeight(panel, 500)
+        XCTAssertEqual(filter.value as? String, "Collapsed")
+
+        filter.click()
+        let facet = element(app, "panel-facet-panel")
+        XCTAssertTrue(facet.waitForExistence(timeout: 5))
+        XCTAssertEqual(panel.frame.height, 680, accuracy: 2, "Reduced motion applies the final layout")
+
+        filter.click()
+        XCTAssertTrue(facet.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(panel.frame.height, 500, accuracy: 2)
+
+        element(app, "panel-refresh").click()
+        expectLog(app, "scenario Refresh")
+        XCTAssertEqual(element(app, "panel-refresh").value as? String, "Refreshing")
+        XCTAssertFalse(element(app, "panel-refresh").isEnabled)
     }
 
     private func selectSettingsPage(_ app: XCUIApplication, rawValue: String) {

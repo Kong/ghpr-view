@@ -103,8 +103,10 @@ struct FacetFilterPanel: View {
                 }
             }
         }
-        .frame(height: 180)
+        .frame(height: PanelMetrics.facetPanelHeight)
         .background(Color(nsColor: .controlBackgroundColor))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("panel-facet-panel")
         .sheet(item: $viewBeingRenamed) { view in
             VStack(alignment: .leading, spacing: 12) {
                 Text("Rename Saved View").font(.headline)
