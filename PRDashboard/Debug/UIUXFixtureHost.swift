@@ -57,6 +57,13 @@ final class UIUXFixtureHost {
                 NSApp.appearance = NSAppearance(named: appearance.hasSuffix("dark") ? .darkAqua : .aqua)
                 model.fixtureColorScheme = appearance.hasSuffix("dark") ? .dark : .light
             }
+            let motionFlags = arguments.filter { $0 == "--uiux-reduce-motion" }
+            guard motionFlags.count <= 1 else {
+                throw SmokeError(message: "Pass --uiux-reduce-motion at most once.")
+            }
+            // The flag can only force the isolated renderer; the system value is
+            // inherited otherwise.
+            model.forceReduceMotion = !motionFlags.isEmpty
             let count = try UIUXFixtures.count(arguments: arguments)
             model.setCount(count)
             model.interaction.onPointerDown = { [weak self] id in
@@ -90,14 +97,15 @@ final class UIUXFixtureHost {
         model.onOpenDigest = { [weak self] in self?.openDigest() }
         model.onCloseSettings = { [weak self] in self?.settingsWindow?.close() }
         model.onAuxiliaryRendered = { [weak self] token in self?.auxiliaryRendererAcknowledged(token) }
-        popover.contentSize = NSSize(width: 400, height: 500)
+        popover.contentSize = NSSize(width: PanelMetrics.width, height: PanelMetrics.height)
         popover.behavior = .transient
         let panelController = NSHostingController(rootView:
             UIUXFixturePanel(model: model, interaction: model.interaction).environment(\.allowsRemoteAvatars, false)
                 .preferredColorScheme(model.fixtureColorScheme)
         )
         if usesSmokeWindow {
-            let window = UIUXSmokeComponentWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 500),
+            let window = UIUXSmokeComponentWindow(contentRect: NSRect(x: 0, y: 0, width: PanelMetrics.width,
+                                                                     height: PanelMetrics.height),
                                                   styleMask: [.titled, .closable], backing: .buffered, defer: false)
             window.title = "UIUX Component Smoke — Window Host"
             window.isReleasedWhenClosed = false
@@ -112,6 +120,8 @@ final class UIUXFixtureHost {
         } else {
             popover.contentViewController = panelController
         }
+        // The smoke window owns its frame; the status-item path resizes the popover.
+        model.interaction.bind(popover: usesSmokeWindow ? nil : popover)
         if smokeDirectory != nil && !usesSmokeWindow {
             smokeDidShowObserver = NotificationCenter.default.addObserver(
                 forName: NSPopover.didShowNotification, object: popover, queue: .main
@@ -704,7 +714,7 @@ private final class UIUXFixtureModel: ObservableObject {
     }
     var snapshot: PRPanelSnapshot
     var searchText = "" { didSet { rebuildProjection(reason: .userIntent) } }
-    var isFacetPanelPresented = false { didSet { publish() } }
+    var forceReduceMotion = false { didSet { publish() } }
     var parameterError: String? { didSet { publish() } }
     private(set) var log: [String] = []
     private(set) var count = 20
@@ -1215,11 +1225,11 @@ private struct UIUXFixturePanel: View {
     @ObservedObject var interaction: PanelInteractionCoordinator
     var body: some View {
         if let error = model.parameterError {
-            Text(error).padding().frame(width: 400, height: 500)
+            Text(error).padding().frame(width: PanelMetrics.width, height: PanelMetrics.height)
         } else {
             PRPanelView(snapshot: model.snapshot, actions: model.actions, searchText: $model.searchText,
-                        isFacetPanelPresented: $model.isFacetPanelPresented,
                         interaction: model.interaction, onboardingManager: nil)
+                .environment(\.panelReduceMotionOverride, model.forceReduceMotion ? true : nil)
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("uiux-panel")
                 .onAppear { model.rendererDidUpdate(geometry: interaction.geometry) }

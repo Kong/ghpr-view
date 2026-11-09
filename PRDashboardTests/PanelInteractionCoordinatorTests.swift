@@ -210,6 +210,42 @@ final class PanelInteractionCoordinatorTests: XCTestCase {
         XCTAssertEqual(ids(coordinator), [2])
     }
 
+    func testFacetToggleCommitsAfterItsOwnPressWithoutChangingRows() async {
+        let coordinator = PanelInteractionCoordinator()
+        coordinator.receive(snapshot: snapshot([pr(1)]))
+        coordinator.setPresented(true)
+        coordinator.beginPointerInteraction(at: .zero)
+        coordinator.toggleFacetPanel()
+        XCTAssertFalse(coordinator.displayedFacetPanel, "The filter section must wait for the press to finish")
+        await nextMainTurn()
+        XCTAssertFalse(coordinator.locks.contains(.pointer))
+        XCTAssertTrue(coordinator.displayedFacetPanel, "One click must reveal the filter section with no other input")
+        XCTAssertEqual(ids(coordinator), [1], "Revealing filters must not change rows")
+        coordinator.toggleFacetPanel()
+        await nextMainTurn()
+        XCTAssertFalse(coordinator.displayedFacetPanel)
+        coordinator.setPresented(false)
+    }
+
+    func testFilterGrowthPreservesBaseHeightAndCapsAtScreenBudget() {
+        let cases: [(budget: CGFloat, expected: [CGFloat])] = [
+            (800, [500, 590, 680]),
+            (600, [500, 550, 600]),
+            (450, [450, 450, 450])
+        ]
+        for testCase in cases {
+            let heights: [CGFloat] = [0, 90, 180].map {
+                PanelMetrics.contentHeight(facetHeight: CGFloat($0), maximumHeight: testCase.budget)
+            }
+            XCTAssertEqual(heights, testCase.expected, "Screen budget \(testCase.budget)")
+        }
+        // A short screen keeps the full filter section; the list is what compresses.
+        XCTAssertEqual(PanelMetrics.facetPanelHeight, 180)
+        XCTAssertEqual(PanelMetrics.contentHeight(facetHeight: 180, maximumHeight: 450),
+                       PanelMetrics.contentHeight(facetHeight: 0, maximumHeight: 450),
+                       "Growth must stop at the screen budget instead of clipping the filters")
+    }
+
     func testLiveGestureMomentumAndPhaseLessWheelHaveIndependentLifetimes() async {
         let coordinator = PanelInteractionCoordinator()
         coordinator.receive(snapshot: snapshot([pr(1)]))

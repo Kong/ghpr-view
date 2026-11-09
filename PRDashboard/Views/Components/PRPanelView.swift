@@ -5,13 +5,13 @@ struct PRPanelView: View {
     let snapshot: PRPanelSnapshot
     let actions: PRPanelActions
     @Binding var searchText: String
-    @Binding var isFacetPanelPresented: Bool
     @ObservedObject var interaction: PanelInteractionCoordinator
     var onboardingManager: OnboardingManager? = nil
     var searchFocusRequest: UInt64 = 0
     var onSearchCompositionChanged: (Bool) -> Void = { _ in }
     var onSearchEscape: (() -> Void)? = nil
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.panelReduceMotionOverride) private var reduceMotionOverride
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Namespace private var categoryNamespace
@@ -23,6 +23,9 @@ struct PRPanelView: View {
     @State private var firstVisibleReviewStatusPRID: Int?
     @State private var showSaveViewSheet = false
     @State private var savedViewName = ""
+    @State private var refreshRotation: Double = 0
+    @State private var refreshFeedbackIsActive = false
+    @State private var refreshFeedbackTask: Task<Void, Never>?
     // AppKit/SwiftUI focus binding mirrors the coordinator's authoritative target.
     @FocusState private var nativeControlFocus: PanelFocusTarget?
 
@@ -32,39 +35,19 @@ struct PRPanelView: View {
     private var searchSuggestions: [PRSearchScope.Suggestion] {
         PRSearchScope.suggestions(for: interaction.displayedSearchText)
     }
+    private var reduceMotion: Bool { reduceMotionOverride ?? systemReduceMotion }
+    private var isRefreshing: Bool { snapshot.prList.isLoading }
+
     var body: some View {
-        VStack(spacing: 0) {
-            let snapshot = layoutSnapshot
-            Group {
-                // Header
-                headerView
-                if interaction.displayedFacetPanel {
-                    FacetFilterPanel(facetOptions: snapshot.facetOptions, activeFacetSelections: snapshot.activeFacetSelections, savedViews: snapshot.savedViews, actions: actions) { showSaveViewSheet = true }
-                }
-                Divider()
-
-                if snapshot.prList.isLoading && !snapshot.prList.hasUsableData {
-                    // Loading state
-                    loadingView
-                } else if !snapshot.prList.hasUsableData, let error = snapshot.prList.error {
-                    // Error state
-                    errorView(error)
-                } else if !snapshot.prList.hasUsableData {
-                    // Empty state
-                    emptyView
-                } else {
-                    // PR list
-                    prListView
-                }
-
-
-                Divider()
-
-                // Footer
-                footerView
-            }
-        }
-        .frame(width: PanelMetrics.width, height: PanelMetrics.height)
+        // Disclosure follows the committed coordinator value, so the transition
+        // matches the commit rather than the button press.
+        AnimatedPanelLayout(
+            facetHeight: interaction.displayedFacetPanel ? PanelMetrics.facetPanelHeight : 0,
+            maximumHeight: interaction.maximumContentHeight,
+            interaction: interaction,
+            content: panelContent
+        )
+        .animation(PanelMotion.facetDisclosure(reduceMotion: reduceMotion), value: interaction.displayedFacetPanel)
         .background(Color(nsColor: .controlBackgroundColor))
         .overlay {
             if contrast == .increased {
@@ -73,7 +56,6 @@ struct PRPanelView: View {
         }
         .coordinateSpace(name: HoverTooltipCoordinateSpace.name)
         .coordinateSpace(name: "panel-layout")
-        .background(PanelWindowBinding(interaction: interaction))
         .onPreferenceChange(PanelGeometryPreferenceKey.self) { interaction.recordGeometrySamples($0) }
         .environment(\.hoverTooltipPresenter, tooltipPresenter)
         .environment(\.panelGeometryInteraction, interaction)
@@ -101,13 +83,11 @@ struct PRPanelView: View {
         .onAppear {
             configureInteraction()
             interaction.updateSearchText(searchText)
-            interaction.updateFacetPanel(isFacetPanelPresented)
             interaction.receive(snapshot: snapshot, reason: .userIntent)
             syncOnboardingState()
         }
         .onChange(of: snapshot.presentationRevision) { _ in interaction.receive(snapshot: snapshot) }
         .onChange(of: searchText) { interaction.updateSearchText($0) }
-        .onChange(of: isFacetPanelPresented) { interaction.updateFacetPanel($0) }
         .onChange(of: interaction.focusTarget) { target in
             switch target {
             case .section, .refresh: nativeControlFocus = target
@@ -125,12 +105,16 @@ struct PRPanelView: View {
                 hoveredCategory = nil
                 pressedCategory = nil
                 showSyncDetails = false
+                resetRefreshFeedback()
             }
         }
         .onChange(of: interaction.isWindowActive) { active in
             if !active { tooltipPresenter.dismissAll() }
         }
-        .onDisappear { tooltipPresenter.dismissAll() }
+        .onDisappear {
+            tooltipPresenter.dismissAll()
+            resetRefreshFeedback()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .panelFocusedDetailsDidClose)) { note in
             interaction.restoreRowFocus(origin: note.userInfo?["originRowID"] as? PRPanelRowID, in: note.object as? NSWindow)
         }
@@ -160,6 +144,52 @@ struct PRPanelView: View {
         }
         .onPreferenceChange(FirstReviewStatusBadgeIDPreferenceKey.self) { firstVisibleReviewStatusPRID = $0 }
     }
+
+    private func panelContent(facetHeight: CGFloat) -> some View {
+        let snapshot = layoutSnapshot
+        return VStack(spacing: 0) {
+            headerView
+            facetSection(facetHeight: facetHeight)
+            Divider()
+
+            if snapshot.prList.isLoading && !snapshot.prList.hasUsableData {
+                loadingView
+            } else if !snapshot.prList.hasUsableData, let error = snapshot.prList.error {
+                errorView(error)
+            } else if !snapshot.prList.hasUsableData {
+                emptyView
+            } else {
+                prListView
+            }
+
+            Divider()
+            footerView
+        }
+    }
+
+    /// The filter section keeps its intrinsic height and is revealed by the
+    /// interpolated container, which is what pushes the list down.
+    private func facetSection(facetHeight: CGFloat) -> some View {
+        let snapshot = layoutSnapshot
+        let progress = min(max(facetHeight / PanelMetrics.facetPanelHeight, 0), 1)
+        return VStack(spacing: 0) {
+            if facetHeight > 0 {
+                FacetFilterPanel(
+                    facetOptions: snapshot.facetOptions,
+                    activeFacetSelections: snapshot.activeFacetSelections,
+                    savedViews: snapshot.savedViews,
+                    actions: actions
+                ) { showSaveViewSheet = true }
+            }
+        }
+        .frame(height: facetHeight, alignment: .top)
+        .clipped()
+        .opacity(Double(progress))
+        .offset(y: -6 * (1 - progress))
+        .allowsHitTesting(interaction.displayedFacetPanel)
+        .accessibilityHidden(!interaction.displayedFacetPanel)
+    }
+
     // MARK: - Header
 
     private var headerView: some View {
@@ -179,31 +209,33 @@ struct PRPanelView: View {
                 .frame(height: PanelMetrics.toolSize)
 
                 Button {
-                    isFacetPanelPresented.toggle()
-                    interaction.updateFacetPanel(isFacetPanelPresented)
+                    interaction.toggleFacetPanel()
                 } label: {
                     Image(systemName: "line.3.horizontal.decrease")
                         .font(.system(size: PanelMetrics.symbolSize))
                         .frame(minWidth: PanelMetrics.toolSize, minHeight: PanelMetrics.toolSize)
                 }
-                .foregroundStyle(isFacetPanelPresented ? Color.accentColor : Color.primary)
+                .foregroundStyle(interaction.displayedFacetPanel ? Color.accentColor : Color.primary)
                 .panelToolButton()
-                .help(isFacetPanelPresented ? "Close Filters" : "Filter")
+                .help(interaction.displayedFacetPanel ? "Close Filters" : "Filter")
                 .accessibilityLabel("Filter")
-                .accessibilityValue(isFacetPanelPresented ? "Expanded" : "Collapsed")
+                .accessibilityValue(interaction.displayedFacetPanel ? "Expanded" : "Collapsed")
                 .accessibilityIdentifier("panel-filter")
                 .panelOnboardingAnchor(onboardingManager, step: .filter)
 
-                Button(action: actions.refresh) {
+                Button(action: triggerRefresh) {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: PanelMetrics.symbolSize))
+                        .rotationEffect(.degrees(refreshRotation))
                         .frame(minWidth: PanelMetrics.toolSize, minHeight: PanelMetrics.toolSize)
                 }
+                .foregroundStyle(isRefreshing || refreshFeedbackIsActive ? Color.accentColor : Color.primary)
                 .panelToolButton()
                 .keyboardShortcut("r", modifiers: .command)
-                .disabled(snapshot.prList.isLoading)
+                .disabled(isRefreshing)
                 .help("Refresh")
                 .accessibilityLabel("Refresh")
+                .accessibilityValue(isRefreshing ? "Refreshing" : "Ready")
                 .accessibilityIdentifier("panel-refresh")
                 .focused($nativeControlFocus, equals: .refresh)
             }
@@ -373,6 +405,7 @@ struct PRPanelView: View {
                 .background(PanelScrollViewBinding(interaction: interaction))
             }
             .panelGeometry(.list)
+            .accessibilityIdentifier("panel-pr-list")
             .onHover { interaction.setPointerInsideList($0) }
             .onChange(of: interaction.commitRevision) { _ in
                 DispatchQueue.main.async {
@@ -453,14 +486,48 @@ struct PRPanelView: View {
     }
 
     private func configureInteraction() {
-        interaction.onRefresh = {
-            guard interaction.latestSnapshot?.prList.isLoading != true else { return }
-            actions.refresh()
-        }
+        // The coordinator's key routing and the button share one trigger.
+        interaction.onRefresh = { triggerRefresh() }
         interaction.onOpenSettings = actions.openSettings
         interaction.onOpenRow = { actions.rowActions($0).onOpen() }
         interaction.searchIsEmpty = { searchText.isEmpty }
         interaction.onClearSearch = { updateQuery("") }
+    }
+
+    /// Reports that a refresh was triggered. Real busy state still comes from
+    /// the snapshot, so the feedback cannot fake network progress.
+    private func triggerRefresh() {
+        // Read per command: a value captured at first appearance would keep the
+        // shortcut blocked after the initial load finished.
+        let busy = interaction.latestSnapshot?.prList.isLoading ?? snapshot.prList.isLoading
+        guard !busy else { return }
+        startRefreshFeedback()
+        actions.refresh()
+        interaction.endPointerInteractionAfterDispatch()
+    }
+
+    private func startRefreshFeedback() {
+        refreshFeedbackTask?.cancel()
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.35)) {
+            if !reduceMotion { refreshRotation += 360 }
+            refreshFeedbackIsActive = true
+        }
+        refreshFeedbackTask = Task { @MainActor in
+            do { try await Task.sleep(nanoseconds: 350_000_000) } catch { return }
+            guard !Task.isCancelled else { return }
+            withAnimation(PanelMotion.feedback(reduceMotion: reduceMotion)) { refreshFeedbackIsActive = false }
+        }
+    }
+
+    private func resetRefreshFeedback() {
+        refreshFeedbackTask?.cancel()
+        refreshFeedbackTask = nil
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            refreshFeedbackIsActive = false
+            refreshRotation = 0
+        }
     }
 
     private func updateQuery(_ query: String) {
@@ -896,6 +963,30 @@ struct PRPanelView: View {
         if snapshot.prList.hasUsableData {
             onboardingManager?.startIfNeeded()
         }
+    }
+}
+
+/// Drives the filter disclosure and the host window height from one interpolated
+/// value, so SwiftUI content and the AppKit host can never disagree mid-animation.
+private struct AnimatedPanelLayout<Content: View>: View, Animatable {
+    var facetHeight: CGFloat
+    let maximumHeight: CGFloat
+    let interaction: PanelInteractionCoordinator
+    let content: (CGFloat) -> Content
+
+    var animatableData: CGFloat {
+        get { facetHeight }
+        set { facetHeight = newValue }
+    }
+
+    var body: some View {
+        let height = PanelMetrics.contentHeight(facetHeight: facetHeight, maximumHeight: maximumHeight)
+        content(facetHeight)
+            .frame(width: PanelMetrics.width, height: height, alignment: .top)
+            .background(PanelWindowBinding(
+                interaction: interaction,
+                contentSize: NSSize(width: PanelMetrics.width, height: height)
+            ))
     }
 }
 

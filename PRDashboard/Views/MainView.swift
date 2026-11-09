@@ -24,7 +24,6 @@ struct MainView: View {
                             submitUserIntent()
                         }
                     ),
-                    isFacetPanelPresented: $viewModel.isFacetPanelPresented,
                     interaction: interaction,
                     onboardingManager: onboardingManager
                 )

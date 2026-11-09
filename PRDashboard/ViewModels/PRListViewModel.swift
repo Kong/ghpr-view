@@ -276,7 +276,6 @@ final class PRListViewModel: ObservableObject {
     @Published var searchText: String = "" { didSet { invalidatePresentation() } }
     @Published private(set) var activeFacetSelections: [FacetFieldID: Set<String>] = [:] { didSet { invalidatePresentation() } }
     @Published private(set) var savedViews: [SavedView] { didSet { invalidateSnapshot() } }
-    @Published var isFacetPanelPresented = false
     @Published private(set) var authState: AuthState = .empty
     @Published private(set) var pinnedPRIdentifiers: Set<String> = [] { didSet { invalidatePresentation() } }
     @Published private(set) var deviceCode: DeviceCodeInfo?

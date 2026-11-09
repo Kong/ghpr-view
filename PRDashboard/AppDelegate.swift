@@ -195,9 +195,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 7. Create popover
         let popover = NSPopover()
-        popover.contentSize = NSSize(width: 400, height: 500)
+        popover.contentSize = NSSize(width: PanelMetrics.width, height: PanelMetrics.height)
         popover.behavior = .transient
         popover.contentViewController = NSHostingController(rootView: mainView)
+        // The panel grows downward inside whatever the window top leaves.
+        panelInteraction.bind(popover: popover)
 
         // 8. Create status bar controller
         statusBarController = StatusBarController(
