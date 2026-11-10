@@ -2370,6 +2370,15 @@ final class UpdateLogicTests: XCTestCase {
         XCTAssertNil(decoded?.detail.mentionCount)
     }
 
+    func testDiskCachesUseAPerProcessDirectoryUnderXCTest() {
+        let directory = AppCacheDirectory.directory
+        XCTAssertTrue(
+            directory.lastPathComponent.contains("\(ProcessInfo.processInfo.processIdentifier)"),
+            "Parallel test runners must not share com.prdashboard JSON caches"
+        )
+        XCTAssertFalse(directory.lastPathComponent == "com.prdashboard")
+    }
+
     @MainActor
     func testLoadCachedDataPreservesLegacyMentionedRowsAndProjectsDirectTrackingEntries() {
         PRCache.shared.clear()

@@ -1,6 +1,26 @@
 import Foundation
 import os
 
+/// On-disk cache root for PR JSON files.
+///
+/// Parallel `xcodebuild` clones share the user caches directory. Unit-test hosts
+/// therefore get a directory named with their process id so one runner cannot
+/// overwrite `pr_cache.json` while another is loading it.
+enum AppCacheDirectory {
+    static let directory: URL = {
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        let name: String
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            name = "com.prdashboard-xctest-\(ProcessInfo.processInfo.processIdentifier)"
+        } else {
+            name = "com.prdashboard"
+        }
+        let directory = caches.appendingPathComponent(name, isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }()
+}
+
 class PRCache {
     static let shared = PRCache()
 
@@ -8,10 +28,7 @@ class PRCache {
     private let cacheURL: URL
 
     private init() {
-        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("com.prdashboard", isDirectory: true)
-        try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
-        cacheURL = cacheDir.appendingPathComponent("pr_cache.json")
+        cacheURL = AppCacheDirectory.directory.appendingPathComponent("pr_cache.json")
     }
 
     func save(_ prList: PRList) {
@@ -57,10 +74,7 @@ final class DirectMentionTrackingCache {
     private var needsPersistenceRetry = false
 
     private init() {
-        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("com.prdashboard", isDirectory: true)
-        try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
-        cacheURL = cacheDir.appendingPathComponent("direct_mention_tracking_cache.json")
+        cacheURL = AppCacheDirectory.directory.appendingPathComponent("direct_mention_tracking_cache.json")
     }
 
     func load() -> [Int: DirectMentionTrackingEntry] {
@@ -176,10 +190,7 @@ final class AuthoredMentionReferenceCache {
     private var lastPersistedEntries: [String: AuthoredMentionReferenceCacheEntry] = [:]
 
     private init() {
-        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("com.prdashboard", isDirectory: true)
-        try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
-        cacheURL = cacheDir.appendingPathComponent("authored_mention_reference_cache.json")
+        cacheURL = AppCacheDirectory.directory.appendingPathComponent("authored_mention_reference_cache.json")
     }
 
     func entry(for username: String) -> AuthoredMentionReferenceCacheEntry? {
@@ -439,10 +450,7 @@ final class PRDetailCache {
     private var lastPersistedEntries: [Int: CachedPRDetail] = [:]
 
     private init() {
-        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("com.prdashboard", isDirectory: true)
-        try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
-        cacheURL = cacheDir.appendingPathComponent("pr_detail_cache.json")
+        cacheURL = AppCacheDirectory.directory.appendingPathComponent("pr_detail_cache.json")
     }
 
     func loadEntries() -> [Int: CachedPRDetail] {
