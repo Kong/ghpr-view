@@ -10,8 +10,7 @@ class AvatarCache {
     private let memoryCache = NSCache<NSString, NSImage>()
 
     private init() {
-        cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("com.prdashboard/avatars", isDirectory: true)
+        cacheDir = AppCacheDirectory.directory.appendingPathComponent("avatars", isDirectory: true)
         try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
     }
 
