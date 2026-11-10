@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 
 // A role is part of display identity; pin/repository placement is not.
-enum PRSectionID: Hashable, CaseIterable {
+enum PRSectionID: String, CaseIterable {
     case authored, reviewRequests, mentioned, directMentions, mergedToday
 
     var title: LocalizedStringKey {
@@ -14,6 +14,16 @@ enum PRSectionID: Hashable, CaseIterable {
         case .mergedToday: return "Merged Today"
         }
     }
+}
+
+/// How a category names the role sections above its rows.
+enum PRSectionHeaderStyle: Equatable {
+    /// All keeps one collapsible header per role section.
+    case collapsible
+    /// Mentions keeps fixed labels that separate roles without hiding rows.
+    case fixed
+    /// My PRs and Reviews are named by the selected tab itself.
+    case hidden
 }
 
 enum PRPanelCategory: String, CaseIterable, Identifiable {
@@ -36,6 +46,15 @@ enum PRPanelCategory: String, CaseIterable, Identifiable {
         case .myPRs: return [.authored]
         case .reviews: return [.reviewRequests]
         case .mentions: return [.mentioned, .directMentions]
+        }
+    }
+
+    /// Only All owns per-section disclosure; scoped tabs always show their rows.
+    var sectionHeaderStyle: PRSectionHeaderStyle {
+        switch self {
+        case .all: return .collapsible
+        case .mentions: return .fixed
+        case .myPRs, .reviews: return .hidden
         }
     }
 }

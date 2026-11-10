@@ -39,8 +39,6 @@ final class PanelInteractionCoordinator: ObservableObject {
     @Published private(set) var isPresented = false
     @Published private(set) var isWindowActive = false
     @Published private(set) var selectedCategory: PRPanelCategory = .all
-    @Published private(set) var categoryRevealRevision: UInt64 = 0
-    @Published private(set) var categoryRevealTarget: PanelFocusTarget?
     @Published var selectedRowID: PRPanelRowID?
     @Published private(set) var expandedSections = Set(PRSectionID.allCases)
     private(set) var locks: Set<InteractionLock> = []
@@ -58,6 +56,15 @@ final class PanelInteractionCoordinator: ObservableObject {
     private(set) var scrollAnchorOffset: CGFloat = 0
     private(set) var pendingAnchorRestoration: PanelFocusTarget?
     private weak var scrollView: NSScrollView?
+    private var savedScrollOffset: [PRPanelCategory: CGPoint] = [:]
+    private var savedScrollVersion: [PRPanelCategory: Date] = [:]
+    /// A restore that could not be applied yet (scroll view not bound, or the offset was
+    /// clamped by the outgoing content height). Held until it lands or the category changes,
+    /// so a late bind still restores instead of silently dropping the intent.
+    private var pendingScrollRestore: (category: PRPanelCategory, offset: CGPoint, version: Date?)?
+    /// Version of the list currently on screen, supplied by the view layer so a remembered
+    /// offset can be invalidated by a successful refresh.
+    var currentListVersion: Date?
     @Published private(set) var commitRevision: UInt64 = 0
     @Published private(set) var displayedSearchText = ""
     @Published private(set) var displayedFacetPanel = false
@@ -133,6 +140,9 @@ final class PanelInteractionCoordinator: ObservableObject {
             protectedFacts.removeAll()
             protectedActivityReminderCount = nil
             pendingAnchorRestoration = nil
+            pendingScrollRestore = nil
+            savedScrollOffset.removeAll()
+            savedScrollVersion.removeAll()
             pendingKeyboardReveal = false
             menuCapture = PanelMenuCapture()
             removedRowFallbacks.removeAll()
@@ -257,7 +267,7 @@ final class PanelInteractionCoordinator: ObservableObject {
         guard !pointerInsideList || pendingUserIntent || !isPresented else { return }
         let previous = visibleRows(in: displayedStructure)
         let expanded = pendingExpandedSections ?? expandedSections
-        let nextRows = selectedCategory.sections.filter { expanded.contains($0) }
+        let nextRows = visibleSections(in: selectedCategory, storedExpansion: expanded)
             .flatMap { next.displayedRowIDs(for: $0) }
         for (id, target) in removedRowFallbacks {
             if case let .row(targetID) = target, !nextRows.contains(targetID) {
@@ -358,7 +368,17 @@ final class PanelInteractionCoordinator: ObservableObject {
     }
 
     func recordGeometry(_ frames: [PanelGeometryID: CGRect]) {
+        let previousOrigin = currentScrollOffset()
+        applyPendingScrollRestore()
         var frames = frames
+        if let previousOrigin, let currentOrigin = currentScrollOffset() {
+            for (id, frame) in frames where id.isScrollContent {
+                frames[id] = frame.offsetBy(
+                    dx: previousOrigin.x - currentOrigin.x,
+                    dy: previousOrigin.y - currentOrigin.y
+                )
+            }
+        }
         geometry = frames
         if let displacement = scrollDisplacement(in: frames) {
             guard abs(displacement) <= 0.5 || scrollView != nil else { return }
@@ -376,7 +396,7 @@ final class PanelInteractionCoordinator: ObservableObject {
             }
         }
         guard pendingAnchorRestoration == nil else { return }
-        guard locks.isEmpty, let viewport = frames[.list] else { return }
+        guard locks.isEmpty || locks == [.scroll], let viewport = frames[.list] else { return }
         var first: (id: PRPanelRowID, minY: CGFloat)?
         for (key, rect) in frames {
             guard case let .row(id) = key, rect.intersects(viewport), rect.maxY > viewport.minY else { continue }
@@ -386,12 +406,103 @@ final class PanelInteractionCoordinator: ObservableObject {
         if let first, scrollAnchor != .row(first.id) { scrollAnchor = .row(first.id) }
         if let first { scrollAnchorOffset = first.minY - viewport.minY }
     }
+    /// Current top-left origin of the scrolled content, in scroll-view coordinates.
+    func currentScrollOffset() -> CGPoint? {
+        scrollView?.contentView.bounds.origin
+    }
+
+    /// Move the scrolled content back to a remembered origin without animation.
+    /// Applies a scroll origin and reports whether it actually landed there. Returns false when
+    /// no scroll view is bound yet *or* when the request was clamped — an offset beyond the
+    /// current content height (the outgoing list's height, before the new one lays out) is
+    /// silently reduced by `scroll(to:)`, so the caller must be able to tell and retry.
+    @discardableResult
+    func setScrollOffset(_ point: CGPoint) -> Bool {
+        guard let scrollView, let contentView = scrollView.contentView as NSClipView? else { return false }
+        contentView.scroll(to: point)
+        scrollView.reflectScrolledClipView(contentView)
+        let applied = contentView.bounds.origin
+        return abs(applied.x - point.x) <= 0.5 && abs(applied.y - point.y) <= 0.5
+    }
+
+    /// Ask for a restore on behalf of `category`. Kept as a pending intent when it cannot be
+    /// applied yet; dropped if another category is selected before it lands.
+    func requestScrollRestore(_ offset: CGPoint, for category: PRPanelCategory, listVersion: Date?) {
+        guard category == selectedCategory else { return }
+        // Do not apply here: the new list has not laid out yet, and an early attempt can be
+        // clamped by the outgoing content height and then be treated as consumed.
+        pendingScrollRestore = (category, offset, listVersion)
+    }
+
+    @discardableResult
+    private func applyPendingScrollRestore() -> Bool {
+        guard let pending = pendingScrollRestore else { return false }
+        guard pending.category == selectedCategory else { pendingScrollRestore = nil; return false }
+        let previousOrigin = currentScrollOffset()
+        defer {
+            if let previousOrigin, let currentOrigin = currentScrollOffset() {
+                if pendingScrollRestore == nil || previousOrigin != currentOrigin {
+                    pendingAnchorRestoration = nil
+                    scrollAnchor = nil
+                }
+                for (id, frame) in geometry where id.isScrollContent {
+                    geometry[id] = frame.offsetBy(
+                        dx: previousOrigin.x - currentOrigin.x,
+                        dy: previousOrigin.y - currentOrigin.y
+                    )
+                }
+            }
+        }
+        guard isPresented || pending.version == currentListVersion else {
+            // The list changed under the intent, so the switch must end at the top. Queue that
+            // as an intent too: clearing it and scrolling now would lose the top when the
+            // scroll view is not bound yet.
+            pendingScrollRestore = (pending.category, .zero, currentListVersion)
+            if setScrollOffset(.zero) { pendingScrollRestore = nil }
+            return false
+        }
+        if setScrollOffset(pending.offset) {
+            pendingScrollRestore = nil
+            return true
+        }
+        return false
+    }
+
+    /// Called when leaving a category so its position can be restored on return.
+    func rememberScrollOffset(for category: PRPanelCategory, listVersion: Date?) {
+        guard let offset = currentScrollOffset() else { return }
+        savedScrollOffset[category] = offset
+        savedScrollVersion[category] = listVersion
+    }
+
+    /// A position worth restoring, or nil when the list changed since it was taken.
+    func restorableScrollOffset(for category: PRPanelCategory, listVersion: Date?) -> CGPoint? {
+        guard let saved = savedScrollOffset[category] else { return nil }
+        if isPresented { return saved }
+        guard let savedVersion = savedScrollVersion[category],
+              let version = listVersion,
+              savedVersion == version else { return nil }
+        return saved
+    }
     func bind(scrollView: NSScrollView?) {
+        guard self.scrollView !== scrollView else { return }
         self.scrollView = scrollView
+        applyPendingScrollRestore()
+
         if scrollView != nil, pendingAnchorRestoration != nil { recordGeometry(geometry) }
     }
 
     /// A positive displacement scrolls only the amount by which the anchor moved.
+    /// True when the row is fully inside the current viewport, so a reveal can be skipped
+    /// instead of re-aligning a row that is already on screen.
+    func isVisible(_ id: PRPanelRowID) -> Bool {
+        // Both rects must be in the same space: row frames and `.list` come from panel-layout,
+        // whereas contentView.bounds is in document coordinates (it moves with the scroll), so
+        // comparing the two directly was wrong once the list was scrolled.
+        guard let list = geometry[.list], let frame = geometry[.row(id)] else { return false }
+        return frame.minY >= list.minY && frame.maxY <= list.maxY
+    }
+
     func consumeScrollDisplacement(in frames: [PanelGeometryID: CGRect]) -> CGFloat? {
         guard let displacement = scrollDisplacement(in: frames) else { return nil }
         pendingAnchorRestoration = nil
@@ -413,6 +524,10 @@ final class PanelInteractionCoordinator: ObservableObject {
 
     func selectCategory(_ category: PRPanelCategory) {
         guard selectedCategory != category else { return }
+        // Capture the outgoing category's resting position while its content is still on screen;
+        // reading it after the swap would already belong to the incoming list.
+        rememberScrollOffset(for: selectedCategory, listVersion: currentListVersion)
+        pendingScrollRestore = nil
         selectedCategory = category
         let nextRows = visibleRows(in: displayedStructure)
         if let selectedRowID, !nextRows.contains(selectedRowID) {
@@ -426,19 +541,22 @@ final class PanelInteractionCoordinator: ObservableObject {
         let targetSection = sections.first { displayedStructure?.displayedRowIDs(for: $0).isEmpty == false }
             ?? sections.first
         if let targetSection {
-            let target = PanelFocusTarget.section(targetSection)
-            categoryRevealTarget = target
-            scrollAnchor = target
+            scrollAnchor = .section(targetSection)
         } else {
-            categoryRevealTarget = nil
             scrollAnchor = nil
         }
         removedRowFallbacks.removeAll()
         pendingAnchorRestoration = nil
-        categoryRevealRevision &+= 1
+        // A plain category switch must not scroll on its own: the view hands a restore intent
+        // to requestScrollRestore (or top) for this category. Keyboard and search reveals travel
+        // on keyboardRevealRevision and are unaffected.
         commitRevision &+= 1
     }
+    /// Single entry point for a section header. Only All stores expansion, and
+    /// the intent commits on the next main turn so the same press also
+    /// completes the pointer lock it created.
     func toggleSection(_ section: PRSectionID) {
+        guard selectedCategory == .all else { return }
         var expanded = desiredExpandedSections
         if expanded.remove(section) == nil {
             expanded.insert(section)
@@ -447,10 +565,17 @@ final class PanelInteractionCoordinator: ObservableObject {
             focusTarget = .section(section)
             focusList()
         }
+        // The clicked header is the reading position: keep it under the pointer
+        // instead of falling back to the next row when its rows come and go.
+        if let header = geometry[.section(section)], let viewport = geometry[.list] {
+            scrollAnchorOffset = header.minY - viewport.minY
+        }
+        scrollAnchor = .section(section)
         desiredExpandedSections = expanded
         pendingExpandedSections = expanded
         pendingStructure = pendingStructure ?? displayedStructure
         requestCommit(reason: .userIntent)
+        endPointerInteractionAfterDispatch()
     }
 
     func rowActions(for id: PRPanelRowID, factory: (Int) -> PRRowActions) -> PRRowActions {
@@ -503,6 +628,7 @@ final class PanelInteractionCoordinator: ObservableObject {
         pendingKeyboardReveal = false
         // Explicit navigation supersedes preserving the old reading position.
         pendingAnchorRestoration = nil
+        pendingScrollRestore = nil
         keyboardRevealTarget = focusTarget
         keyboardRevealRevision &+= 1
     }
@@ -533,9 +659,22 @@ final class PanelInteractionCoordinator: ObservableObject {
         focusList()
     }
 
+    /// Only All stores per-section disclosure; scoped tabs always show every
+    /// section they own, whatever All remembers.
+    func isSectionExpanded(_ section: PRSectionID) -> Bool {
+        selectedCategory != .all || expandedSections.contains(section)
+    }
+
+    private func visibleSections(
+        in category: PRPanelCategory,
+        storedExpansion: Set<PRSectionID>
+    ) -> [PRSectionID] {
+        category == .all ? category.sections.filter(storedExpansion.contains) : category.sections
+    }
+
     private func visibleRows(in projection: PRPanelProjection?) -> [PRPanelRowID] {
         guard let projection else { return [] }
-        return selectedCategory.sections.filter { expandedSections.contains($0) }
+        return visibleSections(in: selectedCategory, storedExpansion: expandedSections)
             .flatMap { projection.displayedRowIDs(for: $0) }
     }
 
@@ -715,11 +854,19 @@ final class PanelInteractionCoordinator: ObservableObject {
     }
 
     func setLiveScrolling(_ active: Bool) {
+        if active {
+            pendingScrollRestore = nil
+            pendingAnchorRestoration = nil
+            scrollAnchor = nil
+        }
         liveScrolling = active
         updateScrollLock()
     }
 
     func receiveScroll(phase: NSEvent.Phase, momentumPhase: NSEvent.Phase) {
+        pendingScrollRestore = nil
+        pendingAnchorRestoration = nil
+        scrollAnchor = nil
         wheelGeneration &+= 1
         let generation = wheelGeneration
         setInteraction(.scroll, active: true)

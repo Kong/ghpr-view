@@ -227,6 +227,118 @@ final class PanelInteractionCoordinatorTests: XCTestCase {
         coordinator.setPresented(false)
     }
 
+    func testSectionHeaderClickCompletesItsOwnPressBeforeCollapsingAll() async {
+        let coordinator = PanelInteractionCoordinator()
+        coordinator.receive(snapshot: snapshot([pr(1), pr(2, category: .reviewRequest)]))
+        coordinator.setPresented(true)
+        XCTAssertTrue(coordinator.isSectionExpanded(.authored))
+        coordinator.recordGeometry([
+            .list: CGRect(x: 0, y: 0, width: 400, height: 500),
+            .section(.authored): CGRect(x: 0, y: 24, width: 400, height: 30)
+        ])
+
+        coordinator.beginPointerInteraction(at: .zero)
+        coordinator.toggleSection(.authored)
+        XCTAssertTrue(coordinator.locks.contains(.pointer), "The header click owns the press until it ends")
+        XCTAssertEqual(coordinator.scrollAnchor, .section(.authored),
+                       "The clicked header is the reading position, not the next row")
+        XCTAssertEqual(coordinator.scrollAnchorOffset, 24, accuracy: 0.5,
+                       "Its measured viewport offset is what the collapse restores")
+        XCTAssertTrue(coordinator.expandedSections.contains(.authored), "The collapse must wait for the press to finish")
+        await nextMainTurn()
+        XCTAssertFalse(coordinator.locks.contains(.pointer))
+        XCTAssertFalse(coordinator.expandedSections.contains(.authored))
+        XCTAssertFalse(coordinator.isSectionExpanded(.authored))
+
+        coordinator.moveSelection(1)
+        XCTAssertEqual(coordinator.selectedRowID?.section, .reviewRequests,
+                       "Keyboard navigation skips a collapsed All section")
+        coordinator.setPresented(false)
+    }
+
+    func testAllCollapseSurvivesScopedTabsAndScopedCommits() async {
+        let coordinator = PanelInteractionCoordinator()
+        coordinator.receive(snapshot: snapshot([pr(1), pr(2, category: .reviewRequest)]))
+        coordinator.setPresented(true)
+        coordinator.toggleSection(.authored)
+        coordinator.toggleSection(.reviewRequests)
+        await nextMainTurn()
+        XCTAssertEqual(coordinator.expandedSections,
+                       Set(PRSectionID.allCases).subtracting([.authored, .reviewRequests]))
+
+        coordinator.selectCategory(.myPRs)
+        coordinator.moveSelection(1)
+        XCTAssertEqual(coordinator.selectedRowID, rowID(1),
+                       "My PRs rows stay selectable while All remembers a collapse")
+
+        // A commit inside the tab must keep its rows visible and leave All's set alone.
+        coordinator.receive(snapshot: snapshot([pr(1), pr(5), pr(2, category: .reviewRequest)]), reason: .userIntent)
+        XCTAssertFalse(coordinator.expandedSections.contains(.authored))
+        XCTAssertTrue(coordinator.isSectionExpanded(.authored))
+        coordinator.moveSelection(-1)
+        XCTAssertEqual(coordinator.selectedRowID?.section, .authored)
+
+        coordinator.selectCategory(.reviews)
+        coordinator.moveSelection(1)
+        XCTAssertEqual(coordinator.selectedRowID, PRPanelRowID(section: .reviewRequests, prID: 2))
+        coordinator.toggleSection(.reviewRequests)
+        XCTAssertFalse(coordinator.expandedSections.contains(.reviewRequests),
+                       "Scoped tabs cannot toggle All's stored expansion")
+        XCTAssertTrue(coordinator.isSectionExpanded(.reviewRequests))
+        XCTAssertFalse(coordinator.locks.contains(.pointer), "A rejected toggle must not leave a press behind")
+
+        coordinator.selectCategory(.all)
+        XCTAssertFalse(coordinator.isSectionExpanded(.authored), "Returning to All keeps the collapsed section")
+        XCTAssertFalse(coordinator.isSectionExpanded(.reviewRequests))
+        coordinator.moveSelection(1)
+        XCTAssertNil(coordinator.selectedRowID, "A fully collapsed All has no keyboard rows")
+        coordinator.setPresented(false)
+    }
+
+    func testMentionsKeepsBothFixedSectionsWhileAllRemembersCollapse() async {
+        let coordinator = PanelInteractionCoordinator()
+        coordinator.receive(snapshot: snapshot([pr(1)], mentions: [pr(3)], directMentions: [pr(4)]))
+        coordinator.setPresented(true)
+        coordinator.toggleSection(.mentioned)
+        coordinator.toggleSection(.directMentions)
+        await nextMainTurn()
+        XCTAssertFalse(coordinator.expandedSections.contains(.mentioned))
+        XCTAssertFalse(coordinator.expandedSections.contains(.directMentions))
+
+        coordinator.selectCategory(.mentions)
+        XCTAssertTrue(coordinator.isSectionExpanded(.mentioned))
+        XCTAssertTrue(coordinator.isSectionExpanded(.directMentions))
+        coordinator.moveSelection(1)
+        XCTAssertEqual(coordinator.selectedRowID, PRPanelRowID(section: .mentioned, prID: 3))
+        coordinator.moveSelection(1)
+        XCTAssertEqual(coordinator.selectedRowID, PRPanelRowID(section: .directMentions, prID: 4),
+                       "Navigation crosses both distinct mention sections")
+
+        coordinator.toggleSection(.mentioned)
+        XCTAssertFalse(coordinator.expandedSections.contains(.mentioned),
+                       "Fixed mention headings never rewrite All's expansion")
+        coordinator.selectCategory(.all)
+        XCTAssertFalse(coordinator.isSectionExpanded(.mentioned))
+        XCTAssertFalse(coordinator.isSectionExpanded(.directMentions))
+        coordinator.setPresented(false)
+    }
+
+    func testSectionToggleReleasesOnlyItsPointerPress() async {
+        let coordinator = PanelInteractionCoordinator()
+        coordinator.receive(snapshot: snapshot([pr(1)]))
+        coordinator.setPresented(true)
+        coordinator.beginPointerInteraction(at: .zero)
+        coordinator.setInteraction(.menu, active: true)
+        coordinator.toggleSection(.authored)
+        await nextMainTurn()
+        XCTAssertFalse(coordinator.locks.contains(.pointer), "The press must not outlive the header action")
+        XCTAssertTrue(coordinator.locks.contains(.menu), "Other interaction locks must stay")
+        XCTAssertTrue(coordinator.expandedSections.contains(.authored), "A remaining lock still defers the collapse")
+        coordinator.setInteraction(.menu, active: false)
+        XCTAssertFalse(coordinator.expandedSections.contains(.authored))
+        coordinator.setPresented(false)
+    }
+
     func testFilterGrowthPreservesBaseHeightAndCapsAtScreenBudget() {
         let cases: [(budget: CGFloat, expected: [CGFloat])] = [
             (800, [500, 590, 680]),
@@ -695,6 +807,316 @@ final class PanelInteractionCoordinatorTests: XCTestCase {
         coordinator.setInteraction(.pointer, active: false)
     }
 
+    func testCategoryRestoreSurvivesDelayedNativeBinding() {
+        let coordinator = PanelInteractionCoordinator()
+        coordinator.currentListVersion = now
+        coordinator.requestScrollRestore(CGPoint(x: 0, y: 420), for: .all, listVersion: now)
+        coordinator.recordGeometry([:])
+        let scroll = restorationScrollView()
+        coordinator.bind(scrollView: scroll)
+        XCTAssertEqual(scroll.contentView.bounds.minY, 420, accuracy: 0.5)
+    }
+
+    func testRepeatedNativeBindingDoesNotConsumePendingCategoryRestore() {
+        let coordinator = PanelInteractionCoordinator()
+        coordinator.currentListVersion = now
+        let scroll = restorationScrollView()
+        coordinator.bind(scrollView: scroll)
+        scroll.contentView.scroll(to: CGPoint(x: 0, y: 610))
+        coordinator.requestScrollRestore(.zero, for: .all, listVersion: now)
+        coordinator.bind(scrollView: scroll)
+        XCTAssertEqual(scroll.contentView.bounds.minY, 610, accuracy: 0.5)
+        coordinator.recordGeometry([:])
+        XCTAssertEqual(scroll.contentView.bounds.minY, 0, accuracy: 0.5)
+    }
+
+    func testLeavingListAfterManualScrollKeepsLatestVisibleRowDuringDeferredRefresh() {
+        let coordinator = PanelInteractionCoordinator()
+        let requests = [pr(1), pr(2, age: 10)]
+        coordinator.receive(snapshot: snapshot(requests))
+        coordinator.setPresented(true)
+        defer { coordinator.setPresented(false) }
+        let scroll = restorationScrollView()
+        coordinator.bind(scrollView: scroll)
+        let viewport = CGRect(x: 0, y: 40, width: 400, height: 300)
+        coordinator.recordGeometry([
+            .list: viewport,
+            .row(rowID(1)): CGRect(x: 8, y: 40, width: 384, height: 90),
+            .row(rowID(2)): CGRect(x: 8, y: 740, width: 384, height: 90)
+        ])
+        coordinator.setPointerInsideList(true)
+        coordinator.setLiveScrolling(true)
+        scroll.contentView.scroll(to: CGPoint(x: 0, y: 700))
+        let scrolledFrames: [PanelGeometryID: CGRect] = [
+            .list: viewport,
+            .row(rowID(1)): CGRect(x: 8, y: -660, width: 384, height: 90),
+            .row(rowID(2)): CGRect(x: 8, y: 40, width: 384, height: 90)
+        ]
+        coordinator.recordGeometry(scrolledFrames)
+        coordinator.receive(snapshot: snapshot(requests))
+        coordinator.setLiveScrolling(false)
+        coordinator.setPointerInsideList(false)
+        coordinator.recordGeometry(scrolledFrames)
+        XCTAssertEqual(scroll.contentView.bounds.minY, 700, accuracy: 0.5)
+        XCTAssertEqual(coordinator.scrollAnchor, .row(rowID(2)))
+    }
+
+    func testHostedPanelKeepsManualScrollWhenPointerLeavesList() async throws {
+        let coordinator = PanelInteractionCoordinator()
+        let panelSnapshot = snapshot((1...25).map { pr($0, age: TimeInterval($0)) })
+        let actions = PRPanelActions(
+            refresh: {}, openActivity: {}, openSettings: {},
+            rowActions: { _ in PRRowActions(onOpen: {}, onOpenJira: { _ in }, onCopyURL: {}) },
+            toggleFacet: { _, _ in }, clearFacetField: { _ in }, clearAllFacets: {},
+            selectLabelSuggestion: { _ in }, saveCurrentView: { _ in nil },
+            applySavedView: { _ in }, renameSavedView: { _, _ in }, deleteSavedView: { _ in },
+            dismissActionError: {}
+        )
+        let host = NSHostingView(rootView: PRPanelView(
+            snapshot: panelSnapshot, actions: actions, searchText: .constant(""), interaction: coordinator
+        ))
+        let window = NSWindow(contentRect: CGRect(x: -10000, y: -10000, width: 400, height: 700),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        coordinator.setPresented(true)
+        func detachBindings(in view: NSView) {
+            if let focus = view as? PanelFocusView { focus.interaction = nil }
+            if let probe = view as? PanelScrollProbe { probe.interaction = nil }
+            for child in view.subviews { detachBindings(in: child) }
+        }
+        defer {
+            coordinator.setPresented(false)
+            detachBindings(in: host)
+            window.contentView = nil
+            window.close()
+        }
+        for _ in 0..<10 {
+            host.layoutSubtreeIfNeeded()
+            await nextMainTurn()
+        }
+        coordinator.setPointerInsideList(true)
+        coordinator.setLiveScrolling(true)
+        XCTAssertTrue(coordinator.setScrollOffset(CGPoint(x: 0, y: 700)))
+        for _ in 0..<10 {
+            host.layoutSubtreeIfNeeded()
+            await nextMainTurn()
+        }
+        coordinator.receive(snapshot: panelSnapshot)
+        coordinator.setLiveScrolling(false)
+        coordinator.setPointerInsideList(false)
+        coordinator.objectWillChange.send()
+        for _ in 0..<10 {
+            host.layoutSubtreeIfNeeded()
+            await nextMainTurn()
+        }
+        let origin = try XCTUnwrap(coordinator.currentScrollOffset())
+        XCTAssertEqual(origin.y, 700, accuracy: 0.5)
+    }
+
+    func testManualScrollDiscardsOldReadingAnchorBeforeFreshGeometryArrives() {
+        for pointerHeld in [false, true] {
+            let coordinator = PanelInteractionCoordinator()
+            let requests = [pr(1), pr(2, age: 10)]
+            coordinator.receive(snapshot: snapshot(requests))
+            coordinator.setPresented(true)
+            let scroll = restorationScrollView()
+            coordinator.bind(scrollView: scroll)
+            let viewport = CGRect(x: 0, y: 40, width: 400, height: 300)
+            coordinator.recordGeometry([
+                .list: viewport,
+                .row(rowID(1)): CGRect(x: 8, y: 40, width: 384, height: 90)
+            ])
+            coordinator.setPointerInsideList(true)
+            if pointerHeld { coordinator.setInteraction(.pointer, active: true) }
+            coordinator.setLiveScrolling(true)
+            scroll.contentView.scroll(to: CGPoint(x: 0, y: 700))
+            coordinator.receive(snapshot: snapshot(requests))
+            coordinator.setLiveScrolling(false)
+            if pointerHeld { coordinator.setInteraction(.pointer, active: false) }
+            coordinator.setPointerInsideList(false)
+            coordinator.recordGeometry([
+                .list: viewport,
+                .row(rowID(1)): CGRect(x: 8, y: -660, width: 384, height: 90),
+                .row(rowID(2)): CGRect(x: 8, y: 40, width: 384, height: 90)
+            ])
+            XCTAssertEqual(scroll.contentView.bounds.minY, 700, accuracy: 0.5)
+            XCTAssertEqual(coordinator.scrollAnchor, .row(rowID(2)))
+            coordinator.setPresented(false)
+        }
+    }
+
+    func testOpenPanelRetainsCategoryPositionAcrossRefresh() {
+        let coordinator = PanelInteractionCoordinator()
+        coordinator.setPresented(true)
+        defer { coordinator.setPresented(false) }
+        coordinator.currentListVersion = now
+        let scroll = restorationScrollView()
+        coordinator.bind(scrollView: scroll)
+        scroll.contentView.scroll(to: CGPoint(x: 0, y: 610))
+        coordinator.selectCategory(.reviews)
+        coordinator.currentListVersion = now.addingTimeInterval(1)
+        XCTAssertEqual(
+            coordinator.restorableScrollOffset(for: .all, listVersion: coordinator.currentListVersion)?.y,
+            610
+        )
+        coordinator.selectCategory(.all)
+        coordinator.requestScrollRestore(CGPoint(x: 0, y: 610), for: .all, listVersion: now)
+        coordinator.recordGeometry([:])
+        XCTAssertEqual(scroll.contentView.bounds.minY, 610, accuracy: 0.5)
+    }
+
+    func testClosingPanelDiscardsPendingCategoryRestore() {
+        let coordinator = PanelInteractionCoordinator()
+        coordinator.setPresented(true)
+        coordinator.currentListVersion = now
+        coordinator.requestScrollRestore(CGPoint(x: 0, y: 610), for: .all, listVersion: now)
+        coordinator.setPresented(false)
+        coordinator.setPresented(true)
+        defer { coordinator.setPresented(false) }
+        let scroll = restorationScrollView()
+        scroll.contentView.scroll(to: CGPoint(x: 0, y: 180))
+        coordinator.bind(scrollView: scroll)
+        XCTAssertEqual(scroll.contentView.bounds.minY, 180, accuracy: 0.5)
+    }
+
+    func testManualScrollingSupersedesPendingCategoryRestore() {
+        for liveScroll in [false, true] {
+            let coordinator = PanelInteractionCoordinator()
+            coordinator.currentListVersion = now
+            let scroll = restorationScrollView()
+            coordinator.bind(scrollView: scroll)
+            coordinator.requestScrollRestore(.zero, for: .all, listVersion: now)
+            if liveScroll {
+                coordinator.setLiveScrolling(true)
+            } else {
+                coordinator.receiveScroll(phase: .began, momentumPhase: [])
+            }
+            scroll.contentView.scroll(to: CGPoint(x: 0, y: 610))
+            coordinator.bind(scrollView: scroll)
+            coordinator.recordGeometry([:])
+            XCTAssertEqual(scroll.contentView.bounds.minY, 610, accuracy: 0.5)
+        }
+    }
+
+    func testRapidCategorySwitchDiscardsOutgoingRestore() {
+        let coordinator = PanelInteractionCoordinator()
+        coordinator.currentListVersion = now
+        coordinator.selectCategory(.reviews)
+        coordinator.requestScrollRestore(CGPoint(x: 0, y: 700), for: .reviews, listVersion: now)
+        coordinator.selectCategory(.all)
+        coordinator.requestScrollRestore(CGPoint(x: 0, y: 240), for: .all, listVersion: now)
+        coordinator.requestScrollRestore(CGPoint(x: 0, y: 900), for: .reviews, listVersion: now)
+        let scroll = restorationScrollView()
+        coordinator.bind(scrollView: scroll)
+        XCTAssertEqual(scroll.contentView.bounds.minY, 240, accuracy: 0.5)
+        coordinator.recordGeometry([:])
+        XCTAssertEqual(scroll.contentView.bounds.minY, 240, accuracy: 0.5)
+    }
+
+    func testRefreshWhileUnboundRetainsTopIntentUntilBinding() {
+        let coordinator = PanelInteractionCoordinator()
+        coordinator.currentListVersion = now
+        coordinator.requestScrollRestore(CGPoint(x: 0, y: 420), for: .all, listVersion: now)
+        coordinator.currentListVersion = now.addingTimeInterval(1)
+        coordinator.recordGeometry([:])
+        let scroll = restorationScrollView()
+        scroll.contentView.scroll(to: CGPoint(x: 0, y: 180))
+        coordinator.bind(scrollView: scroll)
+        XCTAssertEqual(scroll.contentView.bounds.minY, 0, accuracy: 0.5)
+    }
+
+    func testKeyboardSelectionSupersedesUnboundCategoryRestore() {
+        let coordinator = PanelInteractionCoordinator()
+        coordinator.receive(snapshot: snapshot([pr(1), pr(2, age: 10)]))
+        coordinator.currentListVersion = now
+        coordinator.requestScrollRestore(CGPoint(x: 0, y: 700), for: .all, listVersion: now)
+        coordinator.moveSelection(1)
+        XCTAssertNotNil(coordinator.keyboardRevealTarget)
+        let scroll = restorationScrollView()
+        scroll.contentView.scroll(to: CGPoint(x: 0, y: 180))
+        coordinator.bind(scrollView: scroll)
+        coordinator.recordGeometry([:])
+        XCTAssertEqual(scroll.contentView.bounds.minY, 180, accuracy: 0.5)
+    }
+
+    func testClampedRestoreRetriesAfterDocumentLayoutGrows() {
+        let coordinator = PanelInteractionCoordinator()
+        coordinator.currentListVersion = now
+        let scroll = restorationScrollView(height: 400)
+        let document = scroll.documentView
+        scroll.contentView = ConstrainedRestorationClipView(frame: scroll.contentView.frame)
+        scroll.documentView = document
+        coordinator.bind(scrollView: scroll)
+        coordinator.requestScrollRestore(CGPoint(x: 0, y: 700), for: .all, listVersion: now)
+        coordinator.recordGeometry([:])
+        XCTAssertLessThan(scroll.contentView.bounds.minY, 700)
+        scroll.documentView?.setFrameSize(NSSize(width: 400, height: 2000))
+        coordinator.recordGeometry([:])
+        XCTAssertEqual(scroll.contentView.bounds.minY, 700, accuracy: 0.5)
+    }
+
+    func testSuccessfulCategoryRestoreIsConsumedOnlyOnce() {
+        let coordinator = PanelInteractionCoordinator()
+        coordinator.currentListVersion = now
+        let scroll = restorationScrollView()
+        coordinator.bind(scrollView: scroll)
+        coordinator.requestScrollRestore(CGPoint(x: 0, y: 420), for: .all, listVersion: now)
+        coordinator.recordGeometry([:])
+        XCTAssertEqual(scroll.contentView.bounds.minY, 420, accuracy: 0.5)
+        scroll.contentView.scroll(to: CGPoint(x: 0, y: 610))
+        coordinator.recordGeometry([:])
+        coordinator.bind(scrollView: scroll)
+        XCTAssertEqual(scroll.contentView.bounds.minY, 610, accuracy: 0.5)
+    }
+
+    func testKeyboardVisibilityUsesPanelViewportAfterNativeScrolling() {
+        let coordinator = PanelInteractionCoordinator()
+        let scroll = restorationScrollView()
+        scroll.contentView.scroll(to: CGPoint(x: 0, y: 500))
+        coordinator.bind(scrollView: scroll)
+        coordinator.recordGeometry([
+            .list: CGRect(x: 0, y: 40, width: 400, height: 300),
+            .row(rowID(1)): CGRect(x: 8, y: 60, width: 384, height: 90),
+            .row(rowID(2)): CGRect(x: 8, y: 310, width: 384, height: 90)
+        ])
+        XCTAssertTrue(coordinator.isVisible(rowID(1)))
+        XCTAssertFalse(coordinator.isVisible(rowID(2)))
+    }
+
+    func testCategoryRestoreDoesNotCapturePreRestoreGeometryAsReadingAnchor() {
+        let coordinator = PanelInteractionCoordinator()
+        let requests = [pr(1), pr(2, age: 10)]
+        coordinator.receive(snapshot: snapshot(requests))
+        coordinator.currentListVersion = now
+        let scroll = restorationScrollView()
+        coordinator.bind(scrollView: scroll)
+        let viewport = CGRect(x: 0, y: 40, width: 400, height: 300)
+        let oldFrames: [PanelGeometryID: CGRect] = [
+            .list: viewport,
+            .row(rowID(1)): CGRect(x: 8, y: 40, width: 384, height: 90),
+            .row(rowID(2)): CGRect(x: 8, y: 740, width: 384, height: 90)
+        ]
+        coordinator.recordGeometry(oldFrames)
+        coordinator.requestScrollRestore(CGPoint(x: 0, y: 700), for: .all, listVersion: now)
+        coordinator.recordGeometry(oldFrames)
+        XCTAssertEqual(scroll.contentView.bounds.minY, 700, accuracy: 0.5)
+        coordinator.receive(snapshot: snapshot(requests))
+        coordinator.recordGeometry([
+            .list: viewport,
+            .row(rowID(1)): CGRect(x: 8, y: -660, width: 384, height: 90),
+            .row(rowID(2)): CGRect(x: 8, y: 40, width: 384, height: 90)
+        ])
+        XCTAssertEqual(scroll.contentView.bounds.minY, 700, accuracy: 0.5)
+    }
+
+    private func restorationScrollView(height: CGFloat = 2000) -> NSScrollView {
+        let scroll = NSScrollView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        scroll.documentView = NSView(frame: CGRect(x: 0, y: 0, width: 400, height: height))
+        return scroll
+    }
+
     private func nextMainTurn() async {
         await withCheckedContinuation { continuation in
             DispatchQueue.main.async { continuation.resume() }
@@ -739,6 +1161,14 @@ final class PanelInteractionCoordinatorTests: XCTestCase {
             myLastReviewState: nil, myLastReviewAt: nil, reviewRequestedAt: nil, myThreadsAllResolved: false,
             approvalCount: 0, changesRequestedCount: 0, ciExtendedInfo: nil
         )
+    }
+}
+
+private final class ConstrainedRestorationClipView: NSClipView {
+    override func scroll(to newOrigin: NSPoint) {
+        var proposedBounds = bounds
+        proposedBounds.origin = newOrigin
+        super.scroll(to: constrainBoundsRect(proposedBounds).origin)
     }
 }
 @MainActor

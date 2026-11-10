@@ -306,9 +306,7 @@ final class UIUXFixtureHost {
         guard let displayed = model.interaction.displayedSnapshot,
               model.renderedRevision == displayed.presentationRevision else { return false }
         if stage < 3, displayed.presentationRevision != model.snapshot.presentationRevision { return false }
-        let ids = PRSectionID.allCases.flatMap { section in
-            displayed.projection.displayedRowIDs(for: section).map { "\(section):\($0.prID)" }
-        }
+        guard let ids = model.committedRowIDs else { return false }
         guard model.renderedRowIDs == ids else { return false }
         return ids.isEmpty ? model.renderedGeometryRowIDs.isEmpty
             : !model.renderedGeometryRowIDs.isDisjoint(with: Set(ids))
@@ -698,19 +696,23 @@ private final class UIUXFixtureModel: ObservableObject {
     func rendererDidUpdate(geometry: [PanelGeometryID: CGRect]) {
         guard let displayed = interaction.displayedSnapshot else { return }
         renderedRevision = displayed.presentationRevision
-        renderedRowIDs = PRSectionID.allCases.flatMap { section in
-            displayed.projection.displayedRowIDs(for: section).map { "\(section):\($0.prID)" }
-        }
+        renderedRowIDs = rowIDs(in: displayed.projection)
         renderedGeometryRowIDs = Set(geometry.compactMap { key, _ in
             guard case let .row(id) = key else { return nil }
             return "\(id.section):\(id.prID)"
         })
         onRendererUpdated?()
     }
-    var projectionRowIDs: [String] {
-        PRSectionID.allCases.flatMap { section in
-            snapshot.projection.displayedRowIDs(for: section).map { "\(section):\($0.prID)" }
-        }
+    var projectionRowIDs: [String] { rowIDs(in: snapshot.projection) }
+    /// Rows the renderer should report for the committed snapshot, following
+    /// the selected tab and its effective expansion rather than the full projection.
+    var committedRowIDs: [String]? {
+        interaction.displayedSnapshot.map { rowIDs(in: $0.projection) }
+    }
+    private func rowIDs(in projection: PRPanelProjection) -> [String] {
+        interaction.selectedCategory.sections
+            .filter { interaction.isSectionExpanded($0) }
+            .flatMap { projection.displayedRowIDs(for: $0).map { "\($0.section):\($0.prID)" } }
     }
     var snapshot: PRPanelSnapshot
     var searchText = "" { didSet { rebuildProjection(reason: .userIntent) } }

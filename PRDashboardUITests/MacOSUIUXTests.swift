@@ -88,7 +88,11 @@ final class MacOSUIUXTests: XCTestCase {
 
         element(app, "panel-category-mentions").click()
         XCTAssertTrue(element(app, "pr-row-1003").waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["Direct Mentions"].waitForExistence(timeout: 5))
+        let mentionedHeading = element(app, "panel-section-mentioned")
+        XCTAssertTrue(mentionedHeading.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["panel-section-mentioned"].exists,
+                       "Mention headings are fixed labels, not collapse buttons")
+        XCTAssertFalse(app.buttons["Direct Mentions"].exists, "A mention heading must not expose a button role")
         XCTAssertTrue(element(app, "pr-row-1002").waitForNonExistence(timeout: 3))
 
         element(app, "panel-category-myPRs").click()
@@ -99,6 +103,81 @@ final class MacOSUIUXTests: XCTestCase {
         XCTAssertEqual(element(app, "panel-category-all").value as? String, "Selected")
         XCTAssertTrue(element(app, "pr-row-1001").waitForExistence(timeout: 5))
         XCTAssertTrue(element(app, "pr-row-1002").waitForExistence(timeout: 5))
+    }
+
+    func testSectionCollapseCommitsOnOneClickAndStaysScopedToAll() {
+        let app = launch(count: 20)
+        defer { app.terminate() }
+        open(app)
+        let panel = element(app, "uiux-panel")
+        let authoredHeader = element(app, "panel-section-authored")
+        let authoredRow = element(app, "pr-row-1006")
+        XCTAssertTrue(authoredHeader.waitForExistence(timeout: 5))
+        XCTAssertTrue(authoredRow.waitForExistence(timeout: 5))
+        XCTAssertEqual(authoredHeader.value as? String, "Expanded")
+
+        authoredHeader.click()
+        XCTAssertTrue(authoredRow.waitForNonExistence(timeout: 5),
+                      "One header click must collapse the section without another input")
+        XCTAssertEqual(authoredHeader.value as? String, "Collapsed")
+        XCTAssertTrue(element(app, "pr-row-1002").exists, "Other All sections stay visible")
+
+        authoredHeader.click()
+        XCTAssertTrue(authoredRow.waitForExistence(timeout: 5), "A second click restores the rows")
+        XCTAssertEqual(authoredHeader.value as? String, "Expanded")
+
+        authoredHeader.click()
+        XCTAssertTrue(authoredRow.waitForNonExistence(timeout: 5))
+
+        // A scoped tab is independent of All's remembered collapse.
+        element(app, "panel-category-myPRs").click()
+        XCTAssertTrue(authoredRow.waitForExistence(timeout: 5), "My PRs keeps its rows visible")
+        XCTAssertTrue(element(app, "panel-section-authored").waitForNonExistence(timeout: 3),
+                      "My PRs must not repeat its section title")
+        authoredRow.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.1)).click()
+        expectLog(app, "openPR(1006)")
+
+        element(app, "panel-category-reviews").click()
+        XCTAssertTrue(element(app, "pr-row-1002").waitForExistence(timeout: 5))
+        XCTAssertTrue(element(app, "panel-section-reviewRequests").waitForNonExistence(timeout: 3),
+                      "Reviews must not repeat its section title")
+
+        element(app, "panel-category-all").click()
+        XCTAssertTrue(authoredRow.waitForNonExistence(timeout: 5), "All keeps the collapsed section after tab switches")
+        XCTAssertEqual(element(app, "panel-section-authored").value as? String, "Collapsed")
+        let collapsed = XCTAttachment(screenshot: panel.screenshot())
+        collapsed.name = "All with collapsed authored section"
+        collapsed.lifetime = .keepAlways
+        add(collapsed)
+    }
+
+    func testMentionsKeepsFixedSeparateHeadings() {
+        let app = launch(count: 20)
+        defer { app.terminate() }
+        open(app)
+        // Narrow both mention roles to a few rows so both fixed headings and a
+        // direct-mention row are visible together.
+        element(app, "panel-category-mentions").click()
+        app.typeKey("f", modifierFlags: .command)
+        app.typeText("example/project")
+        let panel = element(app, "uiux-panel")
+        let mentionedHeading = element(app, "panel-section-mentioned")
+        let directHeading = element(app, "panel-section-directMentions")
+        XCTAssertTrue(mentionedHeading.waitForExistence(timeout: 5))
+        XCTAssertTrue(directHeading.waitForExistence(timeout: 5))
+        XCTAssertNotEqual(mentionedHeading.frame.minY, directHeading.frame.minY,
+                          "Mention roles keep separate fixed headings")
+        XCTAssertFalse(app.buttons["panel-section-mentioned"].exists,
+                       "Mention headings are fixed labels, not collapse buttons")
+        XCTAssertFalse(app.buttons["panel-section-directMentions"].exists)
+        let directRow = element(app, "pr-row-1004")
+        XCTAssertTrue(directRow.waitForExistence(timeout: 5))
+        directHeading.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        XCTAssertTrue(directRow.exists, "A fixed mention heading cannot collapse its rows")
+        let mentions = XCTAttachment(screenshot: panel.screenshot())
+        mentions.name = "Mentions fixed headings"
+        mentions.lifetime = .keepAlways
+        add(mentions)
     }
     func testCachedPanelRendersInNativePopover() {
         let app = launch(count: 3, appearance: "dark")
