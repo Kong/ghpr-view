@@ -249,7 +249,7 @@ private final class HoverTooltipTrackingView: NSView {
     private weak var presenter: HoverTooltipPresenter?
     private var cancellationSubscription: AnyCancellable?
     private var text = ""
-    private var delayNanoseconds: UInt64 = 300_000_000
+    private var delayNanoseconds: UInt64 = 400_000_000
     private var origin: CGPoint = .zero
     private var reduceMotion = false
     private var isHovered = false
@@ -388,7 +388,7 @@ private struct DelayedHoverTooltipModifier: ViewModifier {
 }
 
 extension View {
-    func delayedHoverTooltip(_ text: String, delayNanoseconds: UInt64 = 300_000_000) -> some View {
+    func delayedHoverTooltip(_ text: String, delayNanoseconds: UInt64 = 400_000_000) -> some View {
         modifier(DelayedHoverTooltipModifier(text: text, delayNanoseconds: delayNanoseconds))
     }
 }

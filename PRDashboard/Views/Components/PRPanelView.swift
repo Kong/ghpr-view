@@ -389,21 +389,19 @@ struct PRPanelView: View {
                         noMatchingPRs
                     }
                     ForEach(interaction.selectedCategory.sections, id: \.self) { section in
-                        let rows = layoutProjection.displayedRowIDs(for: section)
-                        collapsibleSection(section, count: rows.count, onboardingStep: onboardingStep(for: section)) {
-                            ForEach(rows, id: \.self) { id in
-                                if let pr = layoutProjection.pr(for: id) {
-                                    rowSlot(id, pr: pr)
-                                        .id(PanelFocusTarget.row(id))
-                                }
-                            }
-                        }
+                        sectionBlock(section, count: layoutProjection.displayedRowIDs(for: section).count,
+                                     onboardingStep: onboardingStep(for: section))
                     }
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
                 .background(PanelScrollViewBinding(interaction: interaction))
             }
+            // NOTE: intentionally no `.animation(..., value: selectedCategory)` on this
+            // subtree. That modifier animates every animatable change the category swap
+            // causes — including scroll offset and row positions — which is what made the
+            // list appear to move up and then down. A visible transition must be done
+            // without moving layout (cross-fade); until then stability beats animation.
             .panelGeometry(.list)
             .accessibilityIdentifier("panel-pr-list")
             .onHover { interaction.setPointerInsideList($0) }
@@ -426,17 +424,27 @@ struct PRPanelView: View {
                 // offscreen anchor needs materializing first, then the same correction.
                 if frames[key] == nil { reader.scrollTo(target) }
             }
+            .onAppear { interaction.currentListVersion = snapshot.prList.lastUpdated }
+            .onChange(of: snapshot.prList.lastUpdated) { version in
+                interaction.currentListVersion = version
+            }
+            .onChange(of: interaction.selectedCategory) { category in
+                let offset = interaction.restorableScrollOffset(for: category,
+                                                               listVersion: snapshot.prList.lastUpdated)
+                interaction.requestScrollRestore(offset ?? .zero, for: category,
+                                                 listVersion: snapshot.prList.lastUpdated)
+            }
             .onChange(of: interaction.keyboardRevealRevision) { _ in
                 guard !interaction.protectsLayout, let target = interaction.keyboardRevealTarget else { return }
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) { reader.scrollTo(target) }
-            }
-            .onChange(of: interaction.categoryRevealRevision) { _ in
-                guard let target = interaction.categoryRevealTarget else { return }
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) { reader.scrollTo(target, anchor: .top) }
+                // A row that already sits fully on screen must not be re-aligned; otherwise every
+                // keystroke jitters the list even when nothing needs to move.
+                if case let .row(id) = target, interaction.isVisible(id) { return }
+                // Keyboard movement should read as continuous scrolling, not a jump: animate the
+                // reveal with the shared motion token and fall back to an instant move only when
+                // reduceMotion is on. Disabling animation outright is what made it snap.
+                withAnimation(PanelMotion.filter(reduceMotion: reduceMotion)) {
+                    reader.scrollTo(target)
+                }
             }
         }
     }
@@ -589,61 +597,90 @@ struct PRPanelView: View {
         )
     }
 
+    /// One stable child per section: the tab only swaps its header content and
+    /// which rows it shows, so hover, reveal, and geometry identity survive a
+    /// category switch.
     @ViewBuilder
-    private func collapsibleSection<Content: View>(
-        _ section: PRSectionID,
-        count: Int,
-        onboardingStep: OnboardingManager.Step? = nil,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        if count > 0 || interaction.focusTarget == .section(section) || interaction.scrollAnchor == .section(section) {
-            sectionHeader(section, count: count, onboardingStep: onboardingStep)
-
-            if isExpanded(section) {
-                content()
-                    .transition(.opacity)
-            }
-        }
-    }
-
-    private func sectionHeader(
+    private func sectionBlock(
         _ section: PRSectionID,
         count: Int,
         onboardingStep: OnboardingManager.Step? = nil
     ) -> some View {
-        let expanded = isExpanded(section)
-        let header = Button {
-            toggleSection(section)
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(.secondary)
-                    .frame(width: 10)
-
-                Text(section.title)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.secondary)
-
-                Text("(\(count))")
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
-
-                Spacer()
+        let visible = count > 0
+            || interaction.focusTarget == .section(section)
+            || interaction.scrollAnchor == .section(section)
+        if visible {
+            let style = interaction.selectedCategory.sectionHeaderStyle
+            VStack(alignment: .leading, spacing: 0) {
+                if style != .hidden {
+                    if style == .collapsible {
+                        collapsibleHeader(section, count: count, onboardingStep: onboardingStep)
+                    } else {
+                        fixedHeader(section, count: count)
+                    }
+                }
+                if style != .collapsible || interaction.isSectionExpanded(section) {
+                    sectionRows(section)
+                }
             }
+            .id(PanelFocusTarget.section(section))
+            .panelGeometry(.section(section))
+        }
+    }
+
+    private func sectionRows(_ section: PRSectionID) -> some View {
+        ForEach(layoutProjection.displayedRowIDs(for: section), id: \.self) { id in
+            if let pr = layoutProjection.pr(for: id) {
+                rowSlot(id, pr: pr)
+                    .id(PanelFocusTarget.row(id))
+            }
+        }
+    }
+
+    /// Shared chrome of every section header, collapsible or fixed.
+    private func headerChrome<Content: View>(_ content: Content) -> some View {
+        content
             .padding(.horizontal, 8)
             .padding(.top, 12)
             .padding(.bottom, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func collapsibleHeader(
+        _ section: PRSectionID,
+        count: Int,
+        onboardingStep: OnboardingManager.Step? = nil
+    ) -> some View {
+        let expanded = interaction.isSectionExpanded(section)
+        let header = Button {
+            interaction.toggleSection(section)
+        } label: {
+            headerChrome(
+                HStack(spacing: 6) {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(.secondary)
+                        .frame(width: 10)
+
+                    Text(section.title)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.secondary)
+
+                    Text("(\(count))")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+
+                    Spacer(minLength: 0)
+                }
+            )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .help(section == .mergedToday ? "Merged in the last 24 hours. \(expanded ? "Collapse section" : "Expand section")" : (expanded ? "Collapse section" : "Expand section"))
         .accessibilityLabel(Text(section.title))
         .accessibilityValue(expanded ? Text("Expanded") : Text("Collapsed"))
+        .accessibilityIdentifier("panel-section-\(section.rawValue)")
         .focused($nativeControlFocus, equals: .section(section))
-        .id(PanelFocusTarget.section(section))
-        .panelGeometry(.section(section))
         .overlay {
             if interaction.focusTarget == .section(section) {
                 RoundedRectangle(cornerRadius: 4).stroke(Color.accentColor, lineWidth: 1).allowsHitTesting(false)
@@ -659,15 +696,23 @@ struct PRPanelView: View {
         }
     }
 
-    private func isExpanded(_ section: PRSectionID) -> Bool {
-        interaction.expandedSections.contains(section)
+    /// Mentions labels stay fixed: they separate roles without an expand or
+    /// collapse affordance, so a section's rows are always available.
+    private func fixedHeader(_ section: PRSectionID, count: Int) -> some View {
+        headerChrome(
+            HStack(spacing: 6) {
+                Color.clear.frame(width: 10, height: 0)
+                (Text(section.title).font(.system(size: 11, weight: .semibold))
+                    + Text(" (\(count))").font(.system(size: 11)))
+                    .foregroundColor(.secondary)
+                    .accessibilityLabel(Text(section.title))
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityIdentifier("panel-section-\(section.rawValue)")
+                Spacer(minLength: 0)
+            }
+        )
     }
 
-    private func toggleSection(_ section: PRSectionID) {
-        withAnimation(PanelMotion.disclosure(reduceMotion: reduceMotion)) {
-            interaction.toggleSection(section)
-        }
-    }
     // MARK: - States
 
     private var loadingView: some View {

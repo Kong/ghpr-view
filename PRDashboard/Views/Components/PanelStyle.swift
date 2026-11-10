@@ -34,10 +34,6 @@ enum PanelMotion {
         reduceMotion ? nil : .easeOut(duration: 0.14)
     }
 
-    static func disclosure(reduceMotion: Bool) -> Animation? {
-        reduceMotion ? nil : .easeInOut(duration: 0.18)
-    }
-
     static func facetDisclosure(reduceMotion: Bool) -> Animation? {
         reduceMotion ? nil : .easeInOut(duration: 0.22)
     }
