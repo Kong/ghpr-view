@@ -10,6 +10,8 @@ final class MacOSUIUXTests: XCTestCase {
         app.launchArguments = ["--ui-testing-uiux", "--uiux-count=\(count)"]
         if let appearance { app.launchArguments.append("--uiux-appearance=\(appearance)") }
         if reduceMotion { app.launchArguments.append("--uiux-reduce-motion") }
+        // Pin the language so translated settings labels stay the strings these tests match.
+        app.launchArguments.append(contentsOf: ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"])
         app.launch()
         XCTAssertTrue(app.windows["UIUX Fixtures"].waitForExistence(timeout: 8))
         return app
@@ -49,6 +51,28 @@ final class MacOSUIUXTests: XCTestCase {
         let result = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: nil)], timeout: 5)
         XCTAssertEqual(result, .completed, "Expected height \(height), measured \(element.frame.height)",
                        file: file, line: line)
+    }
+
+    /// The hosted panel stops at the visible screen budget, so a short runner
+    /// cannot reach the 680-point expanded height.
+    private func waitForStableHeight(_ element: XCUIElement) -> CGFloat {
+        let deadline = Date().addingTimeInterval(5)
+        var last = element.frame.height
+        var stableSince: Date?
+        while Date() < deadline {
+            let height = element.frame.height
+            if abs(height - last) <= 0.5 {
+                if stableSince == nil { stableSince = Date() }
+                if let stableSince, Date().timeIntervalSince(stableSince) >= 0.3, height > 1 {
+                    return height
+                }
+            } else {
+                last = height
+                stableSince = nil
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        return element.frame.height
     }
 
 
@@ -372,12 +396,18 @@ final class MacOSUIUXTests: XCTestCase {
                        "Revealed filters must accept clicks without a tab switch")
         XCTAssertEqual(filter.value as? String, "Expanded")
 
-        waitForHeight(panel, 680)
-        XCTAssertEqual(list.frame.height, listHeightBefore, accuracy: 2, "Expanding must not shrink the list viewport")
+        let expanded = waitForStableHeight(panel)
+        let growth = expanded - 500
+        XCTAssertGreaterThan(growth, 0, "The host must grow when the screen has room below the collapsed panel")
+        XCTAssertLessThanOrEqual(growth, 180.5, "Growth cannot exceed the filter section")
+        XCTAssertLessThanOrEqual(expanded, 682, "The expanded panel never exceeds 680")
+        let listShrink = 180 - growth
+        XCTAssertEqual(list.frame.height, listHeightBefore - listShrink, accuracy: 2,
+                       "Only a short screen may compress the list, and only by the growth the screen refused")
         XCTAssertEqual(firstRow.frame.minY - list.frame.minY, rowOffsetBefore, accuracy: 2,
                        "The list must keep its scroll position")
         XCTAssertEqual(panel.frame.minY, topBefore, accuracy: 2, "Only the bottom edge may move")
-        XCTAssertEqual(footer.frame.minY - footerBefore, 180, accuracy: 2, "The list moves down by the filter height")
+        XCTAssertEqual(footer.frame.minY - footerBefore, growth, accuracy: 2, "The footer moves down by the actual growth")
         XCTAssertTrue(footer.isHittable, "The host window must grow, or the footer would be clipped")
         XCTAssertEqual(element(app, "pr-row-1001").identifier, rowIDBefore)
         XCTAssertEqual(element(app, "panel-category-all").value as? String, "Selected")
@@ -393,14 +423,14 @@ final class MacOSUIUXTests: XCTestCase {
 
         filter.click()
         XCTAssertTrue(facet.waitForExistence(timeout: 5))
-        waitForHeight(panel, 680)
+        XCTAssertEqual(waitForStableHeight(panel), expanded, accuracy: 2)
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(panel.waitForNonExistence(timeout: 5))
         open(app)
         XCTAssertTrue(element(app, "panel-facet-panel").waitForExistence(timeout: 5),
                       "Reopening must keep the expanded filters without a tab switch")
         XCTAssertEqual(element(app, "panel-filter").value as? String, "Expanded")
-        waitForHeight(element(app, "uiux-panel"), 680)
+        XCTAssertEqual(waitForStableHeight(element(app, "uiux-panel")), expanded, accuracy: 2)
     }
 
     func testRefreshClickAndShortcutShowBusyStateAndRecover() {
@@ -458,7 +488,11 @@ final class MacOSUIUXTests: XCTestCase {
         filter.click()
         let facet = element(app, "panel-facet-panel")
         XCTAssertTrue(facet.waitForExistence(timeout: 5))
-        XCTAssertEqual(panel.frame.height, 680, accuracy: 2, "Reduced motion applies the final layout")
+        let immediate = panel.frame.height
+        let settled = waitForStableHeight(panel)
+        XCTAssertEqual(immediate, settled, accuracy: 2, "Reduced motion applies the final layout")
+        XCTAssertGreaterThan(settled, 502, "The final layout must include the opened filters")
+        XCTAssertLessThanOrEqual(settled, 682, "The final layout stays within 680 or the screen budget")
 
         filter.click()
         XCTAssertTrue(facet.waitForNonExistence(timeout: 5))
@@ -489,29 +523,26 @@ final class MacOSUIUXTests: XCTestCase {
         XCTAssertEqual(settingsContent.frame.width, 620, accuracy: 2)
         XCTAssertEqual(settingsContent.frame.height, 620, accuracy: 2)
         let pages: [(String, String)] = [
-            ("general", "Launch at login"), ("pullRequests", "Show draft PRs"),
-            ("alerts", "Enable notifications"), ("integrations", "Jira"),
-            ("advanced", "Show onboarding again")
+            ("general", "settings-launch-at-login"), ("pullRequests", "settings-show-drafts"),
+            ("alerts", "settings-enable-notifications"), ("integrations", "settings-jira"),
+            ("advanced", "settings-show-onboarding-again")
         ]
         for (page, landmark) in pages {
             selectSettingsPage(app, rawValue: page)
-            XCTAssertTrue(app.windows["Settings"].descendants(matching: .any)
-                .matching(NSPredicate(format: "label == %@", landmark)).firstMatch.waitForExistence(timeout: 5))
+            XCTAssertTrue(element(app, landmark).waitForExistence(timeout: 5), "Missing settings landmark \(landmark)")
         }
         selectSettingsPage(app, rawValue: "general")
         for (_, landmark) in pages.dropFirst() {
             app.typeKey(.downArrow, modifierFlags: [])
-            XCTAssertTrue(app.windows["Settings"].descendants(matching: .any)
-                .matching(NSPredicate(format: "label == %@", landmark)).firstMatch.waitForExistence(timeout: 5),
+            XCTAssertTrue(element(app, landmark).waitForExistence(timeout: 5),
                 "Native sidebar arrow navigation must select \(landmark)")
             XCTAssertTrue(element(app, "settings-sidebar").exists)
         }
         app.typeKey(.upArrow, modifierFlags: [])
-        XCTAssertTrue(app.windows["Settings"].staticTexts["Jira"].waitForExistence(timeout: 5))
+        XCTAssertTrue(element(app, "settings-jira").waitForExistence(timeout: 5))
         controls.buttons["uiux-open-settings"].click()
         XCTAssertEqual(app.windows.matching(identifier: "Settings").count, 1)
-        XCTAssertTrue(app.windows["Settings"].descendants(matching: .any)
-            .matching(NSPredicate(format: "label == %@", "Launch at login")).firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(element(app, "settings-launch-at-login").waitForExistence(timeout: 5))
         expectLog(app, "Settings window reused; page reset to general")
         app.windows["Settings"].buttons["Cancel"].click()
         let closed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.windows["Settings"])
@@ -525,7 +556,7 @@ final class MacOSUIUXTests: XCTestCase {
         let settings = app.windows["Settings"]
         controls.buttons["uiux-open-settings"].click()
         selectSettingsPage(app, rawValue: "pullRequests")
-        let showDrafts = settings.checkBoxes["Show draft PRs"]
+        let showDrafts = element(app, "settings-show-drafts")
         XCTAssertTrue(showDrafts.waitForExistence(timeout: 5))
         let savedValue = showDrafts.value as? String
         XCTAssertNotNil(savedValue, "The checkbox must expose its saved value")

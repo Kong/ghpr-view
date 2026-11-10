@@ -1179,10 +1179,19 @@ private struct UIUXFixtureSettings: View {
     var body: some View {
         SettingsContent(draft: $model.settingsDraft, status: model.settingsStatus,
             navigation: navigation, actions: model.settingsActions)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("uiux-settings-content")
         .background(UIUXAuxiliaryRenderProbe(token: "settings-\(navigation.tab.rawValue)",
             acknowledged: { model.onAuxiliaryRendered?($0) }))
+        .background {
+            // Measure the content root without grouping the form into one
+            // accessibility element. Grouping hid the settings controls from XCTest.
+            GeometryReader { proxy in
+                Color.clear
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .accessibilityElement()
+                    .accessibilityIdentifier("uiux-settings-content")
+            }
+            .allowsHitTesting(false)
+        }
     }
 }
 
@@ -1194,6 +1203,8 @@ private struct UIUXFixtureActivity: View {
     var body: some View {
         PRActivityContent(snapshot: model.activitySnapshot, groups: model.activityGroups,
             mutedIdentifiers: model.mutedIdentifiers, actions: model.activityActions, navigation: navigation)
+        .frame(width: 560, height: 560, alignment: .topLeading)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("uiux-activity-content")
         .background(UIUXAuxiliaryRenderProbe(token: "activity-\(navigation.digestBatchID ?? "none")-request-\(navigation.requestRevision)",
             acknowledged: { model.onAuxiliaryRendered?($0) }))
