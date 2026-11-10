@@ -638,6 +638,7 @@ struct SettingsContent: View {
                 get: { status.launchAtLogin },
                 set: actions.setLaunchAtLogin
             ))
+            .accessibilityIdentifier("settings-launch-at-login")
 
             HStack {
                 Toggle("Open PRs in cmux first", isOn: $draft.openAtCmuxFirst)
@@ -708,6 +709,7 @@ struct SettingsContent: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             Toggle("Show draft PRs", isOn: $draft.showDrafts)
+                .accessibilityIdentifier("settings-show-drafts")
 
             Toggle("Show my review status badges", isOn: $draft.showMyReviewStatus)
 
@@ -741,6 +743,7 @@ struct SettingsContent: View {
     private var alertSettings: some View {
         Section("Notifications") {
             Toggle("Enable notifications", isOn: $draft.notificationsEnabled)
+                .accessibilityIdentifier("settings-enable-notifications")
             Text("Notifications are digests of activity that needs your attention, not one alert per event.")
                 .font(.caption)
                 .foregroundColor(.secondary)
@@ -838,6 +841,7 @@ struct SettingsContent: View {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     Text("Jira server")
+                        .accessibilityIdentifier("settings-jira")
                     HelpHint("Jira Cloud server URL, for example https://company.atlassian.net. Email, API token, and connection testing are completed in the setup guide.")
                     Spacer()
                 }
@@ -910,6 +914,7 @@ struct SettingsContent: View {
             Button("Show onboarding again") {
                 actions.resetOnboarding()
             }
+            .accessibilityIdentifier("settings-show-onboarding-again")
 
             Button("Clear cached PR data") {
                 showClearCacheConfirmation = true
