@@ -21,6 +21,12 @@ final class MacOSUIUXTests: XCTestCase {
         app.descendants(matching: .any).matching(identifier: id).firstMatch
     }
 
+    private func controlValue(_ element: XCUIElement) -> String? {
+        if let text = element.value as? String { return text }
+        if let number = element.value as? NSNumber { return number.stringValue }
+        return nil
+    }
+
     private func open(_ app: XCUIApplication) {
         app.windows["UIUX Fixtures"].buttons["uiux-open-panel"].click()
         XCTAssertTrue(element(app, "panel-search").waitForExistence(timeout: 5))
@@ -509,7 +515,9 @@ final class MacOSUIUXTests: XCTestCase {
         XCTAssertTrue(sidebar.waitForExistence(timeout: 5), "Settings navigation stays visible")
         let page = element(app, "settings-page-\(rawValue)")
         XCTAssertTrue(page.waitForExistence(timeout: 3), "Missing settings page: \(rawValue)")
-        page.click()
+        // Sidebar List rows report hittable=false on macOS 26, so click() tries to
+        // scroll a ScrollView that has no hit point. The row center still selects.
+        page.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
     }
 
     func testSettingsFivePagesAndWindowReuseResetNavigation() {
@@ -540,6 +548,9 @@ final class MacOSUIUXTests: XCTestCase {
         }
         app.typeKey(.upArrow, modifierFlags: [])
         XCTAssertTrue(element(app, "settings-jira").waitForExistence(timeout: 5))
+        let settingsWindow = app.windows["Settings"]
+        settingsWindow.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.02))
+            .click(forDuration: 0.2, thenDragTo: controls.coordinate(withNormalizedOffset: CGVector(dx: 1.5, dy: 0.1)))
         controls.buttons["uiux-open-settings"].click()
         XCTAssertEqual(app.windows.matching(identifier: "Settings").count, 1)
         XCTAssertTrue(element(app, "settings-launch-at-login").waitForExistence(timeout: 5))
@@ -558,25 +569,25 @@ final class MacOSUIUXTests: XCTestCase {
         selectSettingsPage(app, rawValue: "pullRequests")
         let showDrafts = element(app, "settings-show-drafts")
         XCTAssertTrue(showDrafts.waitForExistence(timeout: 5))
-        let savedValue = showDrafts.value as? String
+        let savedValue = controlValue(showDrafts)
         XCTAssertNotNil(savedValue, "The checkbox must expose its saved value")
         showDrafts.click()
-        let editedValue = showDrafts.value as? String
+        let editedValue = controlValue(showDrafts)
         XCTAssertNotEqual(editedValue, savedValue, "Editing must change the draft")
         selectSettingsPage(app, rawValue: "general")
         selectSettingsPage(app, rawValue: "pullRequests")
-        XCTAssertEqual(showDrafts.value as? String, editedValue, "Page switches must preserve the same draft")
+        XCTAssertEqual(controlValue(showDrafts), editedValue, "Page switches must preserve the same draft")
         settings.buttons["Cancel"].click()
         XCTAssertTrue(settings.waitForNonExistence(timeout: 5))
         controls.buttons["uiux-open-settings"].click()
         selectSettingsPage(app, rawValue: "pullRequests")
-        XCTAssertEqual(showDrafts.value as? String, savedValue, "Cancel must discard the draft")
+        XCTAssertEqual(controlValue(showDrafts), savedValue, "Cancel must discard the draft")
         showDrafts.click()
         settings.buttons["Save"].click()
         XCTAssertTrue(settings.waitForNonExistence(timeout: 5))
         controls.buttons["uiux-open-settings"].click()
         selectSettingsPage(app, rawValue: "pullRequests")
-        XCTAssertEqual(showDrafts.value as? String, editedValue, "Save must retain the edited value after reopening")
+        XCTAssertEqual(controlValue(showDrafts), editedValue, "Save must retain the edited value after reopening")
     }
 
     func testCustomHoverTooltipsPreserveRowAndChildActions() {
@@ -679,6 +690,9 @@ final class MacOSUIUXTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["This notification is no longer available in local history"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.windows.matching(identifier: "Activity").count, 1)
         XCTAssertTrue(app.windows["Activity"].buttons["Observe now"].exists)
+        let activity = app.windows["Activity"]
+        activity.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.03))
+            .click(forDuration: 0.2, thenDragTo: controls.coordinate(withNormalizedOffset: CGVector(dx: 1.5, dy: 0.1)))
         controls.buttons["uiux-open-activity"].click()
         let cleared = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: element(app, "activity-digest-context"))
         XCTAssertEqual(XCTWaiter.wait(for: [cleared], timeout: 5), .completed)
