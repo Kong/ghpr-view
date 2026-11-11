@@ -1204,10 +1204,19 @@ private struct UIUXFixtureActivity: View {
         PRActivityContent(snapshot: model.activitySnapshot, groups: model.activityGroups,
             mutedIdentifiers: model.mutedIdentifiers, actions: model.activityActions, navigation: navigation)
         .frame(width: 560, height: 560, alignment: .topLeading)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("uiux-activity-content")
         .background(UIUXAuxiliaryRenderProbe(token: "activity-\(navigation.digestBatchID ?? "none")-request-\(navigation.requestRevision)",
             acknowledged: { model.onAuxiliaryRendered?($0) }))
+        .background {
+            // The grouped accessibility element reports 12pt short of the content
+            // root on macOS 26. Measure the root without intercepting its controls.
+            GeometryReader { proxy in
+                Color.clear
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .accessibilityElement()
+                    .accessibilityIdentifier("uiux-activity-content")
+            }
+            .allowsHitTesting(false)
+        }
     }
 }
 

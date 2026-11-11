@@ -710,6 +710,7 @@ struct SettingsContent: View {
 
             Toggle("Show draft PRs", isOn: $draft.showDrafts)
                 .accessibilityIdentifier("settings-show-drafts")
+                .accessibilityValue(draft.showDrafts ? "1" : "0")
 
             Toggle("Show my review status badges", isOn: $draft.showMyReviewStatus)
 
