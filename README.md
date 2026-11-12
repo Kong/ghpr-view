@@ -75,6 +75,15 @@ cd ghpr-view
 
 `make build-cli` builds `ghpr`. `make install-mcp` is optional and needs Node.js. See [`mcp-ghpr/README.md`](mcp-ghpr/README.md).
 
+Native UI tests use the isolated `UITesting` app and require an unlocked macOS desktop:
+
+```bash
+xcodebuild -project PRDashboard.xcodeproj -scheme PRDashboard -configuration UITesting \
+  -destination 'platform=macOS,arch=arm64' -only-testing:PRDashboardUITests test
+```
+
+Auxiliary-window tests select windows through the native Window menu and click the shared controls. Content dimensions are checked by the fixture's AppKit smoke capture; transparent accessibility measurement elements can intercept hit testing and must not cover those controls.
+
 ## Security
 
 Credential storage, the local socket, and the browser bridge are described in [SECURITY.md](SECURITY.md). Report a vulnerability there, not in a public issue.

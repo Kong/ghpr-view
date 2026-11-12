@@ -1181,17 +1181,6 @@ private struct UIUXFixtureSettings: View {
             navigation: navigation, actions: model.settingsActions)
         .background(UIUXAuxiliaryRenderProbe(token: "settings-\(navigation.tab.rawValue)",
             acknowledged: { model.onAuxiliaryRendered?($0) }))
-        .background {
-            // Measure the content root without grouping the form into one
-            // accessibility element. Grouping hid the settings controls from XCTest.
-            GeometryReader { proxy in
-                Color.clear
-                    .frame(width: proxy.size.width, height: proxy.size.height)
-                    .accessibilityElement()
-                    .accessibilityIdentifier("uiux-settings-content")
-            }
-            .allowsHitTesting(false)
-        }
     }
 }
 
@@ -1206,17 +1195,6 @@ private struct UIUXFixtureActivity: View {
         .frame(width: 560, height: 560, alignment: .topLeading)
         .background(UIUXAuxiliaryRenderProbe(token: "activity-\(navigation.digestBatchID ?? "none")-request-\(navigation.requestRevision)",
             acknowledged: { model.onAuxiliaryRendered?($0) }))
-        .background {
-            // The grouped accessibility element reports 12pt short of the content
-            // root on macOS 26. Measure the root without intercepting its controls.
-            GeometryReader { proxy in
-                Color.clear
-                    .frame(width: proxy.size.width, height: proxy.size.height)
-                    .accessibilityElement()
-                    .accessibilityIdentifier("uiux-activity-content")
-            }
-            .allowsHitTesting(false)
-        }
     }
 }
 

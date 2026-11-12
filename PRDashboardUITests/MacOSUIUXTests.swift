@@ -27,6 +27,13 @@ final class MacOSUIUXTests: XCTestCase {
         return nil
     }
 
+    private func selectWindow(_ app: XCUIApplication, named title: String) {
+        app.menuBars.menuBarItems["Window"].click()
+        let windowItem = app.menuItems[title]
+        XCTAssertTrue(windowItem.waitForExistence(timeout: 3), "Missing window menu item: \(title)")
+        windowItem.click()
+    }
+
     private func open(_ app: XCUIApplication) {
         app.windows["UIUX Fixtures"].buttons["uiux-open-panel"].click()
         XCTAssertTrue(element(app, "panel-search").waitForExistence(timeout: 5))
@@ -515,9 +522,7 @@ final class MacOSUIUXTests: XCTestCase {
         XCTAssertTrue(sidebar.waitForExistence(timeout: 5), "Settings navigation stays visible")
         let page = element(app, "settings-page-\(rawValue)")
         XCTAssertTrue(page.waitForExistence(timeout: 3), "Missing settings page: \(rawValue)")
-        // Sidebar List rows report hittable=false on macOS 26, so click() tries to
-        // scroll a ScrollView that has no hit point. The row center still selects.
-        page.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        page.click()
     }
 
     func testSettingsFivePagesAndWindowReuseResetNavigation() {
@@ -526,10 +531,6 @@ final class MacOSUIUXTests: XCTestCase {
         let controls = app.windows["UIUX Fixtures"]
         controls.buttons["uiux-open-settings"].click()
         XCTAssertTrue(app.windows["Settings"].waitForExistence(timeout: 5))
-        let settingsContent = element(app, "uiux-settings-content")
-        XCTAssertTrue(settingsContent.waitForExistence(timeout: 5))
-        XCTAssertEqual(settingsContent.frame.width, 620, accuracy: 2)
-        XCTAssertEqual(settingsContent.frame.height, 620, accuracy: 2)
         let pages: [(String, String)] = [
             ("general", "settings-launch-at-login"), ("pullRequests", "settings-show-drafts"),
             ("alerts", "settings-enable-notifications"), ("integrations", "settings-jira"),
@@ -548,9 +549,7 @@ final class MacOSUIUXTests: XCTestCase {
         }
         app.typeKey(.upArrow, modifierFlags: [])
         XCTAssertTrue(element(app, "settings-jira").waitForExistence(timeout: 5))
-        let settingsWindow = app.windows["Settings"]
-        settingsWindow.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.02))
-            .click(forDuration: 0.2, thenDragTo: controls.coordinate(withNormalizedOffset: CGVector(dx: 1.5, dy: 0.1)))
+        selectWindow(app, named: "UIUX Fixtures")
         controls.buttons["uiux-open-settings"].click()
         XCTAssertEqual(app.windows.matching(identifier: "Settings").count, 1)
         XCTAssertTrue(element(app, "settings-launch-at-login").waitForExistence(timeout: 5))
@@ -673,26 +672,22 @@ final class MacOSUIUXTests: XCTestCase {
         let controls = app.windows["UIUX Fixtures"]
         controls.buttons["uiux-open-activity"].click()
         XCTAssertTrue(app.windows["Activity"].waitForExistence(timeout: 5))
-        let activityContent = element(app, "uiux-activity-content")
-        XCTAssertTrue(activityContent.waitForExistence(timeout: 5))
-        XCTAssertEqual(activityContent.frame.width, 560, accuracy: 2)
-        XCTAssertEqual(activityContent.frame.height, 560, accuracy: 2)
         XCTAssertFalse(element(app, "activity-digest-context").exists)
         let selection = element(app, "uiux-digest-selection")
+        selectWindow(app, named: "UIUX Fixtures")
         selection.click()
         app.menuItems["Older than five batches"].click()
         controls.buttons["uiux-open-digest"].click()
         XCTAssertTrue(element(app, "activity-digest-context").waitForExistence(timeout: 5))
         expectLog(app, "digest=fixture-digest-6")
+        selectWindow(app, named: "UIUX Fixtures")
         selection.click()
         app.menuItems["Expired / missing"].click()
         controls.buttons["uiux-open-digest"].click()
         XCTAssertTrue(app.staticTexts["This notification is no longer available in local history"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.windows.matching(identifier: "Activity").count, 1)
         XCTAssertTrue(app.windows["Activity"].buttons["Observe now"].exists)
-        let activity = app.windows["Activity"]
-        activity.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.03))
-            .click(forDuration: 0.2, thenDragTo: controls.coordinate(withNormalizedOffset: CGVector(dx: 1.5, dy: 0.1)))
+        selectWindow(app, named: "UIUX Fixtures")
         controls.buttons["uiux-open-activity"].click()
         let cleared = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: element(app, "activity-digest-context"))
         XCTAssertEqual(XCTWaiter.wait(for: [cleared], timeout: 5), .completed)
@@ -711,7 +706,9 @@ final class MacOSUIUXTests: XCTestCase {
         expectLog(app, "dismiss reminder in memory")
         let removed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: dismiss)
         XCTAssertEqual(XCTWaiter.wait(for: [removed], timeout: 5), .completed)
+        selectWindow(app, named: "UIUX Fixtures")
         controls.buttons["uiux-new-activity-event"].click()
+        selectWindow(app, named: "Activity")
         XCTAssertTrue(dismiss.waitForExistence(timeout: 5))
         expectLog(app, "new activity event")
     }
