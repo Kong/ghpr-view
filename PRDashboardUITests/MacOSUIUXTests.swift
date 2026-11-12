@@ -522,7 +522,9 @@ final class MacOSUIUXTests: XCTestCase {
         XCTAssertTrue(sidebar.waitForExistence(timeout: 5), "Settings navigation stays visible")
         let page = element(app, "settings-page-\(rawValue)")
         XCTAssertTrue(page.waitForExistence(timeout: 3), "Missing settings page: \(rawValue)")
-        page.click()
+        // click() first scrolls the enclosing ScrollView, which has no hit point on
+        // macOS 26, so it aborts before synthesizing. The row center still selects.
+        page.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
     }
 
     func testSettingsFivePagesAndWindowReuseResetNavigation() {
@@ -531,6 +533,9 @@ final class MacOSUIUXTests: XCTestCase {
         let controls = app.windows["UIUX Fixtures"]
         controls.buttons["uiux-open-settings"].click()
         XCTAssertTrue(app.windows["Settings"].waitForExistence(timeout: 5))
+        // Content size is asserted by the fixture's AppKit smoke capture. An
+        // accessibility element covering the root reads 12pt short on macOS 26 and
+        // intercepts hit testing, so it cannot serve as the measurement here.
         let pages: [(String, String)] = [
             ("general", "settings-launch-at-login"), ("pullRequests", "settings-show-drafts"),
             ("alerts", "settings-enable-notifications"), ("integrations", "settings-jira"),
