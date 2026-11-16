@@ -41,26 +41,6 @@ Click the menu bar icon, then **Sign in with GitHub**, and enter the code at [gi
 
 If that is blocked, use a [personal access token](https://github.com/settings/tokens) with `repo`, `read:user`, `workflow`, and `read:org`. A release build keeps it in the Keychain.
 
-Left-click opens the list. Right-click opens the menu, including Quit. Search, Filter, and Refresh are at the top; a compact All / My PRs / Reviews / Mentions selector scopes the list below it. All keeps the five role sections, including recently merged PRs, behind collapsible headers whose state is remembered across tabs and refreshes. My PRs and Reviews show their rows without a duplicate section title, and Mentions keeps separate fixed Mentioned PRs and Direct Mentions headings so both roles stay visible. Search and facet filters remain active when switching categories. Activity and Settings are in the footer. Each PR has a Details button for the full status and available actions.
-
-Filter and Refresh use compact borderless buttons with 14pt symbols, 28pt hit targets, and a subtle circular hover highlight, matching the footer tools. Filter uses the accent color while expanded. The custom category selector keeps its equal-width labels and capsule highlight; on macOS 26 and later, an AppKit Glass container animates the material beneath stationary text. Hover adds light feedback, pressing contracts the glass contour, and category changes move the highlight over 240ms. Reduce Motion removes custom transitions. For the category selector, Reduce Transparency and older systems use an opaque system control background; Increase Contrast adds a stronger edge. Search retains its native NSSearchField bezel. See [Liquid Glass behavior and verification](docs/liquid-glass-behavior.md) for the design sources and local acceptance evidence.
-
-Jira, CI, conflict, and cmux signals use a 28pt-high hover target with a 300ms default delay. Moving between signals updates the tooltip; leaving or closing the panel clears it. Jira clicks and PR row clicks retain their separate actions.
-
-**Cmd+F** focuses search, **Cmd+R** refreshes, and **Cmd+,** opens Settings. With the list focused, use the arrow keys to select a PR and Return to open it. Escape clears a search before closing the panel; native menus, sheets, and input composition handle Escape first. Clearing search keeps your selected filters.
-
-The CI summary includes both failed and unknown checks; individual rows distinguish them. The menu bar count combines unread unresolved threads on your PRs with unanswered direct mentions. Activity has its own reminder count.
-
-The footer shows only the API pool with the lower remaining percentage (REST or GraphQL). Hover it to see both pools and their reset times; the Synchronization details popover also lists both. Unknown pools remain visibly unavailable rather than being combined or inferred.
-
-Settings uses a persistent sidebar for General, Pull Requests, Alerts, Integrations, and Advanced, with Cancel/Save controls. Its 620×620pt minimum content size and 156pt sidebar preserve readable form space; the menu panel remains 400×500pt. Switching pages keeps your draft. Sign-in, connections, and Launch at Login take effect immediately; Cancel discards the remaining draft settings.
-
-The Raft External Agent integration setup and CLI profile requirements are documented in [the integration guide](docs/raft-external-agent-integration.md).
-
-Jira keys use a light accent marker and open independently from the PR row. Hovering a key or status badge shows a short explanation; the row's Details button and title hover still provide the full PR context. The last-commit time tooltip triggers only from the time label, not anywhere across the row. Pending explanations are cancelled when the panel closes or their content is replaced. Activity and Settings use borderless footer icons.
-
-Clicking a digest notification opens Activity with that digest's local history. If its history has expired, Activity explains that and still shows current reminders. Dismiss and Snooze keep the reminder visible if saving fails. Snooze's 24 hours and 7 days are elapsed durations.
-
 ## Requirements
 
 macOS 13 or later, and a GitHub account. The interface is in English and Simplified Chinese.
