@@ -48,6 +48,10 @@ browser/node_modules/
 browser/playwright-report/
 browser/test-results/
 
+# Keep the root README; exclude other Markdown files
+*.md
+!/README.md
+
 # Local logs, built apps, release zips, and audit output
 err.log
 *.profraw
