@@ -453,7 +453,14 @@ final class PanelInteractionCoordinator: ObservableObject {
                 }
             }
         }
-        guard isPresented || pending.version == currentListVersion else {
+        // The decision belongs to the restore moment, not to whether the panel is open: a known
+        // version change means the list gained a successful refresh, so the switch ends at the
+        // top. Only a known difference counts here; with no recorded version we cannot prove a
+        // refresh happened, and the pending offset still applies.
+        let versionChanged = pending.version != nil
+            && currentListVersion != nil
+            && pending.version != currentListVersion
+        guard !versionChanged else {
             // The list changed under the intent, so the switch must end at the top. Queue that
             // as an intent too: clearing it and scrolling now would lose the top when the
             // scroll view is not bound yet.
@@ -478,10 +485,11 @@ final class PanelInteractionCoordinator: ObservableObject {
     /// A position worth restoring, or nil when the list changed since it was taken.
     func restorableScrollOffset(for category: PRPanelCategory, listVersion: Date?) -> CGPoint? {
         guard let saved = savedScrollOffset[category] else { return nil }
-        if isPresented { return saved }
-        guard let savedVersion = savedScrollVersion[category],
-              let version = listVersion,
-              savedVersion == version else { return nil }
+        guard let savedVersion = savedScrollVersion[category] else { return nil }
+        // A known, different version means the list was refreshed while this category was not
+        // shown, so the switch ends at the top instead of restoring a position that now points
+        // at different rows.
+        if let version = listVersion, savedVersion != version { return nil }
         return saved
     }
     func bind(scrollView: NSScrollView?) {

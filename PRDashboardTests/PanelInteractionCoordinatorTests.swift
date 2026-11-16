@@ -947,7 +947,7 @@ final class PanelInteractionCoordinatorTests: XCTestCase {
         }
     }
 
-    func testOpenPanelRetainsCategoryPositionAcrossRefresh() {
+    func testOpenPanelReturnsToTopWhenTheCategoryRefreshedWhileAway() {
         let coordinator = PanelInteractionCoordinator()
         coordinator.setPresented(true)
         defer { coordinator.setPresented(false) }
@@ -956,9 +956,29 @@ final class PanelInteractionCoordinatorTests: XCTestCase {
         coordinator.bind(scrollView: scroll)
         scroll.contentView.scroll(to: CGPoint(x: 0, y: 610))
         coordinator.selectCategory(.reviews)
+        // A successful refresh of `.all` lands while `.reviews` is shown.
         coordinator.currentListVersion = now.addingTimeInterval(1)
+        XCTAssertNil(
+            coordinator.restorableScrollOffset(for: .all, listVersion: coordinator.currentListVersion),
+            "a refreshed list must not restore the position taken before the refresh"
+        )
+        coordinator.selectCategory(.all)
+        coordinator.requestScrollRestore(.zero, for: .all, listVersion: coordinator.currentListVersion)
+        coordinator.recordGeometry([:])
+        XCTAssertEqual(scroll.contentView.bounds.minY, 0, accuracy: 0.5)
+    }
+
+    func testOpenPanelRestoresCategoryPositionWhenTheVersionIsUnchanged() {
+        let coordinator = PanelInteractionCoordinator()
+        coordinator.setPresented(true)
+        defer { coordinator.setPresented(false) }
+        coordinator.currentListVersion = now
+        let scroll = restorationScrollView()
+        coordinator.bind(scrollView: scroll)
+        scroll.contentView.scroll(to: CGPoint(x: 0, y: 610))
+        coordinator.selectCategory(.reviews)
         XCTAssertEqual(
-            coordinator.restorableScrollOffset(for: .all, listVersion: coordinator.currentListVersion)?.y,
+            coordinator.restorableScrollOffset(for: .all, listVersion: now)?.y,
             610
         )
         coordinator.selectCategory(.all)

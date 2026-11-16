@@ -385,6 +385,8 @@ struct PRPanelView: View {
                             ciRunning: summary.summaryCIRunning,
                             toReview: summary.summaryWaitingForMyReview
                         )
+                        // Reserve the legacy scroller gutter even when the list fits, so summary wrapping stays stable.
+                        .frame(width: PanelMetrics.width - 16 - NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy), alignment: .leading)
                         .frame(height: interaction.protectsLayout ? interaction.protectedGeometry[.summary]?.height : nil, alignment: .top)
                         .clipped()
                         .panelGeometry(.summary)
