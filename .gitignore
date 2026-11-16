@@ -55,3 +55,17 @@ err.log
 .omp/
 *.zip
 *.app
+
+# Local profiling and CI helper scripts
+/retry-failed-ci.sh
+/review.sh
+/stare.sh
+/watch-ci-retry.sh
+
+# Temporary review and profiling artifacts
+/*.patch
+/verdict:
+/pr-comments.txt
+/retry-ci.crontab
+/tmp/*.png
+*.log
