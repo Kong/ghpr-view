@@ -60,11 +60,8 @@ err.log
 *.zip
 *.app
 
-# Local profiling and CI helper scripts
-/retry-failed-ci.sh
-/review.sh
-/stare.sh
-/watch-ci-retry.sh
+# Root-level shell scripts are local helpers; keep maintained scripts in scripts/
+/*.sh
 
 # Temporary review and profiling artifacts
 /*.patch

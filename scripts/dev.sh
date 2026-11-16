@@ -4,6 +4,8 @@
 # Requires: Apple ID configured in Xcode (Xcode -> Settings -> Accounts).
 
 set -euo pipefail
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT_DIR"
 
 PROJECT="PRDashboard.xcodeproj"
 SCHEME="PRDashboard"

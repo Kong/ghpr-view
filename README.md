@@ -52,10 +52,10 @@ Building the native app requires Xcode 26 or later with the macOS 26 SDK or late
 ```bash
 git clone https://github.com/kong/ghpr-view.git
 cd ghpr-view
-./run.sh
+scripts/run.sh
 ```
 
-`make build-cli` builds `ghpr`. `make install-mcp` is optional and needs Node.js. See [`mcp-ghpr/README.md`](mcp-ghpr/README.md).
+`make build-cli` builds `ghpr`. `make install-mcp` is optional and needs Node.js.
 
 Native UI tests use the isolated `UITesting` app and require an unlocked macOS desktop:
 

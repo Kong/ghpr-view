@@ -2,7 +2,7 @@
 set -e
 
 APP_NAME="PRDashboard"
-ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DERIVED_DATA_PATH="$ROOT_DIR/build/DerivedData"
 APP_PATH="$DERIVED_DATA_PATH/Build/Products/Debug/$APP_NAME.app"
 
