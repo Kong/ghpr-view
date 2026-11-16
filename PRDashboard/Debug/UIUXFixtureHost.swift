@@ -1,4 +1,4 @@
-#if DEBUG
+#if DEBUG || GHPR_PROFILE
 import AppKit
 import SwiftUI
 import Darwin
@@ -48,6 +48,9 @@ final class UIUXFixtureHost {
                 throw SmokeError(message: "Use --uiux-smoke-host=window or =popover with --uiux-smoke-output. The default host is popover.")
             }
             usesSmokeWindow = hostFlags.first == "--uiux-smoke-host=window"
+            #if GHPR_PROFILE
+            if arguments.contains("--performance-scenario") { usesSmokeWindow = true }
+            #endif
             let appearanceFlags = arguments.filter { $0.hasPrefix("--uiux-appearance=") }
             guard appearanceFlags.count <= 1,
                   appearanceFlags.allSatisfy({ $0 == "--uiux-appearance=light" || $0 == "--uiux-appearance=dark" }) else {
@@ -179,7 +182,47 @@ final class UIUXFixtureHost {
             model.onRendererUpdated = { [weak self] in self?.captureWhenRendererReady() }
             DispatchQueue.main.async { [weak self] in self?.requestSmokeCapture(0) }
         }
+        #if GHPR_PROFILE
+        if CommandLine.arguments.contains("--performance-scenario") {
+            controls?.orderOut(nil)
+            openPanel()
+            Task { await runPerformanceScenario() }
+        }
+        #endif
     }
+
+    #if GHPR_PROFILE
+    private func runPerformanceScenario() async {
+        let cacheDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("ghpr-profile-\(UUID().uuidString)")
+        do {
+            try FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+        } catch {
+            exit(1)
+        }
+        let cache = PRCache(directory: cacheDirectory)
+        let phases = ["idle", "refresh", "search", "tabs", "cache"]
+        for phase in phases {
+            PerformanceProfile.setPhase(phase)
+            for step in 0..<30 {
+                if phase == "refresh" { model.apply(step.isMultiple(of: 2) ? .reorder : .recover) }
+                if phase == "search" { model.searchText = ["", "中文", "uiux", "project"][step % 4] }
+                if phase == "tabs" {
+                    model.searchText = ""
+                    model.interaction.selectCategory(PRPanelCategory.allCases[step % PRPanelCategory.allCases.count])
+                }
+                if phase == "cache" { cache.saveInBackground(model.snapshot.prList) }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+        }
+        await withCheckedContinuation { continuation in
+            cache.flush { continuation.resume() }
+        }
+        try? FileManager.default.removeItem(at: cacheDirectory)
+        PerformanceProfile.finish { success in
+            DispatchQueue.main.async { exit(success ? 0 : 1) }
+        }
+    }
+    #endif
 
     func openPanel() {
         guard model.parameterError == nil else {

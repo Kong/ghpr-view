@@ -1,17 +1,21 @@
-#if DEBUG
+#if DEBUG || GHPR_PROFILE
 import Foundation
 
 /// All fixture values are constructed in memory; this type never constructs services.
 enum UIUXFixtures {
     static let now = Date(timeIntervalSince1970: 1_700_000_000)
+    #if GHPR_PROFILE
+    static let supportedCounts = [0, 3, 20, 100, 1000]
+    #else
     static let supportedCounts = [0, 3, 20, 100]
+    #endif
 
     enum ParameterError: LocalizedError {
         case invalidCount(String)
         var errorDescription: String? {
             switch self {
             case .invalidCount(let value):
-                return "Fixture parameter error: --uiux-count must be 0, 3, 20 or 100 (received \(value))."
+                return "Fixture parameter error: --uiux-count must be one of \(supportedCounts.map(String.init).joined(separator: ", ")) (received \(value))."
             }
         }
     }

@@ -182,7 +182,11 @@ struct PRRowView: View {
     }
 
     var body: some View {
-            HStack(alignment: .top, spacing: 8) {
+        #if GHPR_PROFILE
+        let profile = PerformanceProfile.begin("RowBody")
+        defer { PerformanceProfile.end(profile) }
+        #endif
+        return HStack(alignment: .top, spacing: 8) {
                 CachedAvatarView(url: pr.authorAvatarURL, authorInitial: pr.author)
                     .frame(width: 28, height: 28)
                     .clipShape(Circle())

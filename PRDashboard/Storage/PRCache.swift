@@ -26,12 +26,56 @@ class PRCache {
 
     private let logger = Logger(subsystem: "com.prdashboard", category: "PRCache")
     private let cacheURL: URL
+    private let writeQueue = DispatchQueue(label: "com.prdashboard.pr-cache", qos: .utility)
+    private let pendingLock = NSLock()
+    private var pendingSnapshot: PRList?
+    private var writerScheduled = false
 
-    private init() {
-        cacheURL = AppCacheDirectory.directory.appendingPathComponent("pr_cache.json")
+    init(directory: URL = AppCacheDirectory.directory) {
+        cacheURL = directory.appendingPathComponent("pr_cache.json")
     }
 
     func save(_ prList: PRList) {
+        writeQueue.sync { write(prList) }
+    }
+
+    func saveInBackground(_ prList: PRList) {
+        pendingLock.lock()
+        pendingSnapshot = prList
+        if !writerScheduled {
+            writerScheduled = true
+            writeQueue.async { self.writePendingSnapshots() }
+        }
+        pendingLock.unlock()
+    }
+
+    func flush(completion: @escaping @Sendable () -> Void) {
+        writeQueue.async { completion() }
+    }
+
+    func waitForPendingWrites() {
+        writeQueue.sync {}
+    }
+
+    private func writePendingSnapshots() {
+        while true {
+            pendingLock.lock()
+            guard let snapshot = pendingSnapshot else {
+                writerScheduled = false
+                pendingLock.unlock()
+                return
+            }
+            pendingSnapshot = nil
+            pendingLock.unlock()
+            write(snapshot)
+        }
+    }
+
+    private func write(_ prList: PRList) {
+        #if GHPR_PROFILE
+        let profile = PerformanceProfile.begin("PRCacheSave")
+        defer { PerformanceProfile.end(profile) }
+        #endif
         do {
             let data = try JSONEncoder().encode(prList)
             try data.write(to: cacheURL, options: .atomic)
@@ -42,6 +86,10 @@ class PRCache {
     }
 
     func load() -> PRList? {
+        writeQueue.sync { read() }
+    }
+
+    private func read() -> PRList? {
         guard FileManager.default.fileExists(atPath: cacheURL.path) else { return nil }
 
         do {
@@ -57,7 +105,10 @@ class PRCache {
     }
 
     func clear() {
-        try? FileManager.default.removeItem(at: cacheURL)
+        pendingLock.lock()
+        pendingSnapshot = nil
+        pendingLock.unlock()
+        writeQueue.sync { try? FileManager.default.removeItem(at: cacheURL) }
         logger.debug("Cache cleared")
     }
 }

@@ -113,6 +113,10 @@ struct PRPanelProjection {
         configuration: Configuration,
         now: Date
     ) -> PRPanelProjection {
+        #if GHPR_PROFILE
+        let profile = PerformanceProfile.begin("PanelProjection")
+        defer { PerformanceProfile.end(profile) }
+        #endif
         let parsedSearch = PRSearchScope.parse(searchText)
         func filter(_ prs: [PullRequest]) -> [PullRequest] {
             prs.filter { FacetPredicate.matches($0, parsedSearch: parsedSearch, selections: selections) }
@@ -156,7 +160,7 @@ struct PRPanelProjection {
         let source = (prList.pullRequests + prList.mentionedPullRequests + prList.directMentionPullRequests + prList.mergedPullRequests)
             .filter { sourceSeen.insert($0.id).inserted }
         let builder = FacetIndexBuilder(sourcePRs: source, searchText: searchText, selections: selections)
-        let options = Dictionary(uniqueKeysWithValues: FacetFieldID.allCases.map { ($0, builder.options(for: $0)) })
+        let options = builder.allOptions()
         let chips = selections.flatMap { field, keys in
             let names = Dictionary(uniqueKeysWithValues: (options[field] ?? []).map { ($0.key, $0.displayName) })
             return keys.sorted().map { key in

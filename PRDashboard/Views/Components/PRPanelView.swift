@@ -39,9 +39,13 @@ struct PRPanelView: View {
     private var isRefreshing: Bool { snapshot.prList.isLoading }
 
     var body: some View {
+        #if GHPR_PROFILE
+        let profile = PerformanceProfile.begin("PanelBody")
+        defer { PerformanceProfile.end(profile) }
+        #endif
         // Disclosure follows the committed coordinator value, so the transition
         // matches the commit rather than the button press.
-        AnimatedPanelLayout(
+        return AnimatedPanelLayout(
             facetHeight: interaction.displayedFacetPanel ? PanelMetrics.facetPanelHeight : 0,
             maximumHeight: interaction.maximumContentHeight,
             interaction: interaction,
@@ -597,9 +601,6 @@ struct PRPanelView: View {
         )
     }
 
-    /// One stable child per section: the tab only swaps its header content and
-    /// which rows it shows, so hover, reveal, and geometry identity survive a
-    /// category switch.
     @ViewBuilder
     private func sectionBlock(
         _ section: PRSectionID,
@@ -611,20 +612,23 @@ struct PRPanelView: View {
             || interaction.scrollAnchor == .section(section)
         if visible {
             let style = interaction.selectedCategory.sectionHeaderStyle
-            VStack(alignment: .leading, spacing: 0) {
-                if style != .hidden {
-                    if style == .collapsible {
-                        collapsibleHeader(section, count: count, onboardingStep: onboardingStep)
-                    } else {
-                        fixedHeader(section, count: count)
-                    }
-                }
+            Section {
                 if style != .collapsible || interaction.isSectionExpanded(section) {
                     sectionRows(section)
                 }
+            } header: {
+                Group {
+                    if style == .collapsible {
+                        collapsibleHeader(section, count: count, onboardingStep: onboardingStep)
+                    } else if style != .hidden {
+                        fixedHeader(section, count: count)
+                    } else {
+                        Color.clear.frame(height: 0)
+                    }
+                }
+                .id(PanelFocusTarget.section(section))
+                .panelGeometry(.section(section))
             }
-            .id(PanelFocusTarget.section(section))
-            .panelGeometry(.section(section))
         }
     }
 

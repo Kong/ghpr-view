@@ -689,6 +689,10 @@ final class PRManager: PRManagerType, ObservableObject {
 
         activeRefreshTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            #if GHPR_PROFILE
+            let profile = PerformanceProfile.begin("RefreshWallTime")
+            defer { PerformanceProfile.end(profile) }
+            #endif
             defer {
                 if self.foregroundRefreshGeneration == refreshGeneration {
                     self.activeRefreshTask = nil
@@ -919,6 +923,10 @@ final class PRManager: PRManagerType, ObservableObject {
         generation: Int,
         username: String
     ) {
+        #if GHPR_PROFILE
+        let profile = PerformanceProfile.begin("RefreshPublication")
+        defer { PerformanceProfile.end(profile) }
+        #endif
         guard canPublishForegroundRefresh(generation: generation, username: username) else {
             return
         }
@@ -1459,7 +1467,7 @@ final class PRManager: PRManagerType, ObservableObject {
             directMentionTracking,
             force: forceTrackingWrite
         )
-        PRCache.shared.save(prList)
+        PRCache.shared.saveInBackground(prList)
     }
     private func filterByConfiguration(_ prs: [PullRequest]) -> [PullRequest] {
         PullRequestFilter.apply(prs, configuration: configuration)

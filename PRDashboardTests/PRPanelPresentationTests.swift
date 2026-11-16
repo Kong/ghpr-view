@@ -4,6 +4,47 @@ import XCTest
 final class PRPanelPresentationTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
 
+    func testSharedFacetFilteringPreservesEveryFieldAndUnavailableSelection() {
+        var backend = makePR(1)
+        backend.githubLabels = [GitHubLabel(name: "Backend", color: "123456"), GitHubLabel(name: "backend", color: nil)]
+        backend.githubMilestone = GitHubMilestone(title: "3.14")
+        backend.jiraProjectKey = "DEMO"
+        var frontend = makePR(2)
+        frontend.githubLabels = [GitHubLabel(name: "Frontend", color: nil)]
+        frontend.githubMilestone = GitHubMilestone(title: "3.15")
+        for query in ["", "Backend", "中文", "ci:pass", "jira:DEMO"] {
+            for selections: [FacetFieldID: Set<String>] in [
+                [:], [.githubLabel: ["backend", "missing"]],
+                [.githubLabel: ["backend"], .githubMilestone: ["3.15"]]
+            ] {
+                let builder = FacetIndexBuilder(sourcePRs: [backend, frontend], searchText: query, selections: selections)
+                let options = builder.allOptions()
+                for field in FacetFieldID.allCases {
+                    XCTAssertEqual(Set(options[field] ?? []), Set(builder.options(for: field)))
+                }
+            }
+        }
+    }
+
+    func testBackgroundCachePersistsLatestSnapshotAndClearWaitsForWrites() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cache = PRCache(directory: directory)
+        for identifier in 1...100 {
+            cache.saveInBackground(makeList([makePR(identifier)]))
+        }
+        cache.waitForPendingWrites()
+        XCTAssertEqual(cache.load()?.pullRequests.map(\.id), [100])
+        cache.saveInBackground(makeList([makePR(101)]))
+        cache.clear()
+        XCTAssertNil(cache.load())
+        cache.saveInBackground(makeList([makePR(102)]))
+        let flushed = expectation(description: "background cache flushed")
+        cache.flush { flushed.fulfill() }
+        wait(for: [flushed], timeout: 5)
+        XCTAssertEqual(cache.load()?.pullRequests.map(\.id), [102])
+    }
 
     func testCategoryScopesKeepExistingRoleSectionsAndMergedHistoryInAll() {
         let authored = makePR(1)

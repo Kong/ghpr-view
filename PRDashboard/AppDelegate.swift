@@ -28,7 +28,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let activityNavigation = ActivityNavigation()
     var extensionPlatformController: ExtensionPlatformController?
     let panelInteraction = PanelInteractionCoordinator()
-    #if DEBUG
+    #if DEBUG || GHPR_PROFILE
     private var uiuxFixtureHost: UIUXFixtureHost?
     #endif
     var browserPairingWindow: NSWindow?
@@ -39,8 +39,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        #if DEBUG
-        if CommandLine.arguments.contains("--ui-testing-uiux") {
+        #if GHPR_PROFILE
+        PerformanceProfile.start()
+        #endif
+        #if DEBUG || GHPR_PROFILE
+        var usesFixture = CommandLine.arguments.contains("--ui-testing-uiux")
+        #if GHPR_PROFILE
+        usesFixture = usesFixture || CommandLine.arguments.contains("--performance-scenario")
+        #endif
+        if usesFixture {
             let host = UIUXFixtureHost()
             uiuxFixtureHost = host
             host.start()
@@ -288,6 +295,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        PRCache.shared.waitForPendingWrites()
+        #if GHPR_PROFILE
+        let exported = DispatchSemaphore(value: 0)
+        PerformanceProfile.finish { _ in exported.signal() }
+        _ = exported.wait(timeout: .now() + 2)
+        #endif
         localSocketServer?.stop()
         localSocketServer = nil
         extensionPlatformController?.stop()

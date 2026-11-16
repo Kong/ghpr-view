@@ -105,8 +105,34 @@ struct FacetIndexBuilder {
     }
 
     func options(for field: FacetFieldID) -> [FacetOption] {
+        #if GHPR_PROFILE
+        let profile = PerformanceProfile.begin("FacetOptions")
+        defer { PerformanceProfile.end(profile) }
+        #endif
+        return options(for: field, basePRs: facetBasePRs(for: field))
+    }
+
+    func allOptions() -> [FacetFieldID: [FacetOption]] {
+        #if GHPR_PROFILE
+        let profile = PerformanceProfile.begin("FacetOptions")
+        defer { PerformanceProfile.end(profile) }
+        #endif
+        let parsedSearch = PRSearchScope.parse(searchText)
+        let matchingPRs = sourcePRs.filter { FacetPredicate.matchesSearch($0, parsedSearch: parsedSearch) }
+        return Dictionary(uniqueKeysWithValues: FacetFieldID.allCases.map { field in
+            let basePRs = matchingPRs.filter { pr in
+                selections.allSatisfy { selectedField, keys in
+                    selectedField == field || keys.isEmpty ||
+                        FacetValues.values(for: selectedField, pr: pr).contains { keys.contains($0.key) }
+                }
+            }
+            return (field, options(for: field, basePRs: basePRs))
+        })
+    }
+
+    private func options(for field: FacetFieldID, basePRs: [PullRequest]) -> [FacetOption] {
         var byKey: [String: FacetOption] = [:]
-        for pr in facetBasePRs(for: field) {
+        for pr in basePRs {
             var seenKeys = Set<String>()
             for value in FacetValues.values(for: field, pr: pr) where seenKeys.insert(value.key).inserted {
                 if let prior = byKey[value.key] {
