@@ -321,6 +321,7 @@ struct PRRowActions {
     var onRunSkill: ((String) -> Void)?
     var onInstallBrowserUserscript: (() -> Void)?
     var onOpenBrowserIntegrationSettings: (() -> Void)?
+    var onNotifyRaft: (() -> Void)?
     var showDetails: (() -> Void)?
 }
 

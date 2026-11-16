@@ -579,6 +579,7 @@ struct PRPanelView: View {
             onRunSkill: row.onRunSkill,
             onInstallBrowserUserscript: row.onInstallBrowserUserscript,
             onOpenBrowserIntegrationSettings: row.onOpenBrowserIntegrationSettings,
+            onNotifyRaft: row.onNotifyRaft,
             runnableSkills: extensions.runnableSkills,
             extensionRun: extensions.extensionRun,
             extensionAnalysis: extensions.extensionAnalysis,

@@ -240,7 +240,18 @@ struct MainView: View {
                 runExtensionSkill(skillID, prID: id, capturedHead: head, menuCapture: menuCapture)
             },
             onInstallBrowserUserscript: browserUserscriptInstallAction,
-            onOpenBrowserIntegrationSettings: browserIntegrationSettingsAction
+            onOpenBrowserIntegrationSettings: browserIntegrationSettingsAction,
+            onNotifyRaft: {
+                withLatestPR(id) { pr in
+                    Task { @MainActor in
+                        await RaftExternalAgentIntegration.shared.notify(pr)
+                        let alert = NSAlert()
+                        alert.messageText = "Raft Notification"
+                        alert.informativeText = RaftExternalAgentIntegration.shared.status
+                        alert.runModal()
+                    }
+                }
+            }
         )
     }
     private var browserUserscriptInstallAction: (() -> Void)? {

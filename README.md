@@ -55,6 +55,8 @@ The footer shows only the API pool with the lower remaining percentage (REST or 
 
 Settings uses a persistent sidebar for General, Pull Requests, Alerts, Integrations, and Advanced, with Cancel/Save controls. Its 620×620pt minimum content size and 156pt sidebar preserve readable form space; the menu panel remains 400×500pt. Switching pages keeps your draft. Sign-in, connections, and Launch at Login take effect immediately; Cancel discards the remaining draft settings.
 
+The Raft External Agent integration setup and CLI profile requirements are documented in [the integration guide](docs/raft-external-agent-integration.md).
+
 Jira keys use a light accent marker and open independently from the PR row. Hovering a key or status badge shows a short explanation; the row's Details button and title hover still provide the full PR context. The last-commit time tooltip triggers only from the time label, not anywhere across the row. Pending explanations are cancelled when the panel closes or their content is replaced. Activity and Settings use borderless footer icons.
 
 Clicking a digest notification opens Activity with that digest's local history. If its history has expired, Activity explains that and still shows current reminders. Dismiss and Snooze keep the reminder visible if saving fails. Snooze's 24 hours and 7 days are elapsed durations.

@@ -143,7 +143,8 @@ struct SettingsView: View {
     @State private var agentInstallError: String?
 
     var body: some View {
-        SettingsContent(draft: $draft, status: status, navigation: navigation, actions: actions)
+        SettingsContent(draft: $draft, status: status, navigation: navigation, actions: actions,
+                        raftExternalAgentIntegration: RaftExternalAgentIntegration.shared)
             .onAppear(perform: loadCurrentSettings)
             .onDisappear {
                 jiraConnectionTestTask?.cancel()
@@ -494,6 +495,7 @@ struct SettingsContent: View {
     var status: SettingsStatus
     @ObservedObject var navigation: SettingsNavigation
     var actions: SettingsActions
+    var raftExternalAgentIntegration: RaftExternalAgentIntegration? = nil
     @State private var showPATSwitchSheet = false
     @State private var showClearCacheConfirmation = false
 
@@ -907,6 +909,10 @@ struct SettingsContent: View {
         Section("Comment Shortcuts") {
             CommentShortcutSettingsSection(shortcuts: $draft.commentShortcuts)
         }
+
+        if let raftExternalAgentIntegration {
+            RaftExternalAgentSettingsSection(integration: raftExternalAgentIntegration)
+        }
     }
 
     @ViewBuilder
@@ -1190,7 +1196,7 @@ struct SettingsContent: View {
             }
         }
     }
-    private struct HelpHint: View {
+    struct HelpHint: View {
         let text: String
         @State private var isShown = false
         @State private var hoverTask: Task<Void, Never>?

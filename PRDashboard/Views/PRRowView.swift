@@ -80,6 +80,7 @@ struct PRRowView: View {
     var onRunSkill: ((String) -> Void)?
     var onInstallBrowserUserscript: (() -> Void)?
     var onOpenBrowserIntegrationSettings: (() -> Void)?
+    var onNotifyRaft: (() -> Void)?
     var runnableSkills: [SkillDefinition] = []
     var extensionRun: SkillRun?
     var extensionAnalysis: CIAnalysis?
@@ -318,6 +319,12 @@ struct PRRowView: View {
             if !isTracking { isHovered = false }
         }
         .contextMenu {
+            if RaftExternalAgentIntegration.isBackport(pr), let onNotifyRaft {
+                Button("Notify Raft") {
+                    onNotifyRaft()
+                }
+                Divider()
+            }
             Button("Open in Browser") {
                 onOpen()
             }
