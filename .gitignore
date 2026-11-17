@@ -51,6 +51,7 @@ browser/test-results/
 # Keep the root README; exclude other Markdown files
 *.md
 !/README.md
+!/ghpr-skill-builder/SKILL.md
 
 # Local logs, built apps, release zips, and audit output
 err.log
