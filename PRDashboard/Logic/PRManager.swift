@@ -540,7 +540,7 @@ final class PRManager: PRManagerType, ObservableObject {
 
         let openPRs = filterByConfiguration(
             cached.pullRequests.filter {
-                $0.category == .authored || $0.category == .reviewRequest
+                $0.category.isMyPR || $0.category == .reviewRequest
             }
         )
         let legacyMentionedPRs = filterByConfiguration(

@@ -64,6 +64,17 @@ final class PRPanelPresentationTests: XCTestCase {
         XCTAssertEqual(PRPanelCategory.allCases, [.all, .myPRs, .reviews, .mentions])
     }
 
+    func testMyPRsIncludesPinnedAssignedPRs() {
+        let authored = makePR(1)
+        let assigned = makePR(2, category: .assigned)
+        let review = makePR(3, category: .reviewRequest)
+        let projection = project(makeList([authored, assigned, review]), pins: [assigned.pinIdentifier])
+
+        XCTAssertEqual(projection.displayedRowIDs(for: .myPRs).map(\.prID), [2, 1])
+        XCTAssertEqual(projection.displayedRowIDs(for: .reviews).map(\.prID), [3])
+        XCTAssertEqual(projection.pinnedAuthoredPRs.map(\.category), [.assigned])
+    }
+
     func testUnknownQuotaDoesNotPretendToBeKnownOrBlockInitialHeadroom() {
         let unknown = RateLimitInfo.empty
         XCTAssertFalse(unknown.isAvailable)

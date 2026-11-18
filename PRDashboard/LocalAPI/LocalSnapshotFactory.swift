@@ -18,12 +18,12 @@ enum LocalSnapshotFactory {
         input: LocalSnapshotInput,
         now: Date = Date()
     ) -> LocalSnapshot {
-        let authoredPRs = input.prList.authoredPRs
+        let myPRs = input.prList.pullRequests.filter { $0.category.isMyPR }
         let reviewRequestPRs = input.prList.reviewRequestPRs
         let mergedLast24hPRs = mergedLast24h(from: input.prList.mergedPullRequests, now: now)
 
         let authoredSnapshots = sortPRs(
-            authoredPRs,
+            myPRs,
             pinnedPRIdentifiers: input.pinnedPRIdentifiers,
             pinnedFirst: true
         ).map {
@@ -105,19 +105,19 @@ enum LocalSnapshotFactory {
                 isLow: input.rateLimitInfo.isLow
             ),
             summary: LocalSummarySnapshot(
-                authored: authoredPRs.count,
+                authored: myPRs.count,
                 reviewRequests: reviewRequestPRs.count,
                 mentioned: input.prList.mentionedPullRequests.count,
                 directMentions: input.prList.directMentionPullRequests.count,
                 mergedLast24h: mergedLast24hPRs.count,
                 totalUnresolved: input.prList.totalUnresolvedCount,
-                authoredUnresolved: input.prList.authoredUnresolvedCount,
-                readyToMerge: authoredPRs.filter {
+                authoredUnresolved: myPRs.reduce(0) { $0 + $1.unresolvedCount },
+                readyToMerge: myPRs.filter {
                     $0.meetsReadyToMergeCriteria(
                         minimumApprovals: input.minimumApprovalsForReadyToMerge
                     )
                 }.count,
-                changesRequested: authoredPRs.filter {
+                changesRequested: myPRs.filter {
                     ($0.changesRequestedCount ?? 0) > 0
                 }.count,
                 ciFailing: input.prList.pullRequests.filter {

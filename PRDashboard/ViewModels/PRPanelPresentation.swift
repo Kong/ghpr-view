@@ -133,7 +133,7 @@ struct PRPanelProjection {
                 .sorted { $0.0 < $1.0 }
         }
         let filtered = filter(prList.pullRequests)
-        let authored = filtered.filter { $0.category == .authored }
+        let authored = filtered.filter { $0.category.isMyPR }
         let pinnedAuthored = authored.filter { pinnedIdentifiers.contains($0.pinIdentifier) }
         let unpinnedAuthored = authored.filter { !pinnedIdentifiers.contains($0.pinIdentifier) }
         let reviews = filtered.filter { $0.category == .reviewRequest }

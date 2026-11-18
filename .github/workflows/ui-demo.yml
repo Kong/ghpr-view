@@ -1,0 +1,43 @@
+name: UI Demo
+
+on:
+  pull_request:
+    types: [opened, labeled, synchronize, reopened, edited]
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-demo-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  record:
+    if: contains(github.event.pull_request.labels.*.name, 'ui-demo')
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Install GIF encoder
+        run: command -v magick || brew install imagemagick
+      - name: Capture the selected UI demo
+        run: python3 scripts/ui-demo.py "$RUNNER_TEMP/ghpr-ui-demo"
+      - name: Upload UI demo
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-demo-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/ghpr-ui-demo/artifact/
+          if-no-files-found: error
+      - name: Upload capture diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-demo-diagnostics
+          path: |
+            ${{ runner.temp }}/ghpr-ui-demo/xcodebuild.log
+            ${{ runner.temp }}/ghpr-ui-demo/attachments/manifest.json
+          if-no-files-found: ignore

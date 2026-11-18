@@ -89,6 +89,13 @@ final class MacOSUIUXTests: XCTestCase {
     }
 
 
+    private func attachDemoFrame(_ stage: String, panel: XCUIElement) {
+        let attachment = XCTAttachment(screenshot: panel.screenshot())
+        attachment.name = "ghpr-demo-\(stage)"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
     func testCategorySwitchFiltersRowsAndAllRestoresGroups() {
         let app = launch(count: 20)
         defer { app.terminate() }
@@ -100,6 +107,7 @@ final class MacOSUIUXTests: XCTestCase {
         XCTAssertTrue(quota.label.contains("REST: 4900 remaining of 5000"), "Accessible quota description retains both pools")
         XCTAssertFalse(element(app, "panel-quota-graphql").exists)
         let panel = element(app, "uiux-panel")
+        attachDemoFrame("01-all", panel: panel)
         element(app, "panel-search").hover()
         let restingImage = XCTAttachment(screenshot: panel.screenshot())
         restingImage.name = "Glass resting baseline"
@@ -122,6 +130,7 @@ final class MacOSUIUXTests: XCTestCase {
         element(app, "panel-category-reviews").click()
         XCTAssertTrue(element(app, "pr-row-1002").waitForExistence(timeout: 5))
         XCTAssertTrue(element(app, "pr-row-1001").waitForNonExistence(timeout: 3), "My PRs must leave the visible list in Reviews")
+        attachDemoFrame("02-reviews", panel: panel)
 
         element(app, "panel-category-mentions").click()
         XCTAssertTrue(element(app, "pr-row-1003").waitForExistence(timeout: 5))
@@ -131,15 +140,18 @@ final class MacOSUIUXTests: XCTestCase {
                        "Mention headings are fixed labels, not collapse buttons")
         XCTAssertFalse(app.buttons["Direct Mentions"].exists, "A mention heading must not expose a button role")
         XCTAssertTrue(element(app, "pr-row-1002").waitForNonExistence(timeout: 3))
+        attachDemoFrame("03-mentions", panel: panel)
 
         element(app, "panel-category-myPRs").click()
         XCTAssertTrue(element(app, "pr-row-1001").waitForExistence(timeout: 5))
         XCTAssertTrue(element(app, "pr-row-1002").waitForNonExistence(timeout: 3))
+        attachDemoFrame("04-my-prs", panel: panel)
 
         element(app, "panel-category-all").click()
         XCTAssertEqual(element(app, "panel-category-all").value as? String, "Selected")
         XCTAssertTrue(element(app, "pr-row-1001").waitForExistence(timeout: 5))
         XCTAssertTrue(element(app, "pr-row-1002").waitForExistence(timeout: 5))
+        attachDemoFrame("05-all-restored", panel: panel)
     }
 
     func testSectionCollapseCommitsOnOneClickAndStaysScopedToAll() {
