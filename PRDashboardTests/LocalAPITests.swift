@@ -336,6 +336,25 @@ final class LocalAPITests: XCTestCase {
         XCTAssertEqual(response.pullRequest?.section, .review)
     }
 
+    func testLocalAPIListsAssignedPRsAndFindsThemByNumber() {
+        let now = Date(timeIntervalSince1970: 1_775_000_000)
+        let assigned = makePullRequest(
+            id: 701, number: 701, title: "Assigned backport", category: .assigned, updatedAt: now
+        )
+        let list = PRList(lastUpdated: now, pullRequests: [assigned], isLoading: false, error: nil)
+        let snapshot = LocalSnapshotFactory.makeSnapshot(input: makeInput(prList: list), now: now)
+        let response = LocalAPIHandler.response(
+            for: LocalAPIRequest(command: .pr, repository: "owner/repo", number: 701),
+            snapshotProvider: { snapshot }
+        )
+
+        XCTAssertEqual(snapshot.summary.authored, 1)
+        XCTAssertEqual(snapshot.pullRequests.authored.map(\.number), [701])
+        XCTAssertTrue(response.ok)
+        XCTAssertEqual(response.pullRequest?.number, 701)
+        XCTAssertEqual(response.pullRequest?.section, .authored)
+    }
+
     func testLocalAPIPrCommandReturnsNotFoundWhenMissing() {
         let snapshot = makeTwoPRSnapshot()
 
