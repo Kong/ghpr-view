@@ -2391,6 +2391,7 @@ final class UpdateLogicTests: XCTestCase {
         }
 
         let primary = makeMentionPullRequest(id: 708, number: 8, category: .authored)
+        let assigned = makeMentionPullRequest(id: 712, number: 12, category: .assigned)
         var legacyMentioned = makeMentionPullRequest(id: 709, number: 9, category: .mentioned)
         legacyMentioned.mentionCount = 8
         let merged = makeMentionPullRequest(
@@ -2412,7 +2413,7 @@ final class UpdateLogicTests: XCTestCase {
         PRCache.shared.save(
             PRList(
                 lastUpdated: mentionDate(100),
-                pullRequests: [primary],
+                pullRequests: [primary, assigned],
                 mentionedPullRequests: [legacyMentioned],
                 mergedPullRequests: [merged],
                 isLoading: false,
@@ -2429,7 +2430,8 @@ final class UpdateLogicTests: XCTestCase {
         manager.configuration = .default
         manager.loadCachedData()
 
-        XCTAssertEqual(manager.prList.pullRequests.map(\.id), [primary.id])
+        XCTAssertEqual(manager.prList.pullRequests.map(\.id), [primary.id, assigned.id])
+        XCTAssertEqual(manager.prList.pullRequests.last?.category, .assigned)
         XCTAssertTrue(manager.prList.pullRequests.allSatisfy { $0.mentionCount == nil })
         XCTAssertEqual(manager.prList.mentionedPullRequests.map(\.id), [legacyMentioned.id])
         XCTAssertNil(manager.prList.mentionedPullRequests.first?.mentionCount)
@@ -5064,15 +5066,15 @@ private extension CmuxCommandResult {
 final class ArchivedRepoFilterTests: XCTestCase {
 
     /// Helper: minimal IndexSearchResponse JSON for one PR node.
-    private func indexSearchJSON(isArchived: Bool) -> Data {
+    private func indexSearchJSON(isArchived: Bool, databaseID: Int = 42, author: String = "testuser") -> Data {
         let json = """
         {
             "data": {
                 "search": {
                     "nodes": [
                         {
-                            "id": "PR_node_1",
-                            "databaseId": 42,
+                            "id": "PR_node_\(databaseID)",
+                            "databaseId": \(databaseID),
                             "number": 100,
                             "title": "Some PR",
                             "url": "https://github.com/owner/repo/pull/100",
@@ -5085,7 +5087,7 @@ final class ArchivedRepoFilterTests: XCTestCase {
                             "mergedAt": null,
                             "mergeable": "MERGEABLE",
                             "mergeStateStatus": "CLEAN",
-                            "author": { "login": "testuser", "avatarUrl": null },
+                            "author": { "login": "\(author)", "avatarUrl": null },
                             "repository": {
                                 "owner": { "login": "owner" },
                                 "name": "repo",
@@ -5121,10 +5123,41 @@ final class ArchivedRepoFilterTests: XCTestCase {
         return response.data.search.nodes
     }
 
+    func testIndexFetchesAssignedPRsAndDeduplicatesReviewMatches() async throws {
+        let authored = indexSearchJSON(isArchived: false)
+        let assigned = indexSearchJSON(isArchived: false, databaseID: 43, author: "backport-bot")
+        let empty = Data(#"{"data":{"search":{"nodes":[]}}}"#.utf8)
+        MockGitHubGraphQLURLProtocol.reset { request in
+            let query = String(decoding: request.httpBody ?? Data(), as: UTF8.self)
+            let response = try XCTUnwrap(HTTPURLResponse(
+                url: XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil
+            ))
+            if query.contains("is:open -author:testuser assignee:testuser") ||
+                query.contains("review-requested:testuser") {
+                return (response, assigned)
+            }
+            if query.contains("is:open author:testuser") {
+                return (response, authored)
+            }
+            return (response, empty)
+        }
+        defer { MockGitHubGraphQLURLProtocol.reset() }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MockGitHubGraphQLURLProtocol.self]
+        let client = GitHubAPIClient(token: "fake", session: URLSession(configuration: configuration))
+
+        let indexed = try await client.fetchIndex(username: "testuser")
+
+        XCTAssertEqual(indexed.map(\.databaseId), [42, 43])
+        XCTAssertEqual(indexed.map(\.category), [.authored, .assigned])
+        XCTAssertEqual(indexed.last?.author, "backport-bot")
+    }
+
     private func makePullRequest(isArchived: Bool) throws -> PullRequest {
         let nodes = try decodeIndexNodes(from: indexSearchJSON(isArchived: isArchived))
         let indexed = GitHubAPIClient(token: "fake").buildIndexedPRs(
             authored: nodes,
+            assigned: [],
             reviewRequested: [],
             reviewedBy: [],
             mergedInvolved: [],

@@ -688,7 +688,7 @@ final class GitHubAPIClient: ObservableObject {
         onProgress: (@Sendable ([PullRequest], [PullRequest], IncrementalStage) async -> Void)? = nil
     ) async throws -> CombinedPRResult {
         let indexed = try await fetchIndex(username: username)
-        logger.info("Index returned \(indexed.count, privacy: .public) PRs (authored+reviewed+merged)")
+        logger.info("Index returned \(indexed.count, privacy: .public) PRs")
 
         let cache = PRDetailCache.shared.loadEntries()
         let visibleByID = Dictionary(existingPRs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -769,11 +769,11 @@ final class GitHubAPIClient: ObservableObject {
             // dispatching new batches and serve placeholders for the rest.
             let categoryByID = Dictionary(uniqueKeysWithValues: misses.map { ($0.databaseId, $0.category) })
 
-            // Ordering: authored PRs first (user's own work paints first on cold
+            // Ordering: My PRs first (user's own work paints first on cold
             // start), then reviewRequest, then merged. Within each bucket sort
             // by owner/repo/number for batch stability.
             func orderKey(_ ip: IndexedPR) -> Int {
-                if ip.category == .authored && !ip.isMerged { return 0 }
+                if ip.category.isMyPR && !ip.isMerged { return 0 }
                 if ip.category == .reviewRequest && !ip.isMerged { return 1 }
                 return 2
             }
@@ -3635,7 +3635,7 @@ final class GitHubAPIClient: ObservableObject {
         """
     }
 
-    // One search per request. Combining all four index searches into a single
+    // One search per request. Combining the original four searches into a single
     // GraphQL document made GitHub evaluate up to 200 PR nodes (4 × first: 50)
     // with their nested repository/author/commits/reviewThreads selections in
     // one shot, which blows GitHub's per-query resource budget once the user has
@@ -3666,10 +3666,12 @@ final class GitHubAPIClient: ObservableObject {
 
     func fetchIndex(username: String) async throws -> [IndexedPR] {
         let mergedSince = Self.dateStringForSearch(daysBack: 2)
-        // Run the four searches concurrently to keep the index off the critical
+        // Run the searches concurrently to keep the index off the critical
         // path; each is independent and bounded to first: 50.
         async let authored = fetchIndexSearch(
             "is:pr is:open author:\(username)", operation: "fetchIndex.authored")
+        async let assigned = fetchIndexSearch(
+            "is:pr is:open -author:\(username) assignee:\(username)", operation: "fetchIndex.assigned")
         async let reviewRequested = fetchIndexSearch(
             "is:pr is:open -author:\(username) review-requested:\(username)",
             operation: "fetchIndex.reviewRequested")
@@ -3680,12 +3682,12 @@ final class GitHubAPIClient: ObservableObject {
             "is:pr is:merged involves:\(username) merged:>=\(mergedSince)",
             operation: "fetchIndex.mergedInvolved")
 
-        let groups = try await (authored, reviewRequested, reviewedBy, mergedInvolved)
         var indexed = buildIndexedPRs(
-            authored: groups.0,
-            reviewRequested: groups.1,
-            reviewedBy: groups.2,
-            mergedInvolved: groups.3,
+            authored: try await authored,
+            assigned: try await assigned,
+            reviewRequested: try await reviewRequested,
+            reviewedBy: try await reviewedBy,
+            mergedInvolved: try await mergedInvolved,
             username: username
         )
         await enrichIndexedLabels(&indexed)
@@ -3713,15 +3715,16 @@ final class GitHubAPIClient: ObservableObject {
 
     func buildIndexedPRs(
         authored: [IndexSearchResponse.PRNode],
+        assigned: [IndexSearchResponse.PRNode],
         reviewRequested: [IndexSearchResponse.PRNode],
         reviewedBy: [IndexSearchResponse.PRNode],
         mergedInvolved: [IndexSearchResponse.PRNode],
         username: String
     ) -> [IndexedPR] {
         let usernameLower = username.lowercased()
-        // Dedupe by databaseId: the 4 aliased searches overlap (e.g. a PR can be
+        // Dedupe by databaseId: the searches overlap (e.g. a PR can be
         // both `review-requested:me` and `reviewed-by:me`). First write wins,
-        // matching iteration order: authored → reviewRequested → reviewedBy → mergedInvolved.
+        // matching iteration order: authored → assigned → reviewRequested → reviewedBy → mergedInvolved.
         var result: [IndexedPR] = []
         var seen: Set<Int> = []
 
@@ -3804,6 +3807,11 @@ final class GitHubAPIClient: ObservableObject {
 
         for node in authored {
             if let ip = indexedFromNode(node, category: .authored, isMerged: false) {
+                appendIfNew(ip)
+            }
+        }
+        for node in assigned {
+            if let ip = indexedFromNode(node, category: .assigned, isMerged: false) {
                 appendIfNew(ip)
             }
         }

@@ -2,9 +2,12 @@ import Foundation
 
 enum PRCategory: String, Codable {
     case authored       // PRs created by user
+    case assigned
     case reviewRequest  // PRs where user is requested reviewer
     case mentioned      // PRs related via body/comments/cross references
     case directMention  // PRs outside the normal lists with pending @username mentions
+
+    var isMyPR: Bool { self == .authored || self == .assigned }
 }
 
 enum PRState: String, Codable {
