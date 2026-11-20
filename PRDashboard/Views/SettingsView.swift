@@ -65,8 +65,10 @@ struct SettingsDraft {
     var newPATToken = ""
     var monitorEnabled: Bool = true
     var notificationTargets: Set<DigestChannel> = [.macOS]
-    var notificationEventKinds: Set<PRActivityEventKind> = []
+    var notificationEventKinds: Set<PRActivityEventKind> = Set(PRActivityEventKind.allCases)
     var notificationRepositories: String = ""
+    var slackEnabled = false
+    var slackMessageTemplate = "{{digest}}"
     var slackBotToken: String = ""
     var slackUserID: String = ""
     var commentShortcuts: [CommentShortcut] = []
@@ -336,11 +338,13 @@ struct SettingsView: View {
         draft.httpProxyPassword = Keychain.loadProxyPassword()
         draft.jiraServerURL = config.jiraServerURL
         draft.monitorEnabled = config.monitorEnabled
-        draft.notificationTargets = Set(config.digestChannels)
+        draft.notificationTargets = Set(config.digestChannels.filter { $0 == .macOS })
         draft.notificationEventKinds = config.notificationEventKindFilter
         draft.notificationRepositories = config.notificationRepositories.joined(separator: ", ")
         draft.slackBotToken = Keychain.loadSlackBotToken()
         draft.slackUserID = config.slackUserID
+        draft.slackEnabled = config.slackEnabled
+        draft.slackMessageTemplate = config.slackMessageTemplate
         draft.commentShortcuts = config.commentShortcuts
         slackState = config.isSlackDeliveryConfigured
             ? .connected(config.slackWorkspaceName)
@@ -461,16 +465,19 @@ struct SettingsView: View {
             jiraRefreshInterval: existingJira.jiraRefreshInterval,
             monitorEnabled: draft.monitorEnabled,
             notificationTargets: draft.notificationTargets.map(\.rawValue).sorted(),
-            notificationEventKinds: draft.notificationEventKinds.map(\.rawValue).sorted(),
+            notificationEventKinds: draft.notificationEventKinds.isEmpty
+                ? [Configuration.noNotificationEventKinds]
+                : draft.notificationEventKinds.map(\.rawValue).sorted(),
             notificationRepositories: draft.notificationRepositories
                 .split(separator: ",")
                 .map { $0.trimmingCharacters(in: .whitespaces) }
                 .filter { !$0.isEmpty },
-            slackEnabled: existingJira.slackEnabled,
+            slackEnabled: draft.slackEnabled,
             slackWorkspaceName: existingJira.slackWorkspaceName,
             slackWorkspaceID: existingJira.slackWorkspaceID,
             slackUserID: existingJira.slackUserID,
             slackDMChannelID: existingJira.slackDMChannelID,
+            slackMessageTemplate: draft.slackMessageTemplate,
             commentShortcuts: draft.commentShortcuts
         )
 
@@ -498,6 +505,7 @@ struct SettingsContent: View {
     var raftExternalAgentIntegration: RaftExternalAgentIntegration? = nil
     @State private var showPATSwitchSheet = false
     @State private var showClearCacheConfirmation = false
+    @State private var showAllEventCategories = false
 
     private let refreshIntervalOptions: [(LocalizedStringKey, Double)] = [
         ("1 minute", 60),
@@ -761,22 +769,15 @@ struct SettingsContent: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Deliver digests to")
                     .font(.caption)
-                ForEach(DigestChannel.allCases, id: \.self) { channel in
-                    Toggle(digestChannelTitle(channel), isOn: digestChannelBinding(channel))
-                        .toggleStyle(.checkbox)
-                }
+                Toggle("macOS notification", isOn: digestChannelBinding(.macOS))
+                    .toggleStyle(.checkbox)
             }
 
             Text("At most one digest every 30 minutes, and only when there is new work. Muting a PR or turning notifications off affects delivery only; activity keeps being collected.")
                 .font(.caption)
                 .foregroundColor(.secondary)
 
-            DisclosureGroup("Event categories") {
-                ForEach(PRActivityEventKind.allCases, id: \.self) { kind in
-                    Toggle(PRActivityDigestFormatter.changeLabel(kind), isOn: eventKindBinding(kind))
-                        .toggleStyle(.checkbox)
-                }
-            }
+            eventCategoryPicker
 
             TextField(
                 "Only these repositories (empty = the PR list filter)",
@@ -785,56 +786,67 @@ struct SettingsContent: View {
             )
             .textFieldStyle(.roundedBorder)
         }
-
-        Section("Slack Direct Message") {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Create a Slack app in your workspace with the chat:write, im:write and users:read scopes, install it, then paste its bot token and your own Slack user ID. ghpr only sends a direct message to you; it never posts to a channel.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-
-                SecureField("Bot token", text: $draft.slackBotToken, prompt: Text("xoxb-…"))
-                    .textFieldStyle(.roundedBorder)
-                    .autocorrectionDisabled(true)
-                TextField("Your Slack user ID", text: $draft.slackUserID, prompt: Text("U0123ABCDEF"))
-                    .textFieldStyle(.roundedBorder)
-                    .autocorrectionDisabled(true)
-
+        Section("Slack") {
+            Toggle("Enable Slack notifications", isOn: $draft.slackEnabled)
+                .accessibilityIdentifier("settings-slack-enabled")
+            if draft.slackEnabled {
                 VStack(alignment: .leading, spacing: 8) {
-                    Button {
-                        actions.verifySlack(draft.slackBotToken, draft.slackUserID)
-                    } label: {
-                        Label("Verify and Connect", systemImage: "checkmark.seal")
+                    Text("Create a Slack app with chat:write, im:write and users:read, install it, then enter its bot token and your Slack user ID. ghpr only sends a direct message to you.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    SecureField("Bot token", text: $draft.slackBotToken, prompt: Text("xoxb-…"))
+                        .textFieldStyle(.roundedBorder)
+                        .autocorrectionDisabled(true)
+                    TextField("Your Slack user ID", text: $draft.slackUserID, prompt: Text("U0123ABCDEF"))
+                        .textFieldStyle(.roundedBorder)
+                        .autocorrectionDisabled(true)
+
+                    HStack(spacing: 8) {
+                        Button {
+                            actions.verifySlack(draft.slackBotToken, draft.slackUserID)
+                        } label: {
+                            Label("Verify and Connect", systemImage: "checkmark.seal")
+                        }
+                        .disabled(status.slack == .verifying
+                                  || draft.slackBotToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                  || draft.slackUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                        Button {
+                            actions.sendSlackTest()
+                        } label: {
+                            Label("Send test DM", systemImage: "paperplane")
+                        }
+                        .disabled(status.slack == .verifying || !status.isSlackDeliveryConfigured)
+
+                        if status.slack == .verifying {
+                            ProgressView().controlSize(.small)
+                        }
                     }
-                    .disabled(status.slack == .verifying
-                              || draft.slackBotToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                              || draft.slackUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
-                    Button {
-                        actions.sendSlackTest()
-                    } label: {
-                        Label("Send test DM", systemImage: "paperplane")
-                    }
-                    .disabled(status.slack == .verifying || !status.isSlackDeliveryConfigured)
-
-                    if status.slack == .verifying {
-                        ProgressView().controlSize(.small)
-                    }
-                    Spacer()
-                }
-
-                slackStatusView
-
-                if status.isSlackDeliveryConfigured {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Connected workspace")
+                    slackStatusView
+                    if status.isSlackDeliveryConfigured {
+                        Text("Connected: \(status.slackWorkspaceName) · \(status.connectedSlackUserID)")
                             .font(.caption)
-                        Spacer()
-                        Text("\(status.slackWorkspaceName) · \(status.connectedSlackUserID)")
+                            .foregroundColor(.secondary)
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Message template")
+                            .font(.caption)
+                        TextEditor(text: $draft.slackMessageTemplate)
+                            .font(.system(.body, design: .monospaced))
+                            .frame(minHeight: 72, maxHeight: 120)
+                            .accessibilityLabel("Slack message template")
+                        Text("Use {{digest}} for the generated activity digest.")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
                 }
             }
+        }
+        if let raftExternalAgentIntegration {
+            RaftExternalAgentSettingsSection(integration: raftExternalAgentIntegration)
         }
     }
 
@@ -910,9 +922,6 @@ struct SettingsContent: View {
             CommentShortcutSettingsSection(shortcuts: $draft.commentShortcuts)
         }
 
-        if let raftExternalAgentIntegration {
-            RaftExternalAgentSettingsSection(integration: raftExternalAgentIntegration)
-        }
     }
 
     @ViewBuilder
@@ -1127,52 +1136,89 @@ struct SettingsContent: View {
             .font(.caption)
         }
     }
-    private func digestChannelTitle(_ channel: DigestChannel) -> String {
-        switch channel {
-        case .macOS: return String(localized: "macOS notification")
-        case .slack: return String(localized: "Slack direct message")
-        }
-    }
 
     private func digestChannelBinding(_ channel: DigestChannel) -> Binding<Bool> {
         Binding(
             get: { draft.notificationTargets.contains(channel) },
             set: { isOn in
-                var updated = draft.notificationTargets
                 if isOn {
-                    updated.insert(channel)
+                    draft.notificationTargets.insert(channel)
                 } else {
-                    // At least one delivery target has to stay selected, otherwise a
-                    // digest could never be delivered.
-                    guard updated.count > 1 else { return }
-                    updated.remove(channel)
+                    draft.notificationTargets.remove(channel)
                 }
-                draft.notificationTargets = updated
             }
         )
     }
 
-    private func eventKindBinding(_ kind: PRActivityEventKind) -> Binding<Bool> {
-        Binding(
-            get: {
-                let filter = draft.notificationEventKinds
-                return filter.isEmpty || filter.contains(kind)
-            },
-            set: { isOn in
-                var filter = draft.notificationEventKinds
-                if filter.isEmpty {
-                    // Empty means "all categories"; materialize it before removing one.
-                    filter = Set(PRActivityEventKind.allCases)
+
+    private var eventCategoryPicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("Event categories")
+                    .font(.caption)
+                Spacer()
+                Button("Select all") {
+                    draft.notificationEventKinds = Set(PRActivityEventKind.allCases)
                 }
-                if isOn {
-                    filter.insert(kind)
-                } else {
-                    guard filter.count > 1 else { return }
-                    filter.remove(kind)
+                .buttonStyle(.borderless)
+                Button("Select none") {
+                    draft.notificationEventKinds = []
                 }
-                draft.notificationEventKinds = filter == Set(PRActivityEventKind.allCases) ? [] : filter
+                .buttonStyle(.borderless)
             }
-        )
+
+            EventCategoryFlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
+                ForEach(visibleEventKinds, id: \.self) { kind in
+                    eventCategoryChip(kind)
+                }
+            }
+
+            if PRActivityEventKind.allCases.count > 8 {
+                Button(showAllEventCategories ? "Show fewer" : "Show all (\(PRActivityEventKind.allCases.count))") {
+                    showAllEventCategories.toggle()
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    private var visibleEventKinds: [PRActivityEventKind] {
+        showAllEventCategories ? PRActivityEventKind.allCases : Array(PRActivityEventKind.allCases.prefix(8))
+    }
+
+    private func eventCategoryChip(_ kind: PRActivityEventKind) -> some View {
+        let isSelected = draft.notificationEventKinds.contains(kind)
+        return Button {
+            if isSelected {
+                draft.notificationEventKinds.remove(kind)
+            } else {
+                draft.notificationEventKinds.insert(kind)
+            }
+        } label: {
+            HStack(spacing: 5) {
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                Text(PRActivityDigestFormatter.changeLabel(kind))
+                    .font(.system(size: 12))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .foregroundColor(isSelected ? Color.accentColor : Color.secondary)
+            .background(isSelected ? Color.accentColor.opacity(0.10) : Color.clear, in: Capsule())
+            .overlay {
+                Capsule().strokeBorder(
+                    isSelected ? Color.accentColor : Color.secondary.opacity(0.45),
+                    style: StrokeStyle(lineWidth: isSelected ? 1.2 : 1, dash: isSelected ? [] : [3, 3])
+                )
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityValue(isSelected ? "Selected" : "Not selected")
     }
 
     private var slackStatusView: some View {
@@ -1244,5 +1290,45 @@ struct SettingsContent: View {
                     isShown = false
                 }
         }
+    }
+}
+
+private struct EventCategoryFlowLayout: Layout {
+    var horizontalSpacing: CGFloat
+    var verticalSpacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let result = layout(subviews, width: proposal.width ?? .infinity)
+        return result.size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let result = layout(subviews, width: bounds.width)
+        for (subview, frame) in zip(subviews, result.frames) {
+            subview.place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY), proposal: .unspecified)
+        }
+    }
+
+    private func layout(_ subviews: Subviews, width: CGFloat) -> (size: CGSize, frames: [CGRect]) {
+        var frames: [CGRect] = []
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var contentWidth: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > width {
+                y += rowHeight + verticalSpacing
+                x = 0
+                rowHeight = 0
+            }
+            frames.append(CGRect(origin: CGPoint(x: x, y: y), size: size))
+            x += size.width + horizontalSpacing
+            rowHeight = max(rowHeight, size.height)
+            contentWidth = max(contentWidth, x - horizontalSpacing)
+        }
+
+        return (CGSize(width: min(contentWidth, width), height: subviews.isEmpty ? 0 : y + rowHeight), frames)
     }
 }

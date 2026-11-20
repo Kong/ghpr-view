@@ -28,6 +28,7 @@ struct Configuration: Codable, Equatable {
     var slackWorkspaceID: String
     var slackUserID: String              // recipient Slack user ID (DM target)
     var slackDMChannelID: String         // resolved through conversations.open
+    var slackMessageTemplate: String
     var commentShortcuts: [CommentShortcut]  // user-defined comment templates; empty by default
 
     static var `default`: Configuration {
@@ -59,6 +60,7 @@ struct Configuration: Codable, Equatable {
             slackWorkspaceID: "",
             slackUserID: "",
             slackDMChannelID: "",
+            slackMessageTemplate: "{{digest}}",
             commentShortcuts: []
         )
     }
@@ -91,6 +93,7 @@ struct Configuration: Codable, Equatable {
         slackWorkspaceID: String = "",
         slackUserID: String = "",
         slackDMChannelID: String = "",
+        slackMessageTemplate: String = "{{digest}}",
         commentShortcuts: [CommentShortcut] = []
     ) {
         self.refreshInterval = refreshInterval
@@ -120,6 +123,7 @@ struct Configuration: Codable, Equatable {
         self.slackWorkspaceID = slackWorkspaceID
         self.slackUserID = slackUserID
         self.slackDMChannelID = slackDMChannelID
+        self.slackMessageTemplate = slackMessageTemplate
         self.commentShortcuts = commentShortcuts
     }
 
@@ -151,6 +155,7 @@ struct Configuration: Codable, Equatable {
         case slackWorkspaceID
         case slackUserID
         case slackDMChannelID
+        case slackMessageTemplate
         case commentShortcuts
     }
 
@@ -191,6 +196,7 @@ struct Configuration: Codable, Equatable {
         slackWorkspaceName = try container.decodeIfPresent(String.self, forKey: .slackWorkspaceName) ?? defaults.slackWorkspaceName
         slackWorkspaceID = try container.decodeIfPresent(String.self, forKey: .slackWorkspaceID) ?? defaults.slackWorkspaceID
         slackUserID = try container.decodeIfPresent(String.self, forKey: .slackUserID) ?? defaults.slackUserID
+        slackMessageTemplate = try container.decodeIfPresent(String.self, forKey: .slackMessageTemplate) ?? defaults.slackMessageTemplate
         slackDMChannelID = try container.decodeIfPresent(String.self, forKey: .slackDMChannelID) ?? defaults.slackDMChannelID
         commentShortcuts = try container.decodeIfPresent([CommentShortcut].self, forKey: .commentShortcuts) ?? defaults.commentShortcuts
     }
@@ -206,16 +212,22 @@ extension Configuration {
     /// Delivery destinations for automated digests, in a stable order.
     var digestChannels: [DigestChannel] {
         var result: [DigestChannel] = []
-        for raw in notificationTargets {
-            guard let channel = DigestChannel(rawValue: raw), !result.contains(channel) else { continue }
-            result.append(channel)
+        if notificationTargets.contains(DigestChannel.macOS.rawValue) {
+            result.append(.macOS)
+        }
+        if isSlackDeliveryConfigured {
+            result.append(.slack)
         }
         return result
     }
 
-    /// Event kinds the user wants in digests. Empty means "use the built-in defaults".
+    static let noNotificationEventKinds = "__none__"
+
+    /// An empty persisted list is the legacy default (all kinds); the sentinel represents an explicit empty selection.
     var notificationEventKindFilter: Set<PRActivityEventKind> {
-        Set(notificationEventKinds.compactMap(PRActivityEventKind.init(rawValue:)))
+        if notificationEventKinds.contains(Self.noNotificationEventKinds) { return [] }
+        if notificationEventKinds.isEmpty { return Set(PRActivityEventKind.allCases) }
+        return Set(notificationEventKinds.compactMap(PRActivityEventKind.init(rawValue:)))
     }
 
     /// Activity follows the PR list repository filter. An explicitly tracked PR stays

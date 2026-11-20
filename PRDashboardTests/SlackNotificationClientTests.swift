@@ -292,6 +292,22 @@ final class SlackNotificationClientTests: XCTestCase {
         XCTAssertEqual(failure, .httpStatus(503), "Non-200, non-429 responses must be surfaced with their status code")
     }
 
+    @MainActor
+    func testSlackDigestTemplateWrapsGeneratedDigestAndFallsBackWhenBlank() {
+        let digest = "*PR needs attention*"
+
+        XCTAssertEqual(
+            SlackActivityDigestChannel.render(template: "Review queue:\n{{digest}}", digest: digest),
+            "Review queue:\n\(digest)",
+            "The template should wrap the generated digest at its placeholder"
+        )
+        XCTAssertEqual(
+            SlackActivityDigestChannel.render(template: "  ", digest: digest),
+            digest,
+            "A blank template should fall back to the generated digest"
+        )
+    }
+
     // MARK: - Escaping
 
     func testEscapedForSlackNeutralizesMentionsAndEscapesMarkup() {

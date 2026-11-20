@@ -164,6 +164,7 @@ enum RaftExternalAgentError: LocalizedError {
     case missingCLI
     case commandTimedOut
     case commandFailed(Int32, String)
+    case heldAsDraft(recoveryPath: String?)
     case profileServerMismatch
     case profileIsNotExternalAgent
     case profileMissingCapabilities
@@ -177,12 +178,28 @@ enum RaftExternalAgentError: LocalizedError {
         case .commandTimedOut: return "Raft CLI did not finish within 30 seconds. Check Raft connectivity and profile status."
         case .commandFailed(let status, let detail):
             return detail.isEmpty ? "Raft CLI exited with status \(status)." : "Raft CLI failed: \(detail)"
+        case .heldAsDraft(let recoveryPath):
+            let recovery = recoveryPath.map { " Previous draft recovery copy: \($0)." } ?? " Check Raft's saved draft before retrying."
+            return "Raft held this message as a draft; no delivery occurred.\(recovery)"
         case .profileServerMismatch: return "The selected Raft CLI profile belongs to a different server."
         case .profileIsNotExternalAgent: return "The selected profile is not an External Agent profile."
         case .profileMissingCapabilities: return "The profile needs the send and mentions capabilities. Re-authorize the External Agent credential."
         case .invalidProfileResponse: return "Raft CLI returned an invalid profile identity response."
         case .invalidSendReceipt: return "Raft CLI did not return a confirmed message receipt."
         }
+    }
+    static func isHeldAsDraft(stdout: String, stderr: String) -> Bool {
+        let detail = stderr + "\n" + stdout
+        return detail.range(of: #"\"code\"\s*:\s*\"SEND_HELD_AS_DRAFT\""#, options: .regularExpression) != nil
+    }
+
+    static func heldDraftRecoveryPath(stdout: String, stderr: String) -> String? {
+        (stderr + "\n" + stdout).split(whereSeparator: \.isNewline)
+            .first(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("Recovery file:") })
+            .map { line in
+                String(line.drop(while: { $0 != ":" }).dropFirst())
+                    .trimmingCharacters(in: CharacterSet(charactersIn: " \""))
+            }
     }
 }
 
@@ -333,10 +350,6 @@ private final class RaftCLIClient {
               Self.sameOrigin(verifiedProfile.serverURL, configuration.normalizedServerURL) else {
             throw RaftExternalAgentError.profileServerMismatch
         }
-        let currentProfile = try await verifyProfile(configuration)
-        guard currentProfile.agentID == verifiedProfile.agentID else {
-            throw RaftExternalAgentError.profileServerMismatch
-        }
         var arguments = [
             "--profile", configuration.profileSlug,
             "message", "send",
@@ -474,6 +487,12 @@ private final class RaftCLIClient {
 
     private func commandError(_ result: RaftCommandResult) -> RaftExternalAgentError {
         let detail = result.stderr.isEmpty ? result.stdout : result.stderr
+        if RaftExternalAgentError.isHeldAsDraft(stdout: result.stdout, stderr: result.stderr) {
+            return .heldAsDraft(recoveryPath: RaftExternalAgentError.heldDraftRecoveryPath(
+                stdout: result.stdout,
+                stderr: result.stderr
+            ))
+        }
         return .commandFailed(result.status, String(detail.prefix(600)))
     }
 
@@ -496,9 +515,10 @@ final class RaftExternalAgentIntegration: ObservableObject {
     @Published private(set) var isSending = false
     @Published private(set) var verifiedConfiguration: RaftExternalAgentConfiguration?
     @Published private(set) var verifiedAgentID: String?
+    private var verifiedProfile: RaftVerifiedProfile?
 
     var isProfileVerifiedForCurrentConfiguration: Bool {
-        verifiedConfiguration == configuration && verifiedAgentID != nil
+        verifiedConfiguration == configuration && verifiedAgentID != nil && verifiedProfile != nil
     }
 
     private let defaults: UserDefaults
@@ -524,6 +544,7 @@ final class RaftExternalAgentIntegration: ObservableObject {
         if configuration != value {
             verifiedConfiguration = nil
             verifiedAgentID = nil
+            verifiedProfile = nil
         }
         configuration = value
         status = "Raft settings saved."
@@ -534,6 +555,7 @@ final class RaftExternalAgentIntegration: ObservableObject {
         isSending = true
         verifiedConfiguration = nil
         verifiedAgentID = nil
+        verifiedProfile = nil
         defer { isSending = false }
         let configurationBeingVerified = configuration
         do {
@@ -544,10 +566,12 @@ final class RaftExternalAgentIntegration: ObservableObject {
             }
             verifiedConfiguration = configurationBeingVerified
             verifiedAgentID = profile.agentID
+            verifiedProfile = profile
             status = "Profile verified: @\(profile.agentName) on \(configurationBeingVerified.normalizedServerURL)."
         } catch {
             verifiedConfiguration = nil
             verifiedAgentID = nil
+            verifiedProfile = nil
             status = error.localizedDescription
         }
     }
@@ -564,32 +588,26 @@ final class RaftExternalAgentIntegration: ObservableObject {
         guard !isSending else { return }
         isSending = true
         defer { isSending = false }
+        guard let verifiedProfile else {
+            status = "Verify the saved Raft profile before sending a test message."
+            return
+        }
         let configurationBeingTested = configuration
-        let confirmedAgentID = verifiedAgentID
         do {
-            let verifiedProfile = try await client.verifyProfile(configurationBeingTested)
-            guard configuration == configurationBeingTested,
-                  verifiedConfiguration == configurationBeingTested else {
-                verifiedConfiguration = nil
-                verifiedAgentID = nil
-                status = "Raft settings changed. Verify the saved settings again before sending a test message."
-                return
-            }
-            guard let confirmedAgentID, verifiedProfile.agentID == confirmedAgentID else {
-                verifiedConfiguration = nil
-                verifiedAgentID = nil
-                status = "The External Agent changed since verification. Verify the profile again before sending a test message."
-                return
-            }
             let messageID = try await client.sendTestMessage(
                 configuration: configurationBeingTested,
                 verifiedProfile: verifiedProfile
             )
             status = "Test message \(messageID) sent to \(configurationBeingTested.channel). No Agent was mentioned."
         } catch {
+            self.verifiedProfile = nil
             verifiedConfiguration = nil
             verifiedAgentID = nil
-            status = "\(error.localizedDescription) If the result is uncertain, check the channel before retrying."
+            if let raftError = error as? RaftExternalAgentError, case .heldAsDraft = raftError {
+                status = error.localizedDescription
+            } else {
+                status = "\(error.localizedDescription) Verify the profile again before sending another test message."
+            }
         }
     }
 
@@ -627,7 +645,11 @@ final class RaftExternalAgentIntegration: ObservableObject {
                 ? "Message \(receipt.messageID) was posted, but Raft reports unresolved mention delivery. Check the channel before retrying."
                 : "Message \(receipt.messageID) sent to \(configuration.channel); Raft confirmed the send."
         } catch {
-            status = "\(error.localizedDescription) If the result is uncertain, check the channel before retrying."
+            if let raftError = error as? RaftExternalAgentError, case .heldAsDraft = raftError {
+                status = error.localizedDescription
+            } else {
+                status = "\(error.localizedDescription) If the result is uncertain, check the channel before retrying."
+            }
         }
     }
 

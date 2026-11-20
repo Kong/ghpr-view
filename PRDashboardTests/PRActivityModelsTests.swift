@@ -44,7 +44,7 @@ final class PRActivityModelsTests: XCTestCase {
 
         XCTAssertTrue(configuration.monitorEnabled, "Monitoring must default to enabled for existing installs")
         XCTAssertEqual(configuration.digestChannels, [.macOS], "Existing installs must keep delivering to macOS only")
-        XCTAssertTrue(configuration.notificationEventKindFilter.isEmpty, "An empty filter means the built-in defaults")
+        XCTAssertEqual(configuration.notificationEventKindFilter, Set(PRActivityEventKind.allCases), "Legacy empty selections must default to all event categories")
         XCTAssertFalse(configuration.isSlackDeliveryConfigured, "Slack must stay unconfigured until a DM binding is verified")
         XCTAssertTrue(configuration.commentShortcuts.isEmpty, "Comment shortcuts must default to empty")
         XCTAssertFalse(
@@ -55,6 +55,13 @@ final class PRActivityModelsTests: XCTestCase {
             configuration.isRepositoryNotified("owner/repo"),
             "An empty digest filter follows the PR list filter"
         )
+    }
+
+    func testNotificationEventKindsCanExplicitlySelectNone() {
+        var configuration = Configuration.default
+        configuration.notificationEventKinds = [Configuration.noNotificationEventKinds]
+
+        XCTAssertTrue(configuration.notificationEventKindFilter.isEmpty, "The explicit none sentinel must produce an empty category filter")
     }
 
     func testConfigurationRoundTripsActivityPreferences() throws {
@@ -68,6 +75,7 @@ final class PRActivityModelsTests: XCTestCase {
         configuration.slackWorkspaceName = "Example"
         configuration.slackUserID = "U123"
         configuration.slackDMChannelID = "D123"
+        configuration.slackMessageTemplate = "Review queue:\n{{digest}}"
         configuration.commentShortcuts = [
             CommentShortcut(displayName: "Ask for tests", template: "Please add tests for {{pr_url}}")
         ]
