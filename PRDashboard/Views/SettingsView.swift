@@ -238,13 +238,15 @@ struct SettingsView: View {
         switch updateManager.state {
         case .checking:
             return "Checking…"
+        case .refreshingHomebrew:
+            return "Checking Homebrew…"
         case .downloading:
             return "Downloading…"
         case .readyToInstall:
             return "Ready to Install"
         case .installing:
             return "Installing…"
-        case .idle, .upToDate, .available, .unsupportedInstallLocation, .error:
+        case .idle, .upToDate, .available, .homebrewAvailable, .unsupportedInstallLocation, .error:
             return "Check for Updates…"
         }
     }
@@ -309,9 +311,9 @@ struct SettingsView: View {
 
     private var isUpdateBusy: Bool {
         switch updateManager.state {
-        case .checking, .downloading, .readyToInstall, .installing:
+        case .checking, .refreshingHomebrew, .downloading, .readyToInstall, .installing:
             return true
-        case .idle, .upToDate, .available, .unsupportedInstallLocation, .error:
+        case .idle, .upToDate, .available, .homebrewAvailable, .unsupportedInstallLocation, .error:
             return false
         }
     }
