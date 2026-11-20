@@ -1,0 +1,46 @@
+name: UI Demo Comment
+
+# Runs from the default branch, after the read-only recording workflow finishes.
+# The recording job executes pull request code; this job only reads the recorded
+# artifact and publishes it. It must live on the default branch: GitHub only
+# starts workflow_run triggers from workflows that exist there, so it takes
+# effect after the first merge and cannot be exercised from a pull request.
+on:
+  workflow_run:
+    workflows: ["UI Demo"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: UI Demo run ID to publish
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+concurrency:
+  group: ui-demo-comment-${{ github.event.workflow_run.id || inputs.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Publish the recorded GIF as a pull request comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
+        run: |
+          python3 scripts/ui-demo-publish.py \
+            --repo "${{ github.repository }}" \
+            --run-id "$RUN_ID" \
+            --default-branch "${{ github.event.repository.default_branch }}"
