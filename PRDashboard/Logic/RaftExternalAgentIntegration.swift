@@ -5,12 +5,32 @@ import Security
 import SwiftUI
 
 struct RaftExternalAgentConfiguration: Codable, Equatable {
+    static let defaultMessageTemplate = "{{mention}} Please review this backport PR.\n{{repository}}#{{pr_number}}: {{title}}\n{{pr_url}}\n"
+
     var enabled = false
     var serverURL = "https://app.raft.build"
     var profileSlug = ""
     var channel = ""
     var mentionAgentID = ""
     var mentionAgentHandle = ""
+    var messageTemplate = Self.defaultMessageTemplate
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled, serverURL, profileSlug, channel, mentionAgentID, mentionAgentHandle, messageTemplate
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try values.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        serverURL = try values.decodeIfPresent(String.self, forKey: .serverURL) ?? "https://app.raft.build"
+        profileSlug = try values.decodeIfPresent(String.self, forKey: .profileSlug) ?? ""
+        channel = try values.decodeIfPresent(String.self, forKey: .channel) ?? ""
+        mentionAgentID = try values.decodeIfPresent(String.self, forKey: .mentionAgentID) ?? ""
+        mentionAgentHandle = try values.decodeIfPresent(String.self, forKey: .mentionAgentHandle) ?? ""
+        messageTemplate = try values.decodeIfPresent(String.self, forKey: .messageTemplate) ?? Self.defaultMessageTemplate
+    }
 
     var routeIdentity: String {
         [normalizedServerURL, profileSlug, channel, mentionAgentID, mentionAgentHandle]
@@ -46,7 +66,26 @@ struct RaftExternalAgentConfiguration: Codable, Equatable {
               handle.range(of: "^[\\p{L}\\p{N}_-]+$", options: .regularExpression) != nil else {
             return "Enter the Agent handle, with or without the leading @."
         }
+        if let error = RaftMessageTemplate.validate(messageTemplate) {
+            return error.localizedDescription
+        }
         return nil
+    }
+
+    func renderMessage(for pr: PullRequest) throws -> String {
+        let mention = "@\(Self.normalizedHandle(mentionAgentHandle))"
+        let repository = pr.repoFullName
+        let url = "https://github.com/\(repository)/pull/\(pr.number)"
+        return try RaftMessageTemplate.render(
+            messageTemplate,
+            values: [
+                "mention": mention,
+                "repository": repository,
+                "pr_number": String(pr.number),
+                "title": pr.title,
+                "pr_url": url
+            ]
+        )
     }
 
     static func normalizedHandle(_ value: String) -> String {
@@ -56,6 +95,67 @@ struct RaftExternalAgentConfiguration: Codable, Equatable {
 
     func mentionSelector() -> String {
         "agent:\(mentionAgentID):\(Self.normalizedHandle(mentionAgentHandle))"
+    }
+}
+
+enum RaftMessageTemplate {
+    static func render(_ template: String, values: [String: String]) throws -> String {
+        var output = ""
+        var remainder = Substring(template)
+        while let openRange = remainder.range(of: "{{") {
+            output += remainder[remainder.startIndex..<openRange.lowerBound]
+            let afterOpen = remainder[openRange.upperBound...]
+            guard let closeRange = afterOpen.range(of: "}}") else {
+                throw RaftMessageTemplateError.malformedPlaceholder
+            }
+            let name = afterOpen[afterOpen.startIndex..<closeRange.lowerBound]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let value = values[name] else {
+                throw RaftMessageTemplateError.unknownVariable(String(name))
+            }
+            output += value
+            remainder = afterOpen[closeRange.upperBound...]
+        }
+        output += remainder
+        return output
+    }
+
+    static func validate(_ template: String) -> RaftMessageTemplateError? {
+        guard !template.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .emptyTemplate
+        }
+        var remainder = Substring(template)
+        let supported = Set(["mention", "repository", "pr_number", "title", "pr_url"])
+        while let openRange = remainder.range(of: "{{") {
+            let afterOpen = remainder[openRange.upperBound...]
+            guard let closeRange = afterOpen.range(of: "}}") else {
+                return .malformedPlaceholder
+            }
+            let name = afterOpen[afterOpen.startIndex..<closeRange.lowerBound]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard supported.contains(String(name)) else {
+                return .unknownVariable(String(name))
+            }
+            remainder = afterOpen[closeRange.upperBound...]
+        }
+        return nil
+    }
+}
+
+enum RaftMessageTemplateError: LocalizedError {
+    case emptyTemplate
+    case malformedPlaceholder
+    case unknownVariable(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .emptyTemplate:
+            return "Enter a Raft message template."
+        case .malformedPlaceholder:
+            return "The Raft message template has an unclosed {{variable}} placeholder."
+        case .unknownVariable(let name):
+            return "Unknown Raft message template variable: {{\(name)}}."
+        }
     }
 }
 
@@ -199,10 +299,7 @@ private final class RaftCLIClient {
         configuration: RaftExternalAgentConfiguration,
         verifiedProfile: RaftVerifiedProfile
     ) async throws -> (messageID: String, partial: Bool) {
-        let handle = RaftExternalAgentConfiguration.normalizedHandle(configuration.mentionAgentHandle)
-        let repository = pr.repoFullName
-        let url = "https://github.com/\(repository)/pull/\(pr.number)"
-        let content = "@\(handle) Please review this backport PR.\n\(repository)#\(pr.number): \(pr.title)\n\(url)\n"
+        let content = try configuration.renderMessage(for: pr)
         return try await sendMessage(
             content,
             configuration: configuration,
@@ -644,6 +741,20 @@ struct RaftExternalAgentSettingsSection: View {
             if let validationMessage {
                 Text(validationMessage)
                     .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Raft PR Message Template")
+                    .font(.caption)
+                TextEditor(text: $draft.messageTemplate)
+                    .font(.system(size: 12, design: .monospaced))
+                    .frame(height: 100)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(Color.secondary.opacity(0.3))
+                    )
+                Text("Variables: {{mention}} {{repository}} {{pr_number}} {{title}} {{pr_url}}. The default template mentions the selected Agent.")
+                    .font(.caption2)
                     .foregroundColor(.secondary)
             }
         }
