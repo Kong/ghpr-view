@@ -197,6 +197,20 @@ def upsert_comment(repo, pr_number, body_text):
     return "created"
 
 
+def single_pull_request(run, run_id, expected_number=None):
+    """Return the one pull request a run belongs to, checking the lock's expectation."""
+    pull_requests = run.get("pull_requests") or []
+    if len(pull_requests) != 1:
+        raise PublishError(f"run {run_id} is not tied to exactly one pull request")
+    number = pull_requests[0]["number"]
+    if expected_number is not None and str(number) != str(expected_number):
+        raise PublishError(
+            f"run {run_id} belongs to #{number}, not the #{expected_number} "
+            "the publish lock was taken for"
+        )
+    return number
+
+
 def confirm_head(repo, pr_number, expected_sha):
     pull_request = gh_api(api_path(repo, f"pulls/{pr_number}"))
     if pull_request.get("state") != "open":
@@ -223,6 +237,9 @@ def main():
                         help="verify and extract, but write nothing")
     parser.add_argument("--note", default=None,
                         help="extra sentence to append, for a manual publish")
+    parser.add_argument("--expect-pr", default=None,
+                        help="fail unless the run belongs to this pull request; keeps the "
+                             "publish lock and the published pull request in agreement")
     options = parser.parse_args()
 
     if not os.environ.get("GH_TOKEN"):
@@ -235,10 +252,12 @@ def main():
         raise PublishError(f"run {options.run_id} concluded {run.get('conclusion')}")
     if run.get("path") != RECORD_WORKFLOW_PATH:
         raise PublishError(f"run {options.run_id} came from {run.get('path')}")
-    pull_requests = run.get("pull_requests") or []
-    if len(pull_requests) != 1:
-        raise PublishError(f"run {options.run_id} is not tied to exactly one pull request")
-    pr_number = pull_requests[0]["number"]
+    pr_number = single_pull_request(run, options.run_id, options.expect_pr)
+    if options.expect_pr is not None and str(pr_number) != str(options.expect_pr):
+        raise PublishError(
+            f"run {options.run_id} belongs to #{pr_number}, not the #{options.expect_pr} "
+            "the publish lock was taken for"
+        )
 
     run_sha = run.get("head_sha")
     confirm_head(options.repo, pr_number, run_sha)

@@ -212,6 +212,23 @@ class StoreTests(unittest.TestCase):
         self.assertTrue(url.endswith("?v=" + "c" * 40))
 
 
+class LockTests(unittest.TestCase):
+    def test_run_must_own_exactly_one_pull_request(self):
+        self.assertEqual(
+            ui_demo_publish.single_pull_request({"pull_requests": [{"number": 22}]}, 1),
+            22,
+        )
+        for run in ({"pull_requests": []}, {"pull_requests": [{"number": 1}, {"number": 2}]}):
+            with self.assertRaises(ui_demo_publish.PublishError):
+                ui_demo_publish.single_pull_request(run, 1)
+
+    def test_lock_expectation_must_match_the_run(self):
+        run = {"pull_requests": [{"number": 22}]}
+        self.assertEqual(ui_demo_publish.single_pull_request(run, 1, "22"), 22)
+        with self.assertRaises(ui_demo_publish.PublishError):
+            ui_demo_publish.single_pull_request(run, 1, 23)
+
+
 class HeadTests(unittest.TestCase):
     def run_with(self, routes, call):
         fake = FakeGH(routes)
