@@ -199,6 +199,39 @@ private final class RaftCLIClient {
         configuration: RaftExternalAgentConfiguration,
         verifiedProfile: RaftVerifiedProfile
     ) async throws -> (messageID: String, partial: Bool) {
+        let handle = RaftExternalAgentConfiguration.normalizedHandle(configuration.mentionAgentHandle)
+        let repository = pr.repoFullName
+        let url = "https://github.com/\(repository)/pull/\(pr.number)"
+        let content = "@\(handle) Please review this backport PR.\n\(repository)#\(pr.number): \(pr.title)\n\(url)\n"
+        return try await sendMessage(
+            content,
+            configuration: configuration,
+            verifiedProfile: verifiedProfile,
+            mentionSelector: configuration.mentionSelector()
+        )
+    }
+
+    func sendTestMessage(
+        configuration: RaftExternalAgentConfiguration,
+        verifiedProfile: RaftVerifiedProfile
+    ) async throws -> String {
+        let sentAt = ISO8601DateFormatter().string(from: Date())
+        let content = "ghpr Raft connection test. This is a manual test message sent at \(sentAt); no action is required.\n"
+        let receipt = try await sendMessage(
+            content,
+            configuration: configuration,
+            verifiedProfile: verifiedProfile,
+            mentionSelector: nil
+        )
+        return receipt.messageID
+    }
+
+    private func sendMessage(
+        _ content: String,
+        configuration: RaftExternalAgentConfiguration,
+        verifiedProfile: RaftVerifiedProfile,
+        mentionSelector: String?
+    ) async throws -> (messageID: String, partial: Bool) {
         guard verifiedProfile.profileSlug == configuration.profileSlug,
               Self.sameOrigin(verifiedProfile.serverURL, configuration.normalizedServerURL) else {
             throw RaftExternalAgentError.profileServerMismatch
@@ -207,21 +240,17 @@ private final class RaftCLIClient {
         guard currentProfile.agentID == verifiedProfile.agentID else {
             throw RaftExternalAgentError.profileServerMismatch
         }
-        let handle = RaftExternalAgentConfiguration.normalizedHandle(configuration.mentionAgentHandle)
-        let repository = pr.repoFullName
-        let url = "https://github.com/\(repository)/pull/\(pr.number)"
-        let content = "@\(handle) Please review this backport PR.\n\(repository)#\(pr.number): \(pr.title)\n\(url)\n"
-        let result = try await run(
-            arguments: [
-                "--profile", configuration.profileSlug,
-                "message", "send",
-                "--target", configuration.channel,
-                "--target-confirmed",
-                "--mention", configuration.mentionSelector(),
-                "--json"
-            ],
-            standardInput: Data(content.utf8)
-        )
+        var arguments = [
+            "--profile", configuration.profileSlug,
+            "message", "send",
+            "--target", configuration.channel,
+            "--target-confirmed"
+        ]
+        if let mentionSelector {
+            arguments += ["--mention", mentionSelector]
+        }
+        arguments.append("--json")
+        let result = try await run(arguments: arguments, standardInput: Data(content.utf8))
         guard result.status == 0 else { throw commandError(result) }
         guard let data = result.stdout.data(using: .utf8),
               let receipt = try? JSONDecoder().decode(RaftSendReceipt.self, from: data),
@@ -368,6 +397,12 @@ final class RaftExternalAgentIntegration: ObservableObject {
     @Published private(set) var configuration: RaftExternalAgentConfiguration
     @Published private(set) var status = ""
     @Published private(set) var isSending = false
+    @Published private(set) var verifiedConfiguration: RaftExternalAgentConfiguration?
+    @Published private(set) var verifiedAgentID: String?
+
+    var isProfileVerifiedForCurrentConfiguration: Bool {
+        verifiedConfiguration == configuration && verifiedAgentID != nil
+    }
 
     private let defaults: UserDefaults
     private let client = RaftCLIClient()
@@ -389,6 +424,10 @@ final class RaftExternalAgentIntegration: ObservableObject {
             throw RaftExternalAgentError.invalidConfiguration(message)
         }
         defaults.set(try JSONEncoder().encode(value), forKey: Self.configurationKey)
+        if configuration != value {
+            verifiedConfiguration = nil
+            verifiedAgentID = nil
+        }
         configuration = value
         status = "Raft settings saved."
     }
@@ -396,12 +435,64 @@ final class RaftExternalAgentIntegration: ObservableObject {
     func verifyProfile() async {
         guard !isSending else { return }
         isSending = true
+        verifiedConfiguration = nil
+        verifiedAgentID = nil
         defer { isSending = false }
+        let configurationBeingVerified = configuration
         do {
-            let profile = try await client.verifyProfile(configuration)
-            status = "Profile verified: @\(profile.agentName) on \(configuration.normalizedServerURL)."
+            let profile = try await client.verifyProfile(configurationBeingVerified)
+            guard configuration == configurationBeingVerified else {
+                status = "Raft settings changed during verification. Verify the saved settings again."
+                return
+            }
+            verifiedConfiguration = configurationBeingVerified
+            verifiedAgentID = profile.agentID
+            status = "Profile verified: @\(profile.agentName) on \(configurationBeingVerified.normalizedServerURL)."
         } catch {
+            verifiedConfiguration = nil
+            verifiedAgentID = nil
             status = error.localizedDescription
+        }
+    }
+
+    func sendTestMessage() async {
+        guard configuration.enabled else {
+            status = "Enable Raft Notifications before sending a test message."
+            return
+        }
+        guard isProfileVerifiedForCurrentConfiguration else {
+            status = "Verify the saved Raft profile before sending a test message."
+            return
+        }
+        guard !isSending else { return }
+        isSending = true
+        defer { isSending = false }
+        let configurationBeingTested = configuration
+        let confirmedAgentID = verifiedAgentID
+        do {
+            let verifiedProfile = try await client.verifyProfile(configurationBeingTested)
+            guard configuration == configurationBeingTested,
+                  verifiedConfiguration == configurationBeingTested else {
+                verifiedConfiguration = nil
+                verifiedAgentID = nil
+                status = "Raft settings changed. Verify the saved settings again before sending a test message."
+                return
+            }
+            guard let confirmedAgentID, verifiedProfile.agentID == confirmedAgentID else {
+                verifiedConfiguration = nil
+                verifiedAgentID = nil
+                status = "The External Agent changed since verification. Verify the profile again before sending a test message."
+                return
+            }
+            let messageID = try await client.sendTestMessage(
+                configuration: configurationBeingTested,
+                verifiedProfile: verifiedProfile
+            )
+            status = "Test message \(messageID) sent to \(configurationBeingTested.channel). No Agent was mentioned."
+        } catch {
+            verifiedConfiguration = nil
+            verifiedAgentID = nil
+            status = "\(error.localizedDescription) If the result is uncertain, check the channel before retrying."
         }
     }
 
@@ -472,12 +563,23 @@ struct RaftExternalAgentSettingsSection: View {
             }
             if draft.enabled {
                 settingsFields
-                HStack {
+                HStack(alignment: .top) {
                     Button("Save Raft Settings", action: save)
                         .disabled(!isDirty || validationMessage != nil)
                     Spacer()
                     Button("Verify Profile") { Task { await integration.verifyProfile() } }
                         .disabled(isDirty || validationMessage != nil || integration.isSending)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Button("Send Test Message") { Task { await integration.sendTestMessage() } }
+                            .accessibilityIdentifier("settings-raft-send-test-message")
+                            .disabled(isDirty || validationMessage != nil
+                                      || !integration.isProfileVerifiedForCurrentConfiguration
+                                      || integration.isSending)
+                        Text("Sends one message to \(draft.channel). Does not mention the Agent.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             } else if isDirty {
                 Button("Save Raft Settings", action: save)
