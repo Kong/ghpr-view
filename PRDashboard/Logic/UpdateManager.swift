@@ -83,6 +83,7 @@ final class UpdateManager: ObservableObject {
     private let apiReleasesURL = URL(string: "https://api.github.com/repos/xiaocang/ghpr-view/releases")!
     private let autoCheckInterval: TimeInterval
     private let initialAutoCheckDelay: TimeInterval
+    private let resolveHomebrewInstallation: (URL) -> HomebrewInstallation?
     private let lastAutoCheckKey = "PRDashboard.LastAutoUpdateCheckAt"
     private let appName = "PRDashboard"
 
@@ -103,7 +104,8 @@ final class UpdateManager: ObservableObject {
         fileManager: FileManager = .default,
         session: URLSession = .shared,
         autoCheckInterval: TimeInterval = 24 * 60 * 60,
-        initialAutoCheckDelay: TimeInterval = 10
+        initialAutoCheckDelay: TimeInterval = 10,
+        resolveHomebrewInstallation: @escaping (URL) -> HomebrewInstallation? = { HomebrewInstallation.resolve(appURL: $0) }
     ) {
         self.configuration = configuration
         self.bundle = bundle
@@ -112,6 +114,7 @@ final class UpdateManager: ObservableObject {
         self.session = session
         self.autoCheckInterval = autoCheckInterval
         self.initialAutoCheckDelay = initialAutoCheckDelay
+        self.resolveHomebrewInstallation = resolveHomebrewInstallation
         self.lastAutoCheckAt = userDefaults.object(forKey: lastAutoCheckKey) as? Date
     }
 
@@ -139,6 +142,10 @@ final class UpdateManager: ObservableObject {
     }
 
     func start() {
+        if reportHomebrewUpgradeFailure() {
+            scheduleAutomaticCheck(at: Date().addingTimeInterval(autoCheckInterval))
+            return
+        }
         scheduleAutomaticCheckIfNeeded(resetLaunchDate: true)
     }
 
@@ -152,7 +159,7 @@ final class UpdateManager: ObservableObject {
             onRequestPresentation?()
         }
 
-        guard downloadTask == nil else {
+        guard !isBusyForAutomaticCheck else {
             if !userInitiated {
                 scheduleAutomaticCheck(at: Date().addingTimeInterval(60 * 60))
             }
@@ -160,7 +167,9 @@ final class UpdateManager: ObservableObject {
         }
 
         guard checkTask == nil else {
-            if userInitiated {
+            if userInitiated, case .refreshingHomebrew = state {
+                return
+            } else if userInitiated {
                 state = .checking(userInitiated: true)
             } else {
                 scheduleAutomaticCheck(at: Date().addingTimeInterval(60 * 60))
@@ -190,7 +199,7 @@ final class UpdateManager: ObservableObject {
     }
 
     func downloadAvailableUpdate() {
-        guard downloadTask == nil else { return }
+        guard downloadTask == nil, homebrewInstallation == nil else { return }
 
         let release: ReleaseInfo
         switch state {
@@ -228,6 +237,7 @@ final class UpdateManager: ObservableObject {
 
     func installAndRestart() {
         guard case let .readyToInstall(release, targetURL) = state,
+              homebrewInstallation == nil,
               let stagedUpdate,
               stagedUpdate.matches(release) else {
             return
@@ -247,6 +257,69 @@ final class UpdateManager: ObservableObject {
                 releasePageURL: release.htmlURL,
                 userInitiated: true
             )
+        }
+    }
+
+    func refreshHomebrewMetadata() {
+        guard checkTask == nil,
+              case let .homebrewAvailable(release, _) = state,
+              let installation = homebrewInstallation else { return }
+
+        state = .refreshingHomebrew(release: release)
+        checkTask = Task {
+            defer { checkTask = nil }
+            do {
+                try await installation.refreshMetadata()
+                state = await homebrewState(for: release, installation: installation)
+            } catch {
+                presentError(
+                    title: "Homebrew Refresh Failed",
+                    message: "Run brew update in Terminal for details, then check for updates again.",
+                    release: release,
+                    releasePageURL: release.htmlURL,
+                    userInitiated: false
+                )
+            }
+        }
+    }
+
+    func upgradeWithHomebrew() {
+        guard checkTask == nil,
+              case let .homebrewAvailable(release, selectedVersion?) = state,
+              selectedVersion.canInstall(release),
+              let installation = homebrewInstallation else { return }
+
+        state = .refreshingHomebrew(release: release)
+        checkTask = Task {
+            defer { checkTask = nil }
+            let version = await installation.caskVersion()
+            guard version == selectedVersion,
+                  homebrewInstallation == installation else {
+                state = .homebrewAvailable(release: release, caskVersion: version)
+                return
+            }
+
+            do {
+                let resultURL = try homebrewUpgradeResultURL()
+                if fileManager.fileExists(atPath: resultURL.path) {
+                    try fileManager.removeItem(at: resultURL)
+                }
+                try installation.launchUpgrade(
+                    expectedVersion: selectedVersion.advertised,
+                    resultURL: resultURL,
+                    parentPID: ProcessInfo.processInfo.processIdentifier
+                )
+                state = .installing(release: release, targetURL: installation.appURL)
+                NSApplication.shared.terminate(nil)
+            } catch {
+                presentError(
+                    title: "Homebrew Upgrade Could Not Start",
+                    message: "Try running \(HomebrewInstallation.upgradeCommand) in Terminal.",
+                    release: release,
+                    releasePageURL: release.htmlURL,
+                    userInitiated: false
+                )
+            }
         }
     }
 
@@ -279,6 +352,14 @@ final class UpdateManager: ObservableObject {
                 updateLogger.info("Latest release \(atomRelease.displayVersion) is not newer than current version \(self.currentVersionString)")
                 if userInitiated {
                     state = .upToDate(release: atomRelease)
+                }
+                return
+            }
+
+            if let installation = homebrewInstallation {
+                state = await homebrewState(for: atomRelease, installation: installation)
+                if !userInitiated {
+                    onRequestPresentation?()
                 }
                 return
             }
@@ -604,6 +685,40 @@ final class UpdateManager: ObservableObject {
         }
 
         return AppVersion(version)
+    }
+
+    private var homebrewInstallation: HomebrewInstallation? {
+        resolveHomebrewInstallation(bundle.bundleURL)
+    }
+
+    private func homebrewState(for release: ReleaseInfo, installation: HomebrewInstallation) async -> UpdateState {
+        .homebrewAvailable(release: release, caskVersion: await installation.caskVersion())
+    }
+
+    private func homebrewUpgradeResultURL() throws -> URL {
+        try updatesRootDirectory().appendingPathComponent("HomebrewUpgradeResult")
+    }
+
+    private func reportHomebrewUpgradeFailure() -> Bool {
+        guard let url = try? homebrewUpgradeResultURL(),
+              let result = try? String(contentsOf: url, encoding: .utf8) else { return false }
+        try? fileManager.removeItem(at: url)
+
+        let fields = result.split(separator: "\n")
+        if fields.count == 2,
+           fields[0] == "0",
+           let version = try? currentAppVersion(),
+           version >= AppVersion(String(fields[1])) {
+            return false
+        }
+
+        presentError(
+            title: "Homebrew Upgrade Incomplete",
+            message: "The expected version was not installed. Run \(HomebrewInstallation.upgradeCommand) in Terminal for details.",
+            releasePageURL: repositoryReleasesURL,
+            userInitiated: true
+        )
+        return true
     }
 
     private func readyStateForStagedUpdate(_ stagedUpdate: StagedUpdate, release: ReleaseInfo) -> UpdateState {

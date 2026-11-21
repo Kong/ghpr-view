@@ -208,6 +208,8 @@ enum UpdateState {
     case checking(userInitiated: Bool)
     case upToDate(release: ReleaseInfo)
     case available(release: ReleaseInfo)
+    case homebrewAvailable(release: ReleaseInfo, caskVersion: HomebrewCaskVersion?)
+    case refreshingHomebrew(release: ReleaseInfo)
     case downloading(release: ReleaseInfo, bytesReceived: Int64, totalBytes: Int64)
     case readyToInstall(release: ReleaseInfo, targetURL: URL)
     case installing(release: ReleaseInfo, targetURL: URL)
@@ -220,6 +222,8 @@ enum UpdateState {
             return nil
         case let .upToDate(release),
              let .available(release),
+             let .homebrewAvailable(release, _),
+             let .refreshingHomebrew(release),
              let .downloading(release, _, _),
              let .readyToInstall(release, _),
              let .installing(release, _),
