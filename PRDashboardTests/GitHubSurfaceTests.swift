@@ -995,7 +995,7 @@ final class GitHubSurfaceTests: XCTestCase {
     }
 
     nonisolated func testExtensionCommandTimeoutKillsSleep() async throws {
-        let argument = "3"
+        let argument = uniqueSleepArgument()
         let started = Date()
         let task = Task.detached {
             try await ExtensionCommand.run(

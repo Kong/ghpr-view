@@ -21,6 +21,7 @@ private final class ExtensionCommandProcessController: @unchecked Sendable {
     private var process: Process?
     private var pid: pid_t?
     private var terminationRequested = false
+    private let exited = DispatchSemaphore(value: 0)
 
     func install(_ process: Process) {
         lock.lock()
@@ -44,6 +45,16 @@ private final class ExtensionCommandProcessController: @unchecked Sendable {
         Darwin.kill(-pid, SIGKILL)
     }
 
+    func markExited() {
+        exited.signal()
+    }
+
+    /// Blocks until the launched child has been reaped or the deadline passes, so
+    /// timeout/cancel callers never observe a still-running command.
+    func waitForExit(until deadline: DispatchTime) -> Bool {
+        exited.wait(timeout: deadline) == .success
+    }
+
     var terminationWasRequested: Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -65,9 +76,8 @@ enum ExtensionCommand {
                 let timeout = DispatchWorkItem {
                     guard gate.claim() else { return }
                     controller.terminate()
-                    DispatchQueue.global().async {
-                        continuation.resume(throwing: GitHubSubjectResolverError.commandTimedOut)
-                    }
+                    _ = controller.waitForExit(until: .now() + 2)
+                    continuation.resume(throwing: GitHubSubjectResolverError.commandTimedOut)
                 }
                 gate.timeout = timeout
                 DispatchQueue.global().asyncAfter(deadline: .now() + timeoutSeconds, execute: timeout)
@@ -118,6 +128,7 @@ private final class CommandResumeGate: @unchecked Sendable {
         currentDirectoryURL: URL?,
         controller: ExtensionCommandProcessController
     ) throws -> ExtensionCommandResult {
+        defer { controller.markExited() }
         let fileManager = FileManager.default
         let captureRoot = fileManager.temporaryDirectory
             .appendingPathComponent("ghpr-command-\(UUID().uuidString)", isDirectory: true)
