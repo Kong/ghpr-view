@@ -17,29 +17,38 @@ typealias ExtensionCommandRunner = @Sendable (
 ) async throws -> ExtensionCommandResult
 
 private final class ExtensionCommandProcessController: @unchecked Sendable {
+    enum Termination: Equatable, Sendable {
+        case timedOut
+        case cancelled
+    }
+
     private let lock = NSLock()
     private var process: Process?
     private var pid: pid_t?
-    private var terminationRequested = false
+    private var termination: Termination?
     private let exited = DispatchSemaphore(value: 0)
 
     func install(_ process: Process) {
         lock.lock()
         self.process = process
-        pid = process.processIdentifier
-        let shouldTerminate = terminationRequested
+        self.pid = process.processIdentifier
+        let requested = termination
+        let pid = self.pid
         lock.unlock()
-        if shouldTerminate {
-            terminate()
-        }
+        guard requested != nil, let pid else { return }
+        killProcessGroup(pid)
     }
 
-    func terminate() {
+    func terminate(_ reason: Termination) {
         lock.lock()
-        terminationRequested = true
+        if termination == nil { termination = reason }
         let pid = self.pid
         lock.unlock()
         guard let pid, pid > 0 else { return }
+        killProcessGroup(pid)
+    }
+
+    private func killProcessGroup(_ pid: pid_t) {
         Darwin.kill(-pid, SIGTERM)
         Darwin.kill(pid, SIGKILL)
         Darwin.kill(-pid, SIGKILL)
@@ -49,16 +58,15 @@ private final class ExtensionCommandProcessController: @unchecked Sendable {
         exited.signal()
     }
 
-    /// Blocks until the launched child has been reaped or the deadline passes, so
-    /// timeout/cancel callers never observe a still-running command.
+    /// True once the launched child has been reaped (or the deadline passes).
     func waitForExit(until deadline: DispatchTime) -> Bool {
         exited.wait(timeout: deadline) == .success
     }
 
-    var terminationWasRequested: Bool {
+    var requestedTermination: Termination? {
         lock.lock()
         defer { lock.unlock() }
-        return terminationRequested
+        return termination
     }
 }
 
@@ -74,9 +82,11 @@ enum ExtensionCommand {
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 let timeout = DispatchWorkItem {
-                    guard gate.claim() else { return }
-                    controller.terminate()
-                    _ = controller.waitForExit(until: .now() + 2)
+                    controller.terminate(.timedOut)
+                    // The launch path resumes the continuation once it has reaped the
+                    // child. Resume here only if the launch never got that far, so a
+                    // command that never started cannot hang the caller.
+                    guard !controller.waitForExit(until: .now() + 2), gate.claim() else { return }
                     continuation.resume(throwing: GitHubSubjectResolverError.commandTimedOut)
                 }
                 gate.timeout = timeout
@@ -105,7 +115,7 @@ enum ExtensionCommand {
             }
         } onCancel: {
             gate.timeout?.cancel()
-            controller.terminate()
+            controller.terminate(.cancelled)
         }
     }
 
@@ -157,8 +167,13 @@ private final class CommandResumeGate: @unchecked Sendable {
         controller.install(process)
         var status: Int32 = 0
         while waitpid(pid, &status, 0) < 0 && errno == EINTR {}
-        if controller.terminationWasRequested {
+        switch controller.requestedTermination {
+        case .timedOut?:
+            throw GitHubSubjectResolverError.commandTimedOut
+        case .cancelled?:
             throw CancellationError()
+        case nil:
+            break
         }
         try stdoutHandle.synchronize()
         try stderrHandle.synchronize()
