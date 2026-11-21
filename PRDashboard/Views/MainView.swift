@@ -241,7 +241,7 @@ struct MainView: View {
             },
             onInstallBrowserUserscript: browserUserscriptInstallAction,
             onOpenBrowserIntegrationSettings: browserIntegrationSettingsAction,
-            onNotifyRaft: {
+            onNotifyRaft: RaftExternalAgentIntegration.shared.configuration.enabled ? {
                 withLatestPR(id) { pr in
                     Task { @MainActor in
                         await RaftExternalAgentIntegration.shared.notify(pr)
@@ -251,7 +251,7 @@ struct MainView: View {
                         alert.runModal()
                     }
                 }
-            }
+            } : nil
         )
     }
     private var browserUserscriptInstallAction: (() -> Void)? {

@@ -5343,3 +5343,24 @@ final class ArchivedRepoFilterTests: XCTestCase {
         XCTAssertTrue(store.views.isEmpty, "Malformed saved-view data should recover as an empty collection")
     }
 }
+
+final class RaftHeldDraftErrorTests: XCTestCase {
+    func testHeldDraftOutputSplitAcrossStreamsIsClassifiedWithoutEchoingRawText() {
+        let stderr = """
+        Warning: replacing an unsent draft for #example.
+        Previous draft excerpt (20 chars): do not echo this text
+        Recovery file: \"/tmp/replaced-drafts/test.txt\"
+        """
+        let stdout = """
+        {\"ok\":false,\"error\":{\"code\":\"SEND_HELD_AS_DRAFT\",\"message\":\"Message held as draft; no target delivery occurred.\"}}
+        """
+        let recoveryPath = "/tmp/replaced-drafts/test.txt"
+
+        XCTAssertTrue(RaftExternalAgentError.isHeldAsDraft(stdout: stdout, stderr: stderr), "The CLI error code must classify this as a held draft across output streams")
+        XCTAssertEqual(RaftExternalAgentError.heldDraftRecoveryPath(stdout: stdout, stderr: stderr), recoveryPath, "The recovery copy path must be retained across output streams")
+        let error = RaftExternalAgentError.heldAsDraft(recoveryPath: recoveryPath)
+        XCTAssertTrue(error.localizedDescription.contains("no delivery occurred"), "The user must be told no message was delivered")
+        XCTAssertTrue(error.localizedDescription.contains(recoveryPath), "The recovery copy path must be shown")
+        XCTAssertFalse(error.localizedDescription.contains("do not echo this text"), "Raw CLI draft content must not be echoed")
+    }
+}

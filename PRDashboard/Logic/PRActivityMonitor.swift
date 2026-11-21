@@ -1034,7 +1034,7 @@ enum PRActivityEngine {
             guard configuration.isRepositoryNotified(item.reference.repoFullName, explicitlyTracked: tracked) else { continue }
             let unannounced = item.pendingEventIDs.filter { !announced.contains($0) }
             let relevant = unannounced.compactMap { eventsByID[$0] }.filter { event in
-                allowedKinds.isEmpty || allowedKinds.contains(event.kind)
+                allowedKinds.contains(event.kind)
             }
             guard !relevant.isEmpty else { continue }
             let latestEventAt = relevant.map(\.occurredAt).max() ?? now

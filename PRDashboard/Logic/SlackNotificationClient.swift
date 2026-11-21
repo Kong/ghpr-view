@@ -460,8 +460,10 @@ final class SlackActivityDigestChannel: PRActivityDigestChannel {
             channelName: nil,
             userID: configuration.slackUserID
         )
+        let digest = PRActivityDigestFormatter.slackText(for: batch)
+        let message = Self.render(template: configuration.slackMessageTemplate, digest: digest)
         let result = try await client.postDigest(
-            PRActivityDigestFormatter.slackText(for: batch),
+            message,
             connection: connection,
             token: token
         )
@@ -471,5 +473,11 @@ final class SlackActivityDigestChannel: PRActivityDigestChannel {
             messageTimestamp: result.messageTimestamp,
             recipientUserID: configuration.slackUserID
         )
+    }
+
+    static func render(template: String, digest: String) -> String {
+        template.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? digest
+            : template.replacingOccurrences(of: "{{digest}}", with: digest)
     }
 }
