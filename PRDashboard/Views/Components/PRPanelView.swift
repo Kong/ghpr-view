@@ -383,7 +383,12 @@ struct PRPanelView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if interaction.selectedCategory == .mentions { followedSection }
-                    if let followError { staleDataBanner(followError) }
+                    if let followError {
+                        Label(followError, systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .padding(8)
+                    }
                     if let error = snapshot.prList.error { staleDataBanner(error).panelGeometry(.error) }
                     if interaction.selectedCategory == .all {
                         PRSummaryView(
