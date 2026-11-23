@@ -130,20 +130,22 @@ final class MacOSUIUXTests: XCTestCase {
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         let url = "https://github.com/example/demo/pull/42"
         let pasteboard = NSPasteboard.general
-        let previousItems = pasteboard.pasteboardItems?.map { item in
+        var previousItems: [NSPasteboardItem] = []
+        for item in pasteboard.pasteboardItems ?? [] {
             let copy = NSPasteboardItem()
             for type in item.types {
                 if let data = item.data(forType: type) { copy.setData(data, forType: type) }
             }
-            return copy
-        } ?? []
+            previousItems.append(copy)
+        }
+        let restoredItems: [any NSPasteboardWriting] = previousItems.map { $0 as any NSPasteboardWriting }
         pasteboard.clearContents()
         XCTAssertTrue(pasteboard.setString(url, forType: .string))
         let testPasteboardChange = pasteboard.changeCount
         defer {
             if pasteboard.changeCount == testPasteboardChange {
                 pasteboard.clearContents()
-                if !previousItems.isEmpty { pasteboard.writeObjects(previousItems) }
+                if !restoredItems.isEmpty { _ = pasteboard.writeObjects(restoredItems) }
             }
         }
         element(app, "subscription-paste").click()
