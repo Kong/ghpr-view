@@ -11,7 +11,7 @@ const sourceBundle = fileURLToPath(
   new URL("../../mcp-ghpr-bundle/index.mjs", import.meta.url),
 );
 
-test("the copied app-resource MCP bundle initializes without node_modules", async () => {
+test("the copied app-resource MCP bundle initializes without node_modules or dynamic code generation", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "ghpr-mcp-app-resources-"));
   const resources = path.join(root, "PRDashboard.app", "Contents", "Resources");
   const copiedBundle = path.join(resources, "mcp-ghpr-bundle", "index.mjs");
@@ -20,7 +20,7 @@ test("the copied app-resource MCP bundle initializes without node_modules", asyn
 
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: [copiedBundle],
+    args: ["--disallow-code-generation-from-strings", copiedBundle],
     cwd: resources,
     env: {},
     stderr: "pipe",
