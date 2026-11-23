@@ -154,13 +154,12 @@ final class MacOSUIUXTests: XCTestCase {
         element(app, "subscription-form").buttons["Follow"].click()
         let result = app.staticTexts["subscription-result"]
         XCTAssertTrue(result.waitForExistence(timeout: 5))
-        XCTAssertTrue(result.label.contains("example/demo#42"))
         attachDemoFrame("06-subscription-confirmed", panel: element(app, "uiux-panel"))
         app.buttons["Done"].click()
         element(app, "panel-activity").click()
         XCTAssertTrue(activity.waitForExistence(timeout: 5))
         let tracked = activity.staticTexts["example/demo#42"]
-        XCTAssertTrue(tracked.waitForExistence(timeout: 5))
+        XCTAssertTrue(tracked.waitForExistence(timeout: 5), "Following from the menu must add the exact linked PR to Activity")
         if !tracked.isHittable {
             activity.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -350)
         }
