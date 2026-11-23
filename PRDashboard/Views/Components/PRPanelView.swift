@@ -85,6 +85,19 @@ struct PRPanelView: View {
                 .padding(.bottom, PanelMetrics.footerHeight + 4)
             }
         }
+        .overlay(alignment: .bottom) {
+            if showSubscription {
+                PRSubscriptionForm(
+                    subscribe: actions.subscribeToPullRequest,
+                    close: { showSubscription = false },
+                    keepResultVisible: true
+                )
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.quaternary))
+                .padding(.horizontal, PanelMetrics.inset)
+                .padding(.bottom, PanelMetrics.footerHeight + 4)
+            }
+        }
         .onAppear {
             configureInteraction()
             interaction.updateSearchText(searchText)
@@ -849,24 +862,11 @@ struct PRPanelView: View {
             .popover(isPresented: $showSyncDetails, arrowEdge: .top) { syncDetails }
             quotaView
 
-            Button { showSubscription.toggle() } label: {
-                Image(systemName: "plus.circle")
-                    .font(.system(size: PanelMetrics.symbolSize))
-                    .frame(minWidth: PanelMetrics.toolSize, minHeight: PanelMetrics.toolSize)
-            }
-            .buttonStyle(.borderless)
-            .controlSize(.small)
-            .delayedHoverTooltip(String(localized: "Subscribe by URL"))
-            .accessibilityLabel("Subscribe by URL")
-            .accessibilityIdentifier("panel-subscribe")
-            .popover(isPresented: $showSubscription, arrowEdge: .top) {
-                PRSubscriptionForm(
-                    subscribe: actions.subscribeToPullRequest,
-                    close: { showSubscription = false },
-                    keepResultVisible: true
-                )
-                .frame(width: 350)
-            }
+            Button("Follow PR") { showSubscription.toggle() }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .delayedHoverTooltip(String(localized: "Subscribe by URL"))
+                .accessibilityIdentifier("panel-subscribe")
 
             Button(action: actions.openActivity) {
                 HStack(spacing: 3) {

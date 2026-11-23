@@ -104,6 +104,7 @@ struct PRSubscriptionForm: View {
         .padding(16)
         .disabled(subscribing)
         .interactiveDismissDisabled(subscribing)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("subscription-form")
     }
 }
