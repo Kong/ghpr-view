@@ -908,7 +908,7 @@ final class GitHubAPIClient: ObservableObject {
     static func normalizeMentionedResults(_ prs: [PullRequest]) -> [PullRequest] {
         var seen = Set<Int>()
         return prs
-            .filter { $0.state == .open && seen.insert($0.id).inserted }
+            .filter { ($0.state == .open || $0.state == .merged) && seen.insert($0.id).inserted }
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 

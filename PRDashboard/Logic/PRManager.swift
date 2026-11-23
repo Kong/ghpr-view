@@ -131,7 +131,7 @@ enum DirectMentionProjector {
         let projectedMentionedPullRequests = projectKnown(
             mentionedPullRequests,
             excludingActiveDirectMentions: true
-        )
+        ) + mentionedPullRequests.filter { $0.state == .merged && !mergedIDs.contains($0.id) }
 
         var directMentionPullRequests: [PullRequest] = []
         for (id, entry) in entries {

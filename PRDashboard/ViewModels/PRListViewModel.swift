@@ -786,6 +786,13 @@ final class PRListViewModel: ObservableObject {
         prManager.activityMonitor.events(forPR: prNodeID, limit: limit)
     }
 
+    func subscribeToPullRequest(_ link: String) async throws {
+        guard let reference = PullRequestReference.parseGitHubPRLink(link) else { throw PRSubscriptionError.invalidLink }
+        guard let account = activity.account else { throw PRSubscriptionError.unavailable }
+        let pr = try await prManager.apiClient.fetchSubscription(reference)
+        try prManager.activityMonitor.subscribe(pr, account: account)
+    }
+
     func refreshActivity() {
         prManager.activityMonitor.refreshNow()
     }

@@ -223,7 +223,7 @@ extension Configuration {
 
     static let noNotificationEventKinds = "__none__"
 
-    /// An empty persisted list is the legacy default (all kinds); the sentinel represents an explicit empty selection.
+    /// An empty persisted list enables every category. The sentinel preserves an explicit empty selection.
     var notificationEventKindFilter: Set<PRActivityEventKind> {
         if notificationEventKinds.contains(Self.noNotificationEventKinds) { return [] }
         if notificationEventKinds.isEmpty { return Set(PRActivityEventKind.allCases) }

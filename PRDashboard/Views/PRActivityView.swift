@@ -14,6 +14,10 @@ struct PRActivityActions {
 struct PRActivityView: View {
     @ObservedObject var viewModel: PRListViewModel
     @ObservedObject var navigation: ActivityNavigation
+    @State private var showingSubscription = false
+    @State private var subscriptionLink = ""
+    @State private var subscriptionError: String?
+    @State private var subscribing = false
 
     var body: some View {
         PRActivityContent(
@@ -30,6 +34,48 @@ struct PRActivityView: View {
                 retry: { viewModel.retryActivityDigest($0) }
             ), navigation: navigation
         )
+        .safeAreaInset(edge: .bottom) {
+            HStack {
+                Button("Subscribe by URL") {
+                    subscriptionLink = ""
+                    subscriptionError = nil
+                    showingSubscription = true
+                }
+                Spacer()
+            }
+            .padding(12)
+        }
+        .sheet(isPresented: $showingSubscription) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Subscribe to a pull request").font(.headline)
+                TextField("https://github.com/owner/repo/pull/123", text: $subscriptionLink)
+                if let subscriptionError {
+                    Text(subscriptionError).foregroundStyle(.red)
+                }
+                HStack {
+                    Spacer()
+                    Button("Cancel") { showingSubscription = false }.keyboardShortcut(.cancelAction)
+                    Button("Subscribe") {
+                        subscribing = true
+                        Task { @MainActor in
+                            defer { subscribing = false }
+                            do {
+                                try await viewModel.subscribeToPullRequest(subscriptionLink)
+                                showingSubscription = false
+                            } catch {
+                                subscriptionError = error.localizedDescription
+                            }
+                        }
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(subscriptionLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                .disabled(subscribing)
+            }
+            .padding(20)
+            .frame(width: 420)
+            .interactiveDismissDisabled(subscribing)
+        }
     }
 }
 
@@ -214,6 +260,7 @@ struct PRActivityContent: View {
         case .requested: return String(localized: "review requested")
         case .reviewed: return String(localized: "reviewed by you")
         case .commented: return String(localized: "you commented")
+        case .assigned: return String(localized: "assigned to you")
         case .explicit: return String(localized: "tracked")
         }
     }

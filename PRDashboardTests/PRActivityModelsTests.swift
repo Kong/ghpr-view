@@ -44,7 +44,7 @@ final class PRActivityModelsTests: XCTestCase {
 
         XCTAssertTrue(configuration.monitorEnabled, "Monitoring must default to enabled for existing installs")
         XCTAssertEqual(configuration.digestChannels, [.macOS], "Existing installs must keep delivering to macOS only")
-        XCTAssertEqual(configuration.notificationEventKindFilter, Set(PRActivityEventKind.allCases), "Legacy empty selections must default to all event categories")
+        XCTAssertEqual(configuration.notificationEventKindFilter, Set(PRActivityEventKind.allCases), "Default categories include merge notifications")
         XCTAssertFalse(configuration.isSlackDeliveryConfigured, "Slack must stay unconfigured until a DM binding is verified")
         XCTAssertTrue(configuration.commentShortcuts.isEmpty, "Comment shortcuts must default to empty")
         XCTAssertFalse(

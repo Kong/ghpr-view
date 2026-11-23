@@ -562,6 +562,10 @@ enum PRActivityEngine {
     ) -> [(reason: PRActionReason, action: PRActionKind)] {
         var results: [(PRActionReason, PRActionKind)] = []
 
+        if event.kind == .prMerged {
+            if pr.isExplicitlyTracked, !explicitlyTracked(pr: pr, kind: .prMerged) { return [] }
+            return [(.pullRequestMerged, .acknowledgeMerge)]
+        }
         guard pr.lifecycle == .open else { return results }
         guard !event.isFromViewer else { return results }
         // Bot chatter stays in history unless it is a direct request to the user or a
@@ -747,6 +751,9 @@ enum PRActivityEngine {
             guard let pr = prsByNodeID[item.prNodeID] else { return item }
             var updated = item
 
+            if item.reasons.contains(.pullRequestMerged), pr.lifecycle == .merged {
+                return item
+            }
             if pr.lifecycle != .open {
                 updated.state = .superseded
                 updated.coveredEventIDs = item.eventIDs
@@ -1238,6 +1245,7 @@ enum PRActivityDigestFormatter {
         case .myReviewNeedsRereview: return String(localized: "new revision after your review")
         case .reviewRequestedDirectly: return String(localized: "you were asked to review")
         case .explicitlyTracked: return String(localized: "tracked by you")
+        case .pullRequestMerged: return String(localized: "pull request merged")
         }
     }
 
@@ -1249,6 +1257,7 @@ enum PRActivityDigestFormatter {
         case .reReview: return String(localized: "review again")
         case .resolveThread: return String(localized: "close the thread")
         case .confirmCI: return String(localized: "confirm CI")
+        case .acknowledgeMerge: return String(localized: "acknowledge merge")
         case .review: return String(localized: "review")
         }
     }
@@ -2151,6 +2160,24 @@ final class PRActivityMonitor: ObservableObject {
             item.snoozedUntil = nil
             item.stateUpdatedAt = self.clock()
         }
+    }
+
+    func subscribe(_ pr: MonitorDiscoveryOutcome.DiscoveredReference, account: MonitorAccountKey) throws {
+        guard var candidate = state, candidate.account == account else { throw PRSubscriptionError.unavailable }
+        if let index = candidate.monitoredPRs.firstIndex(where: { $0.prNodeID == pr.prNodeID }) {
+            candidate.monitoredPRs[index].isExplicitlyTracked = true
+            candidate.monitoredPRs[index].origins.insert(.explicit)
+        } else {
+            candidate.monitoredPRs.append(MonitoredPR(
+                prNodeID: pr.prNodeID, reference: pr.reference, origins: [.explicit],
+                isExplicitlyTracked: true, lifecycle: pr.lifecycle, title: pr.title, url: pr.url,
+                headOID: pr.headOID, discoveredAt: clock(), lastObservedAt: .distantPast
+            ))
+        }
+        candidate.updatedAt = clock()
+        guard commit(candidate) else { throw PRSubscriptionError.unavailable }
+        if isRunning { restartLoop() } else { refreshNow() }
+        publish()
     }
 
     func setExplicitTracking(prNodeID: String, eventKinds: Set<PRActivityEventKind>?) {

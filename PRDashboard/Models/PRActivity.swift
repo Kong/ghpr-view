@@ -51,6 +51,7 @@ struct MonitorAccountKey: Hashable, Codable {
 enum MonitorOrigin: String, Codable, CaseIterable {
     case authored
     case requested
+    case assigned
     case reviewed
     case commented
     /// Explicitly tracked by the user from the activity UI.
@@ -622,6 +623,7 @@ enum PRActionReason: String, Codable, CaseIterable {
     case myReviewNeedsRereview
     case reviewRequestedDirectly
     case explicitlyTracked
+    case pullRequestMerged
 }
 
 /// Suggested manual action. Never executed automatically.
@@ -632,6 +634,7 @@ enum PRActionKind: String, Codable {
     case reReview
     case resolveThread
     case confirmCI
+    case acknowledgeMerge
     case review
 }
 

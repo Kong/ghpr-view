@@ -807,6 +807,52 @@ final class PRActivityMonitorTests: XCTestCase {
         XCTAssertEqual(monitor.snapshot.actionItems.first?.isActionable(now: now), false)
     }
 
+    func testMergeKeepsItsOwnNotificationCandidate() async throws {
+        let (monitor, fake) = makeMonitor()
+        discoveredPR(fake)
+        setObservation(fake, [observation(source: .header, payload: header())])
+        await monitor.runPassForTesting()
+
+        setObservation(fake, [observation(source: .header, payload: header(state: .merged))])
+        await monitor.runPassForTesting()
+
+        let candidate = monitor.snapshot.actionItems.first { $0.reasons.contains(.pullRequestMerged) }
+        XCTAssertTrue(candidate?.isActionable(now: now) == true)
+        let state = try XCTUnwrap(monitor.currentStateForTesting())
+        XCTAssertNotNil(PRActivityEngine.makeDigest(state: state, configuration: .default, now: now, mutedNodeIDs: []))
+        var excluded = Configuration.default
+        excluded.notificationEventKinds = [PRActivityEventKind.reviewSubmitted.rawValue]
+        XCTAssertNil(PRActivityEngine.makeDigest(state: state, configuration: excluded, now: now, mutedNodeIDs: []))
+    }
+
+    func testSubscriptionPersistsPreviouslyUndiscoveredPR() async throws {
+        var config = Configuration.default
+        config.monitorEnabled = false
+        let store = PRActivityStore(directoryURL: directory)
+        let (monitor, _) = makeMonitor(configuration: config, store: store)
+        let account = MonitorAccountKey(endpoint: "", viewerNodeID: viewer.nodeID, login: viewer.login)
+        XCTAssertTrue(monitor.loadStateForTesting(account: account))
+        let reference = PullRequestReference(owner: "owner", repo: "unlisted", number: 7)
+        let entry = MonitorDiscoveryOutcome.DiscoveredReference(
+            prNodeID: "new-pr", reference: reference, title: "New PR", url: nil,
+            lifecycle: .open, headOID: nil, updatedAt: now, origins: [.explicit]
+        )
+        try monitor.subscribe(entry, account: account)
+        try monitor.subscribe(entry, account: account)
+        let (reloaded, _) = makeMonitor(configuration: config, store: store)
+        XCTAssertTrue(reloaded.loadStateForTesting(account: account))
+        let rows = try XCTUnwrap(reloaded.currentStateForTesting()?.monitoredPRs)
+        XCTAssertEqual(rows.map(\.reference), [reference])
+        XCTAssertTrue(rows.first?.isExplicitlyTracked == true)
+    }
+
+    func testSubscriptionLinkValidation() {
+        XCTAssertEqual(PullRequestReference.parseGitHubPRLink("https://github.com/Org/repo/pull/42/files#diff"),
+                       PullRequestReference(owner: "Org", repo: "repo", number: 42))
+        XCTAssertNil(PullRequestReference.parseGitHubPRLink("https://github.com.example/Org/repo/pull/42"))
+        XCTAssertNil(PullRequestReference.parseGitHubPRLink("https://github.com/Org/repo/issues/42"))
+    }
+
     // MARK: - Digests
 
     private func deliveredChannel(binding: [String: String] = [:]) -> FakeDigestChannel {

@@ -139,12 +139,12 @@ struct PRPanelProjection {
         let reviews = filtered.filter { $0.category == .reviewRequest }
         let pinnedReviews = reviews.filter { pinnedIdentifiers.contains($0.pinIdentifier) }
         let unpinnedReviews = reviews.filter { !pinnedIdentifiers.contains($0.pinIdentifier) }
-        let mentioned = filter(prList.mentionedPullRequests)
+        let mentioned = filter(prList.mentionedPullRequests).filter { $0.state == .open }
         let directMentions = filter(prList.directMentionPullRequests)
         let cutoff = now.addingTimeInterval(-24 * 60 * 60)
         var mergedSeen = Set<Int>()
         var nextMergedExpiry: Date?
-        let merged = filter(prList.mergedPullRequests).filter { pr in
+        let merged = filter(prList.mergedPullRequests + prList.mentionedPullRequests.filter { $0.state == .merged }).filter { pr in
             guard let mergedAt = pr.mergedAt, mergedAt >= cutoff else { return false }
             let expiry = mergedAt.addingTimeInterval(24 * 60 * 60)
             nextMergedExpiry = min(nextMergedExpiry ?? expiry, expiry)

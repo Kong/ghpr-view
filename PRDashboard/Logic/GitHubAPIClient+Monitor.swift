@@ -668,6 +668,30 @@ extension GitHubAPIClient: MonitorAcquisitionProviding {
         )
     }
 
+    func fetchSubscription(_ reference: PullRequestReference) async throws -> MonitorDiscoveryOutcome.DiscoveredReference {
+        struct Response: Decodable {
+            let data: MonitorHeaderPayload
+        }
+        let response = try await monitorExecuteGraphQL(
+            query: """
+                query SubscriptionPR($owner: String!, $repo: String!, $number: Int!) {
+                    repository(owner: $owner, name: $repo) {
+                        pullRequest(number: $number) { \(Self.monitorHeaderFields) }
+                    }
+                }
+                """,
+            operation: "SubscriptionPR",
+            variables: ["owner": reference.owner, "repo": reference.repo, "number": reference.number]
+        )
+        let payload = try JSONDecoder.githubDecoder.decode(Response.self, from: response)
+        guard let pr = payload.data.repository?.pullRequest else {
+            throw PRSubscriptionError.notFound
+        }
+        return .init(prNodeID: pr.id, reference: reference, title: pr.title,
+                     url: pr.url, lifecycle: pr.state, headOID: pr.commits?.nodes.first?.commit.oid,
+                     updatedAt: pr.updatedAt, origins: [.explicit])
+    }
+
     // MARK: Discovery
 
     func fetchMonitorDiscovery(
@@ -2943,6 +2967,9 @@ extension GitHubAPIClient: MonitorAcquisitionProviding {
         var queries: [(MonitorOrigin, String)] = []
         if scope.includeAuthored {
             queries.append((.authored, "is:pr is:open author:\(login)"))
+        }
+        if scope.includeAssigned {
+            queries.append((.assigned, "is:pr is:open -author:\(login) assignee:\(login)"))
         }
         if scope.includeRequested {
             queries.append((.requested, "is:pr is:open -author:\(login) review-requested:\(login)"))

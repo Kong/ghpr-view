@@ -71,7 +71,33 @@ struct IssueCommentSummary: Identifiable, Codable, Equatable {
     var lastEditedAt: Date? = nil
 }
 
+enum PRSubscriptionError: LocalizedError {
+    case invalidLink, notFound, unavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidLink: return String(localized: "Enter a GitHub pull request URL.")
+        case .notFound: return String(localized: "The pull request is unavailable to the signed-in account.")
+        case .unavailable: return String(localized: "Could not save the subscription. Check the signed-in account and try again.")
+        }
+    }
+}
+
 struct PullRequestReference: Hashable, Codable {
+    static func parseGitHubPRLink(_ link: String) -> Self? {
+        guard let url = URLComponents(string: link.trimmingCharacters(in: .whitespacesAndNewlines)),
+              url.scheme?.lowercased() == "https", url.host?.lowercased() == "github.com",
+              url.user == nil, url.password == nil, url.port == nil else { return nil }
+        let parts = url.path.split(separator: "/")
+        let slug = #"^[A-Za-z0-9_.-]+$"#
+        guard parts.count == 4 || (parts.count == 5 && ["files", "commits", "checks", "conversation"].contains(String(parts[4]))),
+              parts[2] == "pull",
+              parts[0].range(of: slug, options: .regularExpression) != nil,
+              parts[1].range(of: slug, options: .regularExpression) != nil,
+              let number = Int(parts[3]), number > 0, number <= Int(Int32.max) else { return nil }
+        return Self(owner: String(parts[0]), repo: String(parts[1]), number: number)
+    }
+
     let owner: String
     let repo: String
     let number: Int
