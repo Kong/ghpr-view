@@ -128,7 +128,10 @@ final class MacOSUIUXTests: XCTestCase {
         let field = app.textFields["activity-subscription-url"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.click()
-        field.typeText("https://github.com/example/demo/pull/42")
+        let url = "https://github.com/example/demo/pull/42"
+        // The native panel exposes its field editor separately from the text field.
+        app.typeText(url)
+        XCTAssertEqual(controlValue(field), url)
         attachDemoFrame("05-subscribe-by-url", panel: element(app, "uiux-panel"))
         element(app, "subscription-form").buttons["Follow"].click()
         let result = element(app, "subscription-result")

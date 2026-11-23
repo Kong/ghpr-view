@@ -147,9 +147,18 @@ private struct PanelSubscriptionURLField: NSViewRepresentable {
             super.viewDidMoveToWindow()
             DispatchQueue.main.async { [weak self] in
                 guard let self, let window = self.window, window.isVisible else { return }
-                window.makeKey()
+                if !NSApp.isActive { NSApp.activate(ignoringOtherApps: true) }
+                if !window.isKeyWindow { window.makeKey() }
                 window.makeFirstResponder(self)
             }
+        }
+
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        override func mouseDown(with event: NSEvent) {
+            if !NSApp.isActive { NSApp.activate(ignoringOtherApps: true) }
+            if let window, !window.isKeyWindow { window.makeKey() }
+            super.mouseDown(with: event)
         }
     }
 
