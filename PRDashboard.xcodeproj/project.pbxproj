@@ -77,6 +77,7 @@
 		B100000D /* CommentShortcutPreparerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B200000D /* CommentShortcutPreparerTests.swift */; };
 		B1000001 /* AppUpdate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000001 /* AppUpdate.swift */; };
 		B1000002 /* UpdateManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000002 /* UpdateManager.swift */; };
+		B100007D /* HomebrewUpdate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B200007D /* HomebrewUpdate.swift */; };
 		B1000003 /* UpdateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000003 /* UpdateView.swift */; };
 		B1000004 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B2000006 /* XCTest.framework */; };
 		B1000005 /* UpdateLogicTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000005 /* UpdateLogicTests.swift */; };
@@ -210,6 +211,7 @@
 		A3000001 /* PRDashboard.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PRDashboard.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B2000001 /* AppUpdate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdate.swift; sourceTree = "<group>"; };
 		B2000002 /* UpdateManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateManager.swift; sourceTree = "<group>"; };
+		B200007D /* HomebrewUpdate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomebrewUpdate.swift; sourceTree = "<group>"; };
 		B2000003 /* UpdateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateView.swift; sourceTree = "<group>"; };
 		B2000005 /* UpdateLogicTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateLogicTests.swift; sourceTree = "<group>"; };
 		B2000006 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
@@ -344,6 +346,7 @@
 				A2000012 /* GitHubOAuthManager.swift */,
 				A2000060 /* OnboardingManager.swift */,
 				B2000002 /* UpdateManager.swift */,
+				B200007D /* HomebrewUpdate.swift */,
 				A2000072 /* AppPresentationCoordinator.swift */,
 				A2000073 /* JiraSetupCoordinator.swift */,
 				A2000095 /* MonitorAcquisition.swift */,
@@ -781,6 +784,7 @@
 				A1000012 /* GitHubOAuthManager.swift in Sources */,
 				A1000060 /* OnboardingManager.swift in Sources */,
 				B1000002 /* UpdateManager.swift in Sources */,
+				B100007D /* HomebrewUpdate.swift in Sources */,
 				A1000013 /* DateFormatters.swift in Sources */,
 				A1000015 /* TimeIntervalHelpers.swift in Sources */,
 				A1000014 /* GitVersion.generated.swift in Sources */,

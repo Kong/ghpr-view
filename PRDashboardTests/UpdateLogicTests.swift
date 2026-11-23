@@ -1166,6 +1166,131 @@ final class UpdateLogicTests: XCTestCase {
     }
 
     @MainActor
+    func testHomebrewUpdateUsesTheCaskForTheRunningCopy() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let metadata = directory.appendingPathComponent("Caskroom/prdashboard/.metadata")
+        let appDirectory = directory.appendingPathComponent("Custom Applications")
+        let appURL = appDirectory.appendingPathComponent("PRDashboard.app")
+        try FileManager.default.createDirectory(at: metadata, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: appURL, withIntermediateDirectories: true)
+        try Data(#"{"source":{"tap":"xiaocang/tap"}}"#.utf8)
+            .write(to: metadata.appendingPathComponent("INSTALL_RECEIPT.json"))
+        let config = ["default": ["appdir": "/Applications"], "explicit": ["appdir": appDirectory.path]]
+        try JSONEncoder().encode(config).write(to: metadata.appendingPathComponent("config.json"))
+
+        let installation = HomebrewInstallation.resolve(appURL: appURL, prefixes: [directory])
+        XCTAssertEqual(installation?.appURL.path, appURL.path)
+        XCTAssertEqual(installation?.executableURL.path, directory.appendingPathComponent("bin/brew").path)
+        XCTAssertNil(HomebrewInstallation.resolve(
+            appURL: URL(fileURLWithPath: "/Applications/PRDashboard.app"),
+            prefixes: [directory]
+        ))
+    }
+
+    @MainActor
+    func testHomebrewAutomaticCheckShowsCaskVersionAndRefreshesLaggingMetadata() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+            MockUpdateURLProtocol.reset()
+        }
+        let brew = directory.appendingPathComponent("brew")
+        let script = """
+        #!/bin/sh
+        refreshed="${0%/*}/refreshed"
+        case "$*" in
+          "info --cask --json=v2 xiaocang/tap/prdashboard")
+            [ "$HOMEBREW_NO_AUTO_UPDATE" = 1 ] || exit 2
+            version=1.6.4
+            [ ! -f "$refreshed" ] || version=999.0.0
+            printf '{"casks":[{"full_token":"xiaocang/tap/prdashboard","version":"%s","installed":"1.6.4"}]}\\n' "$version"
+            ;;
+          update) /usr/bin/touch "$refreshed" ;;
+          *) exit 2 ;;
+        esac
+        """
+        try script.write(to: brew, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: brew.path)
+        installMockReleaseResponses()
+        let installation = HomebrewInstallation(
+            executableURL: brew,
+            appURL: directory.appendingPathComponent("PRDashboard.app")
+        )
+        let manager = UpdateManager(
+            configuration: .default,
+            session: makeMockUpdateSession(),
+            resolveHomebrewInstallation: { _ in installation }
+        )
+        let presentationRequested = expectation(description: "Homebrew update prompted automatically")
+        manager.onRequestPresentation = { presentationRequested.fulfill() }
+
+        manager.checkForUpdates(userInitiated: false)
+
+        await fulfillment(of: [presentationRequested], timeout: 10)
+        guard case let .homebrewAvailable(release, caskVersion?) = manager.state else {
+            return XCTFail("Expected Homebrew update state")
+        }
+        XCTAssertEqual(caskVersion.advertised, AppVersion("1.6.4"))
+        XCTAssertFalse(caskVersion.canInstall(release))
+        XCTAssertEqual(MockUpdateURLProtocol.requestedURLs.map(\.path), ["/xiaocang/ghpr-view/releases.atom"])
+
+        manager.refreshHomebrewMetadata()
+
+        await waitForCondition {
+            guard case let .homebrewAvailable(release, caskVersion?) = manager.state else { return false }
+            return caskVersion.canInstall(release)
+        }
+        XCTAssertEqual(MockUpdateURLProtocol.requestedURLs.count, 1)
+    }
+
+    @MainActor
+    func testHomebrewHelperWaitsForQuitAndRecordsUpgradeFailure() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let brew = directory.appendingPathComponent("brew")
+        let script = """
+        #!/bin/sh
+        printf '%s\\n' "$@" > "${0%/*}/arguments"
+        [ "$HOMEBREW_NO_AUTO_UPDATE" = 1 ] && [ "$HOMEBREW_NO_INSTALL_CLEANUP" = 1 ] || exit 2
+        exit 17
+        """
+        try script.write(to: brew, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: brew.path)
+        let appDirectory = directory.appendingPathComponent("Custom Applications")
+        let installation = HomebrewInstallation(
+            executableURL: brew,
+            appURL: appDirectory.appendingPathComponent("PRDashboard.app")
+        )
+        let parent = Process()
+        parent.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        parent.arguments = ["15"]
+        try parent.run()
+        defer {
+            if parent.isRunning {
+                parent.terminate()
+                parent.waitUntilExit()
+            }
+        }
+
+        let result = directory.appendingPathComponent("result")
+        let arguments = directory.appendingPathComponent("arguments")
+        try installation.launchUpgrade(expectedVersion: AppVersion("1.6.5"), resultURL: result, parentPID: parent.processIdentifier)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: arguments.path))
+        parent.terminate()
+        parent.waitUntilExit()
+        await waitForCondition(timeout: 5) { FileManager.default.fileExists(atPath: result.path) }
+
+        XCTAssertEqual(try String(contentsOf: result, encoding: .utf8), "17\n1.6.5\n")
+        XCTAssertEqual(try String(contentsOf: arguments, encoding: .utf8).split(separator: "\n").map(String.init), [
+            "upgrade", "--cask", "--require-sha", "--appdir", appDirectory.path, "xiaocang/tap/prdashboard"
+        ])
+    }
+
+    @MainActor
     func testAutomaticUpdateCheckFetchesReleaseWhenIdle() async throws {
         let session = makeMockUpdateSession()
         installMockReleaseResponses()

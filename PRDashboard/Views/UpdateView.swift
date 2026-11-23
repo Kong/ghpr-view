@@ -98,6 +98,17 @@ struct UpdateView: View {
                 title: "Update Available",
                 message: "Version \(release.displayVersion) is available to download."
             )
+        case let .homebrewAvailable(release, caskVersion):
+            homebrewStatus(release: release, caskVersion: caskVersion)
+        case .refreshingHomebrew:
+            VStack(alignment: .leading, spacing: 12) {
+                statusCard(
+                    title: "Checking Homebrew",
+                    message: "Reading the PR Dashboard cask version from Homebrew."
+                )
+                ProgressView()
+                    .controlSize(.small)
+            }
         case let .downloading(_, bytesReceived, totalBytes):
             VStack(alignment: .leading, spacing: 12) {
                 statusCard(
@@ -134,6 +145,27 @@ struct UpdateView: View {
                 title: displayError.title,
                 message: displayError.message
             )
+        }
+    }
+
+    private func homebrewStatus(release: ReleaseInfo, caskVersion: HomebrewCaskVersion?) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let caskVersion {
+                statusCard(
+                    title: "Homebrew Cask Version \(caskVersion.advertised)",
+                    message: caskVersion.canInstall(release)
+                        ? "Homebrew will upgrade PR Dashboard and its installation record. The app will close and reopen."
+                        : "GitHub has version \(release.displayVersion). Refresh Homebrew metadata to check whether the cask has caught up."
+                )
+            } else {
+                statusCard(
+                    title: "Homebrew Cask Version Unavailable",
+                    message: "GitHub has version \(release.displayVersion). Refresh Homebrew metadata to check the cask version."
+                )
+            }
+            Text(HomebrewInstallation.upgradeCommand)
+                .font(.system(.body, design: .monospaced))
+                .textSelection(.enabled)
         }
     }
 
@@ -193,7 +225,7 @@ struct UpdateView: View {
                 updateManager.checkForUpdates(userInitiated: true)
             }
             .buttonStyle(.borderedProminent)
-        case .checking:
+        case .checking, .refreshingHomebrew:
             EmptyView()
         case .upToDate:
             Button("Check Again") {
@@ -206,6 +238,19 @@ struct UpdateView: View {
                 updateManager.downloadAvailableUpdate()
             }
             .buttonStyle(.borderedProminent)
+        case let .homebrewAvailable(release, caskVersion):
+            secondaryReleaseButton
+            if caskVersion?.canInstall(release) == true {
+                Button("Upgrade with Homebrew") {
+                    updateManager.upgradeWithHomebrew()
+                }
+                .buttonStyle(.borderedProminent)
+            } else {
+                Button("Refresh Homebrew") {
+                    updateManager.refreshHomebrewMetadata()
+                }
+                .buttonStyle(.borderedProminent)
+            }
         case .downloading:
             Button("Cancel") {
                 updateManager.cancelDownload()
