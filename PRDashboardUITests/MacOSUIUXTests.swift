@@ -1,4 +1,5 @@
 import XCTest
+import AppKit
 import CoreGraphics
 
 /// Runs only the isolated DEBUG host. Intent log assertions never imply a remote action occurred.
@@ -127,10 +128,25 @@ final class MacOSUIUXTests: XCTestCase {
         subscribe.click()
         let field = app.textFields["activity-subscription-url"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
-        field.click()
         let url = "https://github.com/example/demo/pull/42"
-        // The native panel exposes its field editor separately from the text field.
-        app.typeText(url)
+        let pasteboard = NSPasteboard.general
+        let previousItems = pasteboard.pasteboardItems?.map { item in
+            let copy = NSPasteboardItem()
+            for type in item.types {
+                if let data = item.data(forType: type) { copy.setData(data, forType: type) }
+            }
+            return copy
+        } ?? []
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.setString(url, forType: .string))
+        let testPasteboardChange = pasteboard.changeCount
+        defer {
+            if pasteboard.changeCount == testPasteboardChange {
+                pasteboard.clearContents()
+                if !previousItems.isEmpty { pasteboard.writeObjects(previousItems) }
+            }
+        }
+        element(app, "subscription-paste").click()
         XCTAssertEqual(controlValue(field), url)
         attachDemoFrame("05-subscribe-by-url", panel: element(app, "uiux-panel"))
         element(app, "subscription-form").buttons["Follow"].click()

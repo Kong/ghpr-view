@@ -72,8 +72,17 @@ struct PRSubscriptionForm: View {
             } else {
                 Text("Paste a pull request URL.").foregroundStyle(.secondary)
                 if keepResultVisible {
-                    PanelSubscriptionURLField(text: $link)
-                        .frame(height: 24)
+                    HStack {
+                        PanelSubscriptionURLField(text: $link)
+                            .frame(height: 24)
+                        Button("Paste") {
+                            if let clipboardText = NSPasteboard.general.string(forType: .string) {
+                                link = clipboardText.trimmingCharacters(in: .whitespacesAndNewlines)
+                                subscriptionError = nil
+                            }
+                        }
+                        .accessibilityIdentifier("subscription-paste")
+                    }
                 } else {
                     TextField("https://github.com/owner/repo/pull/123", text: $link)
                         .accessibilityIdentifier("activity-subscription-url")
@@ -137,9 +146,10 @@ private struct PanelSubscriptionURLField: NSViewRepresentable {
 
     func updateNSView(_ field: Field, context: Context) {
         context.coordinator.text = $text
-        if field.currentEditor() == nil, field.stringValue != text {
-            field.stringValue = text
-        }
+        let editor = field.currentEditor()
+        guard (editor?.string ?? field.stringValue) != text else { return }
+        if let editor { editor.string = text }
+        field.stringValue = text
     }
 
     final class Field: NSTextField {
