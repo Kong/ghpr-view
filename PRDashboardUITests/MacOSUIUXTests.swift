@@ -152,7 +152,7 @@ final class MacOSUIUXTests: XCTestCase {
         XCTAssertEqual(controlValue(field), url)
         attachDemoFrame("05-subscribe-by-url", panel: element(app, "uiux-panel"))
         element(app, "subscription-form").buttons["Follow"].click()
-        let result = element(app, "subscription-result")
+        let result = app.staticTexts["subscription-result"]
         XCTAssertTrue(result.waitForExistence(timeout: 5))
         XCTAssertTrue(result.label.contains("example/demo#42"))
         attachDemoFrame("06-subscription-confirmed", panel: element(app, "uiux-panel"))

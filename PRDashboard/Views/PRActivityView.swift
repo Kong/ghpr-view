@@ -66,8 +66,10 @@ struct PRSubscriptionForm: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Follow a GitHub link").font(.headline)
             if let result {
-                Label(result, systemImage: "checkmark.circle")
-                    .accessibilityIdentifier("subscription-result")
+                HStack {
+                    Image(systemName: "checkmark.circle").accessibilityHidden(true)
+                    Text(result).accessibilityIdentifier("subscription-result")
+                }
                 Button("Done", action: close).keyboardShortcut(.defaultAction)
             } else {
                 Text("Paste a pull request URL.").foregroundStyle(.secondary)
