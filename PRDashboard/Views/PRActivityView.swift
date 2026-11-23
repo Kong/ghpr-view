@@ -14,11 +14,6 @@ struct PRActivityActions {
 struct PRActivityView: View {
     @ObservedObject var viewModel: PRListViewModel
     @ObservedObject var navigation: ActivityNavigation
-    @State private var showingSubscription = false
-    @State private var subscriptionLink = ""
-    @State private var subscriptionError: String?
-    @State private var subscribing = false
-
     var body: some View {
         PRActivityContent(
             snapshot: viewModel.activity,
@@ -34,6 +29,19 @@ struct PRActivityView: View {
                 retry: { viewModel.retryActivityDigest($0) }
             ), navigation: navigation
         )
+        .modifier(PRSubscriptionControls(subscribe: viewModel.subscribeToPullRequest))
+    }
+}
+
+struct PRSubscriptionControls: ViewModifier {
+    var subscribe: (String) async throws -> Void
+    @State private var showingSubscription = false
+    @State private var subscriptionLink = ""
+    @State private var subscriptionError: String?
+    @State private var subscribing = false
+
+    func body(content: Content) -> some View {
+        content
         .safeAreaInset(edge: .bottom) {
             HStack {
                 Button("Subscribe by URL") {
@@ -49,6 +57,7 @@ struct PRActivityView: View {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Subscribe to a pull request").font(.headline)
                 TextField("https://github.com/owner/repo/pull/123", text: $subscriptionLink)
+                    .accessibilityIdentifier("activity-subscription-url")
                 if let subscriptionError {
                     Text(subscriptionError).foregroundStyle(.red)
                 }
@@ -60,7 +69,7 @@ struct PRActivityView: View {
                         Task { @MainActor in
                             defer { subscribing = false }
                             do {
-                                try await viewModel.subscribeToPullRequest(subscriptionLink)
+                                try await subscribe(subscriptionLink)
                                 showingSubscription = false
                             } catch {
                                 subscriptionError = error.localizedDescription

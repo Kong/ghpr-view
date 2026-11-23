@@ -1235,6 +1235,17 @@ private struct UIUXFixtureActivity: View {
     var body: some View {
         PRActivityContent(snapshot: model.activitySnapshot, groups: model.activityGroups,
             mutedIdentifiers: model.mutedIdentifiers, actions: model.activityActions, navigation: navigation)
+        .modifier(PRSubscriptionControls { link in
+            guard let reference = PullRequestReference.parseGitHubPRLink(link) else { throw PRSubscriptionError.invalidLink }
+            let fixtureID = "subscription-\(reference.identifier)"
+            guard !model.activitySnapshot.monitoredPRs.contains(where: { $0.prNodeID == fixtureID }) else { return }
+            model.activitySnapshot.monitoredPRs.insert(MonitoredPR(
+                prNodeID: fixtureID, reference: reference, origins: [.explicit],
+                isExplicitlyTracked: true, title: "Demo subscription", url: URL(string: link),
+                discoveredAt: UIUXFixtures.now, lastObservedAt: UIUXFixtures.now
+            ), at: 0)
+            model.auxiliaryIntent("Subscribed to \(reference.identifier) in memory")
+        })
         .frame(width: 560, height: 560, alignment: .topLeading)
         .background(UIUXAuxiliaryRenderProbe(token: "activity-\(navigation.digestBatchID ?? "none")-request-\(navigation.requestRevision)",
             acknowledged: { model.onAuxiliaryRendered?($0) }))

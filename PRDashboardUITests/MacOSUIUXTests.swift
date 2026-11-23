@@ -5,13 +5,14 @@ import CoreGraphics
 final class MacOSUIUXTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
-    private func launch(count: Int = 20, appearance: String? = nil, reduceMotion: Bool = false) -> XCUIApplication {
+    private func launch(count: Int = 20, appearance: String? = nil, reduceMotion: Bool = false, extraArguments: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing-uiux", "--uiux-count=\(count)"]
         if let appearance { app.launchArguments.append("--uiux-appearance=\(appearance)") }
         if reduceMotion { app.launchArguments.append("--uiux-reduce-motion") }
         // Pin the language so translated settings labels stay the strings these tests match.
         app.launchArguments.append(contentsOf: ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"])
+        app.launchArguments += extraArguments
         app.launch()
         XCTAssertTrue(app.windows["UIUX Fixtures"].waitForExistence(timeout: 8))
         return app
@@ -94,6 +95,47 @@ final class MacOSUIUXTests: XCTestCase {
         attachment.name = "ghpr-demo-\(stage)"
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    func testMergeNotificationsAndPRSubscriptionDemo() {
+        let app = launch(count: 3, extraArguments: ["--uiux-merge-demo"])
+        defer { app.terminate() }
+        let controls = app.windows["UIUX Fixtures"]
+        controls.buttons["uiux-open-settings"].click()
+        let settings = app.windows["Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        selectSettingsPage(app, rawValue: "alerts")
+        let merge = element(app, "settings-event-prMerged")
+        XCTAssertTrue(merge.waitForExistence(timeout: 5))
+        XCTAssertEqual(controlValue(merge), "Selected")
+        attachDemoFrame("01-merge-enabled", panel: settings)
+        merge.click()
+        XCTAssertEqual(controlValue(merge), "Not selected")
+        attachDemoFrame("02-merge-disabled", panel: settings)
+        settings.buttons["Cancel"].click()
+
+        selectWindow(app, named: "UIUX Fixtures")
+        controls.buttons["uiux-open-digest"].click()
+        let activity = app.windows["Activity"]
+        XCTAssertTrue(activity.staticTexts["example/project#101 · pull request merged"].waitForExistence(timeout: 5))
+        attachDemoFrame("03-merge-digest", panel: activity)
+        selectWindow(app, named: "UIUX Fixtures")
+        controls.buttons["uiux-open-activity"].click()
+        XCTAssertTrue(activity.waitForExistence(timeout: 5))
+        activity.buttons["Subscribe by URL"].click()
+        let field = app.textFields["activity-subscription-url"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.click()
+        field.typeText("https://github.com/example/demo/pull/42")
+        attachDemoFrame("04-subscribe-by-url", panel: activity)
+        app.buttons["Subscribe"].click()
+        let tracked = activity.staticTexts["example/demo#42"]
+        XCTAssertTrue(tracked.waitForExistence(timeout: 5))
+        if !tracked.isHittable {
+            activity.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -350)
+        }
+        XCTAssertTrue(tracked.isHittable)
+        attachDemoFrame("05-subscription-tracked", panel: activity)
     }
 
     func testCategorySwitchFiltersRowsAndAllRestoresGroups() {

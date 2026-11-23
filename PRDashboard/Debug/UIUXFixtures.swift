@@ -185,6 +185,14 @@ enum UIUXFixtures {
                     attemptedAt: now, completedAt: now, receipt: nil, failureMessage: nil,
                     targetWorkspace: nil, targetUserID: nil)])
         }
+        if ProcessInfo.processInfo.arguments.contains("--uiux-merge-demo") {
+            let reference = PullRequestReference(owner: "example", repo: "project", number: 101)
+            snapshot.batches[0].entries = [DigestEntry(
+                prNodeID: "fixture-pr-0", reference: reference, title: "Merge example",
+                reasons: [.pullRequestMerged], actionKinds: [.acknowledgeMerge],
+                changeKinds: [.prMerged], eventCount: 1, actionItemIDs: [], evidenceURLs: []
+            )]
+        }
         snapshot.lastDigestAt = now
         return snapshot
     }

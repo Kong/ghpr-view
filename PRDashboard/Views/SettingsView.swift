@@ -1222,6 +1222,7 @@ struct SettingsContent: View {
             }
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("settings-event-\(kind.rawValue)")
         .accessibilityValue(isSelected ? "Selected" : "Not selected")
     }
 

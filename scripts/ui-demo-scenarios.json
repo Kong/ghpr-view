@@ -1,0 +1,10 @@
+{
+  "category-switch": {
+    "test": "MacOSUIUXTests/testCategorySwitchFiltersRowsAndAllRestoresGroups()",
+    "frames": ["01-all", "02-reviews", "03-mentions", "04-my-prs", "05-all-restored"]
+  },
+  "merge-notifications-and-subscriptions": {
+    "test": "MacOSUIUXTests/testMergeNotificationsAndPRSubscriptionDemo()",
+    "frames": ["01-merge-enabled", "02-merge-disabled", "03-merge-digest", "04-subscribe-by-url", "05-subscription-tracked"]
+  }
+}

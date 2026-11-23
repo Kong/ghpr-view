@@ -7,8 +7,6 @@ import subprocess
 import sys
 
 
-TEST_ID = "MacOSUIUXTests/testCategorySwitchFiltersRowsAndAllRestoresGroups()"
-STAGES = ["01-all", "02-reviews", "03-mentions", "04-my-prs", "05-all-restored"]
 SCRIPT = Path(__file__).resolve()
 ROOT = SCRIPT.parent.parent
 
@@ -17,7 +15,14 @@ def output(*command):
     return subprocess.check_output(command, cwd=ROOT, text=True).strip()
 
 
-def capture(directory):
+def scenario_named(name):
+    scenarios = json.loads((ROOT / "scripts" / "ui-demo-scenarios.json").read_text())
+    if name not in scenarios:
+        raise ValueError(f"Unknown UI demo scenario: {name}")
+    return scenarios[name]
+
+
+def capture(directory, scenario_name=None):
     source_sha = output("git", "rev-parse", "HEAD")
     event_path = os.environ.get("GITHUB_EVENT_PATH")
     pull_request = None
@@ -25,11 +30,18 @@ def capture(directory):
         pull_request = json.loads(Path(event_path).read_text())["pull_request"]
         blocks = re.findall(r"^```ui-demo[ \t]*\r?\n(.*?)\r?\n```[ \t]*\r?$",
                             pull_request.get("body") or "", re.MULTILINE | re.DOTALL)
-        if len(blocks) != 1 or json.loads(blocks[0]) != [{"name": "category-switch"}]:
-            raise ValueError('Use one ui-demo block with [{"name":"category-switch"}].')
+        selection = json.loads(blocks[0]) if len(blocks) == 1 else None
+        if not isinstance(selection, list) or len(selection) != 1 or not isinstance(selection[0], dict):
+            raise ValueError('Select one scenario from scripts/ui-demo-scenarios.json in the ui-demo block.')
+        scenario_name = selection[0]["name"]
         if pull_request["head"]["sha"] != source_sha:
             raise ValueError("Checkout does not match the PR head.")
 
+    if not scenario_name:
+        raise ValueError("Provide the UI demo scenario name.")
+    scenario = scenario_named(scenario_name)
+    test_id = scenario["test"]
+    stages = scenario["frames"]
     bundle = directory / "demo.xcresult"
     attachments = directory / "attachments"
     artifact = directory / "artifact"
@@ -42,7 +54,7 @@ def capture(directory):
             "-derivedDataPath", str(directory / "build"), "-resultBundlePath", str(bundle),
             "-parallel-testing-enabled", "NO", "CODE_SIGN_IDENTITY=-",
             "CODE_SIGNING_REQUIRED=YES", "CODE_SIGNING_ALLOWED=YES",
-            "-only-testing:PRDashboardUITests/" + TEST_ID.removesuffix("()"), "test",
+            "-only-testing:PRDashboardUITests/" + test_id.removesuffix("()"), "test",
         ], cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
     if result.returncode != 0:
         raise RuntimeError(f"xcodebuild exited {result.returncode}; see {log_path}")
@@ -54,23 +66,23 @@ def capture(directory):
     output("xcrun", "xcresulttool", "export", "attachments", "--path", str(bundle),
            "--output-path", str(attachments))
     manifest = json.loads((attachments / "manifest.json").read_text())
-    records = [item for item in manifest if item["testIdentifier"] == TEST_ID]
+    records = [item for item in manifest if item["testIdentifier"] == test_id]
     if len(records) != 1:
-        raise ValueError(f"Expected an attachment record for {TEST_ID}.")
+        raise ValueError(f"Expected an attachment record for {test_id}.")
 
     frames = []
-    for stage in STAGES:
+    for stage in stages:
         matches = [item for item in records[0]["attachments"]
                    if f"ghpr-demo-{stage}" in item["suggestedHumanReadableName"]]
         if len(matches) != 1 or matches[0]["isAssociatedWithFailure"]:
             raise ValueError(f"Expected one successful screenshot for {stage}.")
         frames.append(str(attachments / Path(matches[0]["exportedFileName"]).name))
 
-    gif = artifact / "category-switch.gif"
+    gif = artifact / ("category-switch.gif" if scenario_name == "category-switch" else "ui-demo.gif")
     output("magick", "-delay", "140", *frames, "-resize", "720x900>",
            "-background", "#f0f0f0", "-gravity", "north", "-extent", "720x900",
            "-loop", "0", str(gif))
-    if len(output("magick", "identify", "-format", "%s\n", str(gif)).splitlines()) != len(STAGES):
+    if len(output("magick", "identify", "-format", "%s\n", str(gif)).splitlines()) != len(stages):
         raise ValueError("Unexpected GIF frame count.")
     evidence = {
         "sourceSHA": source_sha,
@@ -80,14 +92,15 @@ def capture(directory):
         "gifSHA256": hashlib.sha256(gif.read_bytes()).hexdigest(),
         "runID": os.environ.get("GITHUB_RUN_ID"),
         "pullRequest": pull_request["number"] if pull_request else None,
-        "testIdentifier": TEST_ID,
+        "testIdentifier": test_id,
         "testResult": "passed",
-        "capture": "XCTest screenshots of the fixture's native status-item popover",
-        "frames": STAGES,
+        "capture": "XCTest screenshots of the native UI using isolated fixtures",
+        "scenario": scenario_name,
+        "frames": stages,
     }
     (artifact / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n")
-    print(f"{TEST_ID} passed; captured {len(frames)} frames from {source_sha}.")
+    print(f"{test_id} passed; captured {len(frames)} frames from {source_sha}.")
 
 
 if __name__ == "__main__":
-    capture(Path(sys.argv[1]).resolve())
+    capture(Path(sys.argv[1]).resolve(), sys.argv[2] if len(sys.argv) > 2 else None)
