@@ -1172,13 +1172,25 @@ private final class UIUXFixtureModel: ObservableObject {
             isExplicitlyTracked: true, title: "Demo subscription", url: URL(string: link),
             discoveredAt: UIUXFixtures.now, lastObservedAt: UIUXFixtures.now
         ), at: 0)
+        syncFollowedPRs()
         self.auxiliaryIntent("Subscribed to \(reference.identifier) in memory")
+    }
+
+    private func syncFollowedPRs() {
+        snapshot.followedPRs = activitySnapshot.monitoredPRs.filter(\.isExplicitlyTracked)
+        publish()
     }
 
     var actions: PRPanelActions {
         PRPanelActions(
             refresh: { self.apply(.refresh) }, openActivity: { self.openIntegration("Activity") },
             subscribeToPullRequest: subscribeToPullRequest,
+            unfollowPullRequest: { pr in
+                if let index = self.activitySnapshot.monitoredPRs.firstIndex(where: { $0.prNodeID == pr.prNodeID }) {
+                    self.activitySnapshot.monitoredPRs[index].isExplicitlyTracked = false
+                    self.syncFollowedPRs()
+                }
+            },
             openSettings: { self.openIntegration("Settings") }, rowActions: { self.rowActions($0) },
             toggleFacet: { field, key in
                 var selected = self.snapshot.activeFacetSelections[field] ?? []

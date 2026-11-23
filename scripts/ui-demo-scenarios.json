@@ -5,6 +5,6 @@
   },
   "merge-notifications-and-subscriptions": {
     "test": "MacOSUIUXTests/testMergeNotificationsAndPRSubscriptionDemo()",
-    "frames": ["01-merge-enabled", "02-merge-disabled", "03-merge-digest", "04-menu-subscribe", "05-subscribe-by-url", "06-subscription-confirmed", "07-subscription-tracked"]
+    "frames": ["01-merge-enabled", "02-merge-disabled", "03-merge-digest", "04-menu-subscribe", "05-subscribe-by-url", "06-subscription-confirmed", "07-subscription-tracked", "08-inbox-unfollow"]
   }
 }

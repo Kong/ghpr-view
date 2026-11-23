@@ -115,6 +115,7 @@ struct MainView: View {
             labelSuggestions: projection.searchLabelSuggestions,
             savedViews: viewModel.savedViews,
             now: Date(),
+            followedPRs: viewModel.activity.monitoredPRs.filter(\.isExplicitlyTracked),
             rowExtensions: rowExtensions,
             actionError: extensionActionError,
             presentationRevision: viewModel.panelPublicationRevision &+ localPresentationRevision
@@ -129,6 +130,7 @@ struct MainView: View {
             },
             openActivity: { viewModel.showActivity() },
             subscribeToPullRequest: viewModel.subscribeToPullRequest,
+            unfollowPullRequest: { viewModel.setActivityTracking($0, tracked: false) },
             openSettings: { viewModel.showSettings() },
             rowActions: rowActions,
             toggleFacet: { field, key in

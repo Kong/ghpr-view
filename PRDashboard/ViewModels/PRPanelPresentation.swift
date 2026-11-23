@@ -36,7 +36,7 @@ enum PRPanelCategory: String, CaseIterable, Identifiable {
         case .all: return "All"
         case .myPRs: return "My PRs"
         case .reviews: return "Reviews"
-        case .mentions: return "Mentions"
+        case .mentions: return "Inbox"
         }
     }
 
@@ -262,6 +262,7 @@ struct PRPanelSnapshot {
     var labelSuggestions: [FacetOption]
     var savedViews: [SavedView]
     var now: Date
+    var followedPRs: [MonitoredPR] = []
     var rowExtensions: [Int: PRRowExtensionState] = [:]
     var actionError: String?
     var presentationRevision: UInt64 = 0
@@ -329,6 +330,7 @@ struct PRPanelActions {
     var refresh: () -> Void
     var openActivity: () -> Void
     var subscribeToPullRequest: (String) async throws -> Void
+    var unfollowPullRequest: (MonitoredPR) -> Void = { _ in }
     var openSettings: () -> Void
     var rowActions: (Int) -> PRRowActions
     var toggleFacet: (FacetFieldID, String) -> Void

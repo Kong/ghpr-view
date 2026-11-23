@@ -122,7 +122,9 @@ final class MacOSUIUXTests: XCTestCase {
         attachDemoFrame("03-merge-digest", panel: activity)
         selectWindow(app, named: "UIUX Fixtures")
         open(app)
+        element(app, "panel-category-mentions").click()
         let subscribe = element(app, "panel-subscribe")
+        XCTAssertTrue(subscribe.waitForExistence(timeout: 5))
         XCTAssertTrue(subscribe.isHittable)
         attachDemoFrame("04-menu-subscribe", panel: element(app, "uiux-panel"))
         subscribe.click()
@@ -156,6 +158,8 @@ final class MacOSUIUXTests: XCTestCase {
         XCTAssertTrue(result.waitForExistence(timeout: 5))
         attachDemoFrame("06-subscription-confirmed", panel: element(app, "uiux-panel"))
         app.buttons["Done"].click()
+        let unfollow = element(app, "panel-unfollow-example/demo#42")
+        XCTAssertTrue(unfollow.waitForExistence(timeout: 5))
         element(app, "panel-activity").click()
         XCTAssertTrue(activity.waitForExistence(timeout: 5))
         let tracked = activity.staticTexts["example/demo#42"]
@@ -165,6 +169,14 @@ final class MacOSUIUXTests: XCTestCase {
         }
         XCTAssertTrue(tracked.isHittable)
         attachDemoFrame("07-subscription-tracked", panel: activity)
+
+        selectWindow(app, named: "UIUX Fixtures")
+        open(app)
+        element(app, "panel-category-mentions").click()
+        XCTAssertTrue(unfollow.waitForExistence(timeout: 5))
+        unfollow.click()
+        XCTAssertTrue(unfollow.waitForNonExistence(timeout: 5))
+        attachDemoFrame("08-inbox-unfollow", panel: element(app, "uiux-panel"))
     }
 
     func testCategorySwitchFiltersRowsAndAllRestoresGroups() {
