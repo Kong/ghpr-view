@@ -70,8 +70,13 @@ struct PRSubscriptionForm: View {
                     .accessibilityIdentifier("subscription-result")
                 Button("Done", action: close).keyboardShortcut(.defaultAction)
             } else {
-                TextField("https://github.com/owner/repo/pull/123", text: $link)
-                    .accessibilityIdentifier("activity-subscription-url")
+                if keepResultVisible {
+                    PanelSubscriptionURLField(text: $link)
+                        .frame(height: 24)
+                } else {
+                    TextField("https://github.com/owner/repo/pull/123", text: $link)
+                        .accessibilityIdentifier("activity-subscription-url")
+                }
                 if let subscriptionError {
                     Text(subscriptionError).foregroundStyle(.red)
                 }
@@ -106,6 +111,56 @@ struct PRSubscriptionForm: View {
         .interactiveDismissDisabled(subscribing)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("subscription-form")
+    }
+}
+
+/// The status-item popover has its own native focus coordinator.
+private struct PanelSubscriptionURLField: NSViewRepresentable {
+    @Binding var text: String
+
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
+
+    func makeNSView(context: Context) -> Field {
+        let field = Field()
+        field.placeholderString = "https://github.com/owner/repo/pull/123"
+        field.setAccessibilityIdentifier("activity-subscription-url")
+        field.setAccessibilityLabel(String(localized: "Pull request URL"))
+        field.isEditable = true
+        field.isSelectable = true
+        field.isBezeled = true
+        field.bezelStyle = .roundedBezel
+        field.delegate = context.coordinator
+        field.stringValue = text
+        return field
+    }
+
+    func updateNSView(_ field: Field, context: Context) {
+        context.coordinator.text = $text
+        if field.currentEditor() == nil, field.stringValue != text {
+            field.stringValue = text
+        }
+    }
+
+    final class Field: NSTextField {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let window = self.window, window.isVisible else { return }
+                window.makeKey()
+                window.makeFirstResponder(self)
+            }
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var text: Binding<String>
+
+        init(text: Binding<String>) { self.text = text }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField else { return }
+            text.wrappedValue = field.stringValue
+        }
     }
 }
 
