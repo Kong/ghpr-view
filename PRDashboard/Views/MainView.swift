@@ -128,6 +128,7 @@ struct MainView: View {
                 submitUserIntent()
             },
             openActivity: { viewModel.showActivity() },
+            subscribeToPullRequest: viewModel.subscribeToPullRequest,
             openSettings: { viewModel.showSettings() },
             rowActions: rowActions,
             toggleFacet: { field, key in

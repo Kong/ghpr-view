@@ -18,6 +18,7 @@ struct PRPanelView: View {
     @State private var hoveredCategory: PRPanelCategory?
     @State private var pressedCategory: PRPanelCategory?
     @State private var showSyncDetails = false
+    @State private var showSubscription = false
     @StateObject private var tooltipPresenter = HoverTooltipPresenter()
     @State private var firstVisibleApprovalPRID: Int?
     @State private var firstVisibleReviewStatusPRID: Int?
@@ -109,6 +110,7 @@ struct PRPanelView: View {
                 hoveredCategory = nil
                 pressedCategory = nil
                 showSyncDetails = false
+                showSubscription = false
                 resetRefreshFeedback()
             }
         }
@@ -846,6 +848,25 @@ struct PRPanelView: View {
             .panelOnboardingAnchor(onboardingManager, step: .unresolvedComments, arrow: .top)
             .popover(isPresented: $showSyncDetails, arrowEdge: .top) { syncDetails }
             quotaView
+
+            Button { showSubscription.toggle() } label: {
+                Image(systemName: "plus.circle")
+                    .font(.system(size: PanelMetrics.symbolSize))
+                    .frame(minWidth: PanelMetrics.toolSize, minHeight: PanelMetrics.toolSize)
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .delayedHoverTooltip(String(localized: "Subscribe by URL"))
+            .accessibilityLabel("Subscribe by URL")
+            .accessibilityIdentifier("panel-subscribe")
+            .popover(isPresented: $showSubscription, arrowEdge: .top) {
+                PRSubscriptionForm(
+                    subscribe: actions.subscribeToPullRequest,
+                    close: { showSubscription = false },
+                    keepResultVisible: true
+                )
+                .frame(width: 350)
+            }
 
             Button(action: actions.openActivity) {
                 HStack(spacing: 3) {

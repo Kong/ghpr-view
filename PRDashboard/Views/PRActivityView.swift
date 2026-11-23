@@ -36,55 +36,75 @@ struct PRActivityView: View {
 struct PRSubscriptionControls: ViewModifier {
     var subscribe: (String) async throws -> Void
     @State private var showingSubscription = false
-    @State private var subscriptionLink = ""
-    @State private var subscriptionError: String?
-    @State private var subscribing = false
 
     func body(content: Content) -> some View {
         content
-        .safeAreaInset(edge: .bottom) {
-            HStack {
-                Button("Subscribe by URL") {
-                    subscriptionLink = ""
-                    subscriptionError = nil
-                    showingSubscription = true
+            .safeAreaInset(edge: .bottom) {
+                HStack {
+                    Button("Subscribe by URL") { showingSubscription = true }
+                    Spacer()
                 }
-                Spacer()
+                .padding(12)
             }
-            .padding(12)
-        }
-        .sheet(isPresented: $showingSubscription) {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Subscribe to a pull request").font(.headline)
-                TextField("https://github.com/owner/repo/pull/123", text: $subscriptionLink)
+            .sheet(isPresented: $showingSubscription) {
+                PRSubscriptionForm(subscribe: subscribe, close: { showingSubscription = false })
+                    .frame(width: 420)
+            }
+    }
+}
+
+struct PRSubscriptionForm: View {
+    var subscribe: (String) async throws -> Void
+    var close: () -> Void
+    var keepResultVisible = false
+    @State private var link = ""
+    @State private var subscriptionError: String?
+    @State private var result: String?
+    @State private var subscribing = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Subscribe to a pull request").font(.headline)
+            if let result {
+                Label(result, systemImage: "checkmark.circle")
+                    .accessibilityIdentifier("subscription-result")
+                Button("Done", action: close).keyboardShortcut(.defaultAction)
+            } else {
+                TextField("https://github.com/owner/repo/pull/123", text: $link)
                     .accessibilityIdentifier("activity-subscription-url")
                 if let subscriptionError {
                     Text(subscriptionError).foregroundStyle(.red)
                 }
                 HStack {
                     Spacer()
-                    Button("Cancel") { showingSubscription = false }.keyboardShortcut(.cancelAction)
+                    Button("Cancel", action: close).keyboardShortcut(.cancelAction)
                     Button("Subscribe") {
                         subscribing = true
+                        subscriptionError = nil
+                        let submittedLink = link
                         Task { @MainActor in
                             defer { subscribing = false }
                             do {
-                                try await subscribe(subscriptionLink)
-                                showingSubscription = false
+                                try await subscribe(submittedLink)
+                                if keepResultVisible, let reference = PullRequestReference.parseGitHubPRLink(submittedLink) {
+                                    result = String(localized: "Subscribed to \(reference.identifier)")
+                                } else {
+                                    close()
+                                }
                             } catch {
                                 subscriptionError = error.localizedDescription
                             }
                         }
                     }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(subscriptionLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-                .disabled(subscribing)
             }
-            .padding(20)
-            .frame(width: 420)
-            .interactiveDismissDisabled(subscribing)
         }
+        .padding(16)
+        .disabled(subscribing)
+        .interactiveDismissDisabled(subscribing)
+        .accessibilityIdentifier("subscription-form")
     }
 }
 

@@ -865,7 +865,7 @@ final class PanelInteractionCoordinatorTests: XCTestCase {
         let coordinator = PanelInteractionCoordinator()
         let panelSnapshot = snapshot((1...25).map { pr($0, age: TimeInterval($0)) })
         let actions = PRPanelActions(
-            refresh: {}, openActivity: {}, openSettings: {},
+            refresh: {}, openActivity: {}, subscribeToPullRequest: { _ in }, openSettings: {},
             rowActions: { _ in PRRowActions(onOpen: {}, onOpenJira: { _ in }, onCopyURL: {}) },
             toggleFacet: { _, _ in }, clearFacetField: { _ in }, clearAllFacets: {},
             selectLabelSuggestion: { _ in }, saveCurrentView: { _ in nil },

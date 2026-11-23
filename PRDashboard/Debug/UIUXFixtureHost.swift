@@ -1163,9 +1163,22 @@ private final class UIUXFixtureModel: ObservableObject {
         }
     }
 
+    func subscribeToPullRequest(_ link: String) async throws {
+        guard let reference = PullRequestReference.parseGitHubPRLink(link) else { throw PRSubscriptionError.invalidLink }
+        let fixtureID = "subscription-\(reference.identifier)"
+        guard !self.activitySnapshot.monitoredPRs.contains(where: { $0.prNodeID == fixtureID }) else { return }
+        self.activitySnapshot.monitoredPRs.insert(MonitoredPR(
+            prNodeID: fixtureID, reference: reference, origins: [.explicit],
+            isExplicitlyTracked: true, title: "Demo subscription", url: URL(string: link),
+            discoveredAt: UIUXFixtures.now, lastObservedAt: UIUXFixtures.now
+        ), at: 0)
+        self.auxiliaryIntent("Subscribed to \(reference.identifier) in memory")
+    }
+
     var actions: PRPanelActions {
         PRPanelActions(
             refresh: { self.apply(.refresh) }, openActivity: { self.openIntegration("Activity") },
+            subscribeToPullRequest: subscribeToPullRequest,
             openSettings: { self.openIntegration("Settings") }, rowActions: { self.rowActions($0) },
             toggleFacet: { field, key in
                 var selected = self.snapshot.activeFacetSelections[field] ?? []
@@ -1235,17 +1248,7 @@ private struct UIUXFixtureActivity: View {
     var body: some View {
         PRActivityContent(snapshot: model.activitySnapshot, groups: model.activityGroups,
             mutedIdentifiers: model.mutedIdentifiers, actions: model.activityActions, navigation: navigation)
-        .modifier(PRSubscriptionControls { link in
-            guard let reference = PullRequestReference.parseGitHubPRLink(link) else { throw PRSubscriptionError.invalidLink }
-            let fixtureID = "subscription-\(reference.identifier)"
-            guard !model.activitySnapshot.monitoredPRs.contains(where: { $0.prNodeID == fixtureID }) else { return }
-            model.activitySnapshot.monitoredPRs.insert(MonitoredPR(
-                prNodeID: fixtureID, reference: reference, origins: [.explicit],
-                isExplicitlyTracked: true, title: "Demo subscription", url: URL(string: link),
-                discoveredAt: UIUXFixtures.now, lastObservedAt: UIUXFixtures.now
-            ), at: 0)
-            model.auxiliaryIntent("Subscribed to \(reference.identifier) in memory")
-        })
+        .modifier(PRSubscriptionControls(subscribe: model.subscribeToPullRequest))
         .frame(width: 560, height: 560, alignment: .topLeading)
         .background(UIUXAuxiliaryRenderProbe(token: "activity-\(navigation.digestBatchID ?? "none")-request-\(navigation.requestRevision)",
             acknowledged: { model.onAuxiliaryRendered?($0) }))

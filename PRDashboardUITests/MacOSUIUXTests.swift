@@ -120,22 +120,31 @@ final class MacOSUIUXTests: XCTestCase {
         XCTAssertTrue(activity.staticTexts["example/project#101 · pull request merged"].waitForExistence(timeout: 5))
         attachDemoFrame("03-merge-digest", panel: activity)
         selectWindow(app, named: "UIUX Fixtures")
-        controls.buttons["uiux-open-activity"].click()
-        XCTAssertTrue(activity.waitForExistence(timeout: 5))
-        activity.buttons["Subscribe by URL"].click()
+        open(app)
+        let subscribe = element(app, "panel-subscribe")
+        XCTAssertTrue(subscribe.isHittable)
+        attachDemoFrame("04-menu-subscribe", panel: element(app, "uiux-panel"))
+        subscribe.click()
         let field = app.textFields["activity-subscription-url"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.click()
         field.typeText("https://github.com/example/demo/pull/42")
-        attachDemoFrame("04-subscribe-by-url", panel: activity)
+        attachDemoFrame("05-subscribe-by-url", panel: element(app, "subscription-form"))
         app.buttons["Subscribe"].click()
+        let result = element(app, "subscription-result")
+        XCTAssertTrue(result.waitForExistence(timeout: 5))
+        XCTAssertTrue(result.label.contains("example/demo#42"))
+        attachDemoFrame("06-subscription-confirmed", panel: element(app, "subscription-form"))
+        app.buttons["Done"].click()
+        element(app, "panel-activity").click()
+        XCTAssertTrue(activity.waitForExistence(timeout: 5))
         let tracked = activity.staticTexts["example/demo#42"]
         XCTAssertTrue(tracked.waitForExistence(timeout: 5))
         if !tracked.isHittable {
             activity.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -350)
         }
         XCTAssertTrue(tracked.isHittable)
-        attachDemoFrame("05-subscription-tracked", panel: activity)
+        attachDemoFrame("07-subscription-tracked", panel: activity)
     }
 
     func testCategorySwitchFiltersRowsAndAllRestoresGroups() {

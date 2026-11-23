@@ -328,6 +328,7 @@ struct PRRowActions {
 struct PRPanelActions {
     var refresh: () -> Void
     var openActivity: () -> Void
+    var subscribeToPullRequest: (String) async throws -> Void
     var openSettings: () -> Void
     var rowActions: (Int) -> PRRowActions
     var toggleFacet: (FacetFieldID, String) -> Void
