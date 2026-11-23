@@ -41,7 +41,7 @@ struct PRSubscriptionControls: ViewModifier {
         content
             .safeAreaInset(edge: .bottom) {
                 HStack {
-                    Button("Subscribe by URL") { showingSubscription = true }
+                    Button("Follow") { showingSubscription = true }
                     Spacer()
                 }
                 .padding(12)
@@ -64,12 +64,13 @@ struct PRSubscriptionForm: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Subscribe to a pull request").font(.headline)
+            Text("Follow a GitHub link").font(.headline)
             if let result {
                 Label(result, systemImage: "checkmark.circle")
                     .accessibilityIdentifier("subscription-result")
                 Button("Done", action: close).keyboardShortcut(.defaultAction)
             } else {
+                Text("Paste a pull request URL.").foregroundStyle(.secondary)
                 if keepResultVisible {
                     PanelSubscriptionURLField(text: $link)
                         .frame(height: 24)
@@ -83,7 +84,7 @@ struct PRSubscriptionForm: View {
                 HStack {
                     Spacer()
                     Button("Cancel", action: close).keyboardShortcut(.cancelAction)
-                    Button("Subscribe") {
+                    Button("Follow") {
                         subscribing = true
                         subscriptionError = nil
                         let submittedLink = link
@@ -92,7 +93,7 @@ struct PRSubscriptionForm: View {
                             do {
                                 try await subscribe(submittedLink)
                                 if keepResultVisible, let reference = PullRequestReference.parseGitHubPRLink(submittedLink) {
-                                    result = String(localized: "Subscribed to \(reference.identifier)")
+                                    result = String(localized: "Following \(reference.identifier)")
                                 } else {
                                     close()
                                 }

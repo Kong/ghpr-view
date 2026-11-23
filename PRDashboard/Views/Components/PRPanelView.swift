@@ -862,10 +862,10 @@ struct PRPanelView: View {
             .popover(isPresented: $showSyncDetails, arrowEdge: .top) { syncDetails }
             quotaView
 
-            Button("Follow PR") { showSubscription.toggle() }
+            Button("Follow") { showSubscription.toggle() }
                 .buttonStyle(.borderless)
                 .controlSize(.small)
-                .delayedHoverTooltip(String(localized: "Subscribe by URL"))
+                .delayedHoverTooltip(String(localized: "Follow a GitHub pull request by URL"))
                 .accessibilityIdentifier("panel-subscribe")
 
             Button(action: actions.openActivity) {
