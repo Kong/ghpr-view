@@ -2,7 +2,7 @@
 // Builds the repo-root NOTICE from license files of packages embedded in
 // mcp-ghpr-bundle/index.mjs. --check exits non-zero when NOTICE would change.
 
-import { readFileSync, writeFileSync, existsSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, closeSync, constants, fstatSync, openSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -19,12 +19,23 @@ for (const match of bundle.matchAll(/node_modules\/(@[^/\s]+\/[^/\s]+|[^/\s]+)\/
   packageNames.add(match[1]);
 }
 
+function readRegularFile(path) {
+  let fd;
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+    return fstatSync(fd).isFile() ? readFileSync(fd, "utf8") : null;
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
 function licenseText(packageDir) {
   for (const name of licenseNames) {
-    const path = join(packageDir, name);
-    if (existsSync(path) && statSync(path).isFile()) {
-      return readFileSync(path, "utf8").trim();
-    }
+    const text = readRegularFile(join(packageDir, name));
+    if (text !== null) return text.trim();
   }
   return null;
 }
@@ -39,12 +50,12 @@ const sections = [];
 const missing = [];
 for (const name of [...packageNames].sort()) {
   const packageDir = join(modulesRoot, name);
-  const manifestPath = join(packageDir, "package.json");
-  if (!existsSync(manifestPath)) {
+  const manifestText = readRegularFile(join(packageDir, "package.json"));
+  if (manifestText === null) {
     missing.push(`${name} (package.json missing)`);
     continue;
   }
-  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  const manifest = JSON.parse(manifestText);
   const text = licenseText(packageDir);
   if (!text) missing.push(`${name} (license file missing)`);
   sections.push(
@@ -86,7 +97,7 @@ const notice = [
 
 const check = process.argv.includes("--check");
 if (check) {
-  const current = existsSync(noticePath) ? readFileSync(noticePath, "utf8") : "";
+  const current = readRegularFile(noticePath) ?? "";
   if (current !== notice) {
     console.error("NOTICE is out of date. Run: node mcp-ghpr/scripts/generate-notice.mjs");
     process.exit(1);

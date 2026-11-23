@@ -215,9 +215,8 @@ class GitHubOAuthManager: NSObject, ObservableObject {
     }
 
     func openVerificationURL() {
-        guard let urlString = deviceCode?.verificationURI,
-              let url = URL(string: urlString) else { return }
-        NSWorkspace.shared.open(url)
+        guard deviceCode != nil else { return }
+        NSWorkspace.shared.open(URL(string: "https://github.com/login/device")!)
     }
 
     func copyUserCode() {

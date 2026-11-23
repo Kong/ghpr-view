@@ -174,13 +174,13 @@ jobs:
         name: PRDashboard-${{ steps.version.outputs.version }}
 
     - name: Create GitHub Release
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
       with:
         files: PRDashboard-${{ steps.version.outputs.version }}.zip
         generate_release_notes: true
 
     - name: Publish release package
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
       with:
         repository: xiaocang/ghpr-view
         token: ${{ secrets.HOMEBREW_TAP_TOKEN }}

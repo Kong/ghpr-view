@@ -11753,7 +11753,7 @@ var allowsEval = /* @__PURE__ */ cached(() => {
     return false;
   }
   try {
-    const F = Function;
+    const F = void 0;
     new F("");
     return true;
   } catch (_) {
@@ -13483,7 +13483,7 @@ var Doc = class {
     }
   }
   compile() {
-    const F = Function;
+    const F = void 0;
     const content = this?.content ?? [``];
     const factory = new F(...Object.keys(this.closed), `return function (${this.args.join(", ")}) {
 ${content.join("\n")}
@@ -23948,7 +23948,7 @@ function compileFn(schema, options) {
   const code = doc.content.join("\n");
   const fullCode = options?.debug ? constantNames.length > 0 ? `// Constants: ${constantNames.join(", ")}
 ${code}` : code : "";
-  const F = Function;
+  const F = void 0;
   const factoryCode = `return (input) => {
 ${code}
 }`;
@@ -36771,6 +36771,7 @@ function registerImportReviewTool(server2, importer) {
 }
 
 // src/index.ts
+external_exports.config({ jitless: true });
 var SCHEMA_VERSION = 2;
 var MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 var REQUEST_TIMEOUT_MS = 5e3;

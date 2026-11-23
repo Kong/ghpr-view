@@ -12,6 +12,8 @@ import {
   type ImportReviewSocketRequest,
 } from "./review-import.js";
 
+z.config({ jitless: true });
+
 const SCHEMA_VERSION = 2;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 5_000;
