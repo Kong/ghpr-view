@@ -11735,7 +11735,14 @@ function randomString(length = 10) {
   return str;
 }
 function esc(str) {
-  return JSON.stringify(str);
+  const charMap = {
+    "<": "\\u003C",
+    ">": "\\u003E",
+    "/": "\\u002F",
+    "\u2028": "\\u2028",
+    "\u2029": "\\u2029"
+  };
+  return JSON.stringify(str).replace(/[<>/\u2028\u2029]/g, (char) => charMap[char]);
 }
 function slugify(input2) {
   return input2.toLowerCase().trim().replace(/[^\w\s-]/g, "").replace(/[\s_-]+/g, "-").replace(/^-+|-+$/g, "");
