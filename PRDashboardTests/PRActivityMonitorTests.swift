@@ -826,24 +826,48 @@ final class PRActivityMonitorTests: XCTestCase {
     }
 
     func testSubscriptionPersistsPreviouslyUndiscoveredPR() async throws {
-        var config = Configuration.default
-        config.monitorEnabled = false
+        let config = Configuration.default
         let store = PRActivityStore(directoryURL: directory)
-        let (monitor, _) = makeMonitor(configuration: config, store: store)
+        let monitor = PRActivityMonitor(store: store, configuration: config)
+        monitor.setPaused(true)
         let account = MonitorAccountKey(endpoint: "", viewerNodeID: viewer.nodeID, login: viewer.login)
-        XCTAssertTrue(monitor.loadStateForTesting(account: account))
+        XCTAssertNil(monitor.snapshot.account, "Follow must work before the first observation")
         let reference = PullRequestReference(owner: "owner", repo: "unlisted", number: 7)
         let entry = MonitorDiscoveryOutcome.DiscoveredReference(
             prNodeID: "new-pr", reference: reference, title: "New PR", url: nil,
             lifecycle: .open, headOID: nil, updatedAt: now, origins: [.explicit]
         )
-        try monitor.subscribe(entry, account: account)
-        try monitor.subscribe(entry, account: account)
+        try monitor.subscribe(entry, viewer: viewer)
+        try monitor.subscribe(entry, viewer: viewer)
+        XCTAssertTrue(monitor.snapshot.isPaused, "Saving a subscription must respect the observation pause")
         let (reloaded, _) = makeMonitor(configuration: config, store: store)
         XCTAssertTrue(reloaded.loadStateForTesting(account: account))
         let rows = try XCTUnwrap(reloaded.currentStateForTesting()?.monitoredPRs)
         XCTAssertEqual(rows.map(\.reference), [reference])
         XCTAssertTrue(rows.first?.isExplicitlyTracked == true)
+    }
+
+    func testFollowDuringFirstObservationSurvivesPassCompletion() async throws {
+        let store = PRActivityStore(directoryURL: directory)
+        let (monitor, fake) = makeMonitor(store: store)
+        defer { monitor.stop() }
+        discoveredPR(fake)
+        let entry = try XCTUnwrap(fake.discoveryOutcome.discovered.first)
+        let account = MonitorAccountKey(endpoint: "", viewerNodeID: viewer.nodeID, login: viewer.login)
+        fake.onNextObservation = { [viewer] in
+            XCTAssertEqual(monitor.snapshot.account, account, "The account must be published before observation finishes")
+            do {
+                try monitor.subscribe(entry, viewer: viewer)
+            } catch {
+                XCTFail("Follow during observation failed: \(error)")
+            }
+        }
+
+        await monitor.runPassForTesting()
+
+        let rows = try XCTUnwrap(store.load(account: account)).monitoredPRs
+        XCTAssertEqual(rows.filter(\.isExplicitlyTracked).map(\.reference), [entry.reference],
+                       "The older observation must not overwrite the explicit subscription on disk")
     }
 
     func testSubscriptionLinkValidation() {
@@ -1450,6 +1474,7 @@ private final class FakeMonitorAcquisition: MonitorAcquisitionProviding {
     )
     var observationOutcome: MonitorSnapshotOutcome = .empty
     var discoveryError: Error?
+    var onNextObservation: (@MainActor () -> Void)?
 
     init(viewer: MonitorViewerIdentity) {
         viewerIdentity = viewer
@@ -1470,7 +1495,10 @@ private final class FakeMonitorAcquisition: MonitorAcquisitionProviding {
         viewer: MonitorViewerIdentity,
         sources: Set<MonitorSourceKind>
     ) async -> MonitorSnapshotOutcome {
-        observationOutcome
+        let observe = onNextObservation
+        onNextObservation = nil
+        await observe?()
+        return observationOutcome
     }
 }
 

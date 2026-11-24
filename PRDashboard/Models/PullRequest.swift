@@ -73,12 +73,14 @@ struct IssueCommentSummary: Identifiable, Codable, Equatable {
 
 enum PRSubscriptionError: LocalizedError {
     case invalidLink, notFound, unavailable
+    case storage(String?)
 
     var errorDescription: String? {
         switch self {
         case .invalidLink: return String(localized: "Enter a GitHub pull request URL.")
         case .notFound: return String(localized: "The pull request is unavailable to the signed-in account.")
         case .unavailable: return String(localized: "Could not save the subscription. Check the signed-in account and try again.")
+        case .storage(let message): return message ?? String(localized: "Activity history could not be saved.")
         }
     }
 }

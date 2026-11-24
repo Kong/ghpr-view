@@ -1104,7 +1104,7 @@ private final class UIUXFixtureModel: ObservableObject {
 
     private func resolve(_ id: Int, intent: String, revision: String? = nil, write: Bool = false, perform: ((PullRequest) -> Void)? = nil) {
         switch PRPanelActionResolver.resolve(id: id, capturedHeadCommitOID: revision,
-                                            requiresUnchangedHead: write, in: snapshot.prList) {
+                                            requiresUnchangedHead: write, in: snapshot.prList, followed: snapshot.followedPRs) {
         case .success(let pr):
             record("\(intent)(\(id)) \(pr.url.absoluteString)")
             perform?(pr)
@@ -1115,7 +1115,7 @@ private final class UIUXFixtureModel: ObservableObject {
     }
 
     private func rowActions(_ id: Int) -> PRRowActions {
-        guard let pr = snapshot.prList.allPRs.first(where: { $0.id == id }) else {
+        guard let pr = PRPanelActionResolver.latestPR(id: id, in: snapshot.prList, followed: snapshot.followedPRs) else {
             return PRRowActions(onOpen: { self.resolve(id, intent: "openPR") },
                                 onOpenJira: { _ in self.resolve(id, intent: "openJira") },
                                 onCopyURL: { self.resolve(id, intent: "copyURL") })
@@ -1164,12 +1164,23 @@ private final class UIUXFixtureModel: ObservableObject {
     }
 
     func subscribeToPullRequest(_ link: String) async throws {
-        guard let reference = PullRequestReference.parseGitHubPRLink(link) else { throw PRSubscriptionError.invalidLink }
+        guard let reference = PullRequestReference.parseGitHubPRLink(link), let url = URL(string: link) else {
+            throw PRSubscriptionError.invalidLink
+        }
         let fixtureID = "subscription-\(reference.identifier)"
-        guard !self.activitySnapshot.monitoredPRs.contains(where: { $0.prNodeID == fixtureID }) else { return }
+        self.activitySnapshot.monitoredPRs.removeAll { $0.prNodeID == fixtureID }
+        let row = PullRequest(
+            id: reference.number, graphqlNodeId: fixtureID, number: reference.number,
+            title: "Demo subscription", author: "octocat", authorAvatarURL: nil,
+            repositoryOwner: reference.owner, repositoryName: reference.repo, url: url,
+            state: .open, isDraft: true, createdAt: UIUXFixtures.now, updatedAt: UIUXFixtures.now,
+            mergedAt: nil, body: nil, conversationComments: [], reviewThreads: [], category: .mentioned,
+            hasBaseConflicts: false, ciStatus: .success, checkSuccessCount: 1, checkFailureCount: 0,
+            checkPendingCount: 0, myThreadsAllResolved: false, approvalCount: 1
+        )
         self.activitySnapshot.monitoredPRs.insert(MonitoredPR(
             prNodeID: fixtureID, reference: reference, origins: [.explicit],
-            isExplicitlyTracked: true, title: "Demo subscription", url: URL(string: link),
+            isExplicitlyTracked: true, title: row.title, url: row.url, followedRow: row,
             discoveredAt: UIUXFixtures.now, lastObservedAt: UIUXFixtures.now
         ), at: 0)
         syncFollowedPRs()

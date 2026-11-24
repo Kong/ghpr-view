@@ -1,3 +1,4 @@
+import Combine
 import XCTest
 @testable import PRDashboard
 
@@ -36,6 +37,71 @@ final class MonitorAcquisitionTests: XCTestCase {
             discoveredAt: Date(timeIntervalSince1970: 1_700_000_000),
             lastObservedAt: Date(timeIntervalSince1970: 1_700_000_000)
         )
+    }
+
+    func testFollowBeforeFirstPassPublishesOneItemWithMonitoringDisabled() async throws {
+        MonitorAcquisitionFixture.reset { request in
+            guard MonitorAcquisitionFixture.queryName(request) == "SubscriptionPR" else {
+                return MonitorAcquisitionFixture.http(status: 400, body: Data())
+            }
+            let number = MonitorAcquisitionFixture.variables(request)["number"] as? Int ?? 7
+            var node = Self.searchNode(id: "PR_\(number)", number: number)
+            node["databaseId"] = 700 + number
+            node["createdAt"] = "2023-11-13T22:13:20Z"
+            node["author"] = ["login": "alice", "avatarUrl": "https://avatars.githubusercontent.com/u/7"]
+            return MonitorAcquisitionFixture.json(["data": [
+                "viewer": ["id": "U_VIEWER", "login": "octocat", "databaseId": 1],
+                "repository": ["pullRequest": node]
+            ]])
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var configuration = Configuration.default
+        configuration.monitorEnabled = false
+        let monitor = PRActivityMonitor(store: PRActivityStore(directoryURL: directory), configuration: configuration)
+        let oauth = GitHubOAuthManager(loadSavedAuth: false)
+        // Keep local endpoint and proxy preferences out of the fixture transport.
+        let defaults = UserDefaults.standard
+        let arguments = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
+        var overrides = arguments
+        overrides["PRDashboard.Configuration"] = try JSONEncoder().encode(configuration)
+        defaults.setVolatileDomain(overrides, forName: UserDefaults.argumentDomain)
+        let manager = PRManager(apiClient: makeClient(),
+                                notificationManager: NotificationManager(useSystemNotificationCenter: false),
+                                oauthManager: oauth, loadKeychainSecrets: false, activityMonitor: monitor)
+        defaults.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+        let model = PRListViewModel(prManager: manager, oauthManager: oauth,
+                                    linkOpener: PRLinkOpener(configurationProvider: { .default }))
+        let published = expectation(description: "Follow publishes the PR to the Activity view model")
+        let observer = model.$activity.first { $0.pr("PR_7") != nil }.sink { _ in published.fulfill() }
+        defer { observer.cancel() }
+
+        try await model.subscribeToPullRequest("https://github.com/owner/repo/pull/7")
+        await fulfillment(of: [published], timeout: 2)
+
+        XCTAssertEqual(model.activity.account?.viewerNodeID, viewer.nodeID, "The authenticated viewer owns the subscription")
+        XCTAssertEqual(model.activityItemsByPR.map { $0.pr.reference }, [reference], "The followed PR must appear exactly once")
+        let row = try XCTUnwrap(model.latestPR(id: 707), "A Follow-only PR must resolve through standard row actions")
+        XCTAssertEqual(row.title, "PR 7")
+        XCTAssertEqual(row.author, "alice")
+        XCTAssertEqual(row.authorAvatarURL?.absoluteString, "https://avatars.githubusercontent.com/u/7")
+        let account = try XCTUnwrap(model.activity.account)
+        let stored = try PRActivityStore(directoryURL: directory).load(account: account)
+        XCTAssertEqual(stored?.monitoredPRs.first?.followedRow?.author, "alice", "The author must survive a restart")
+        XCTAssertEqual(model.actionableActivityCount, 0, "Following must not create a reminder")
+        XCTAssertFalse(model.activity.isRunning, "Manual Follow must respect the disabled background monitor")
+
+        let legacyReference = PullRequestReference(owner: "owner", repo: "repo", number: 8)
+        try monitor.subscribe(.init(prNodeID: "PR_8", reference: legacyReference, title: "PR 8",
+                                    url: nil, lifecycle: .open, headOID: nil, updatedAt: Date(), origins: [.explicit]),
+                              viewer: viewer)
+        let legacy = try XCTUnwrap(monitor.snapshot.pr("PR_8"))
+        XCTAssertNil(legacy.followedRow)
+        await model.loadFollowedPullRequest(legacy)
+        XCTAssertEqual(model.latestPR(id: 708)?.authorAvatarURL?.absoluteString, row.authorAvatarURL?.absoluteString,
+                       "An existing subscription must gain its avatar without enabling monitoring")
+        let migrated = try PRActivityStore(directoryURL: directory).load(account: account)
+        XCTAssertEqual(migrated?.monitoredPRs.first { $0.prNodeID == "PR_8" }?.followedRow?.author, "alice")
     }
 
     // MARK: - Reviews pagination

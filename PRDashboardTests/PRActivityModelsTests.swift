@@ -88,6 +88,32 @@ final class PRActivityModelsTests: XCTestCase {
         XCTAssertTrue(decoded.isRepositoryNotified("OWNER/REPO"), "Repository matching must be case-insensitive")
         XCTAssertFalse(decoded.isRepositoryNotified("other/repo"))
     }
+    @MainActor
+    func testExplicitlyFollowedPRAppearsAsActivityGroupWithoutReminderItems() {
+        let followed = MonitoredPR(
+            prNodeID: "PR_FOLLOWED",
+            reference: PullRequestReference(owner: "owner", repo: "repo", number: 7),
+            origins: [.explicit],
+            isExplicitlyTracked: true,
+            discoveredAt: Date(timeIntervalSince1970: 1_700_000_000),
+            lastObservedAt: Date(timeIntervalSince1970: 1_700_000_100)
+        )
+        var snapshot = PRActivitySnapshot.idle
+        snapshot.monitoredPRs = [followed]
+
+        let groups = PRListViewModel.activityItemGroups(
+            in: snapshot,
+            configuration: .default,
+            now: Date(timeIntervalSince1970: 1_700_000_200)
+        )
+
+        XCTAssertEqual(groups.count, 1, "An explicitly followed PR must render even before it has action items")
+        XCTAssertEqual(groups.first?.pr.prNodeID, "PR_FOLLOWED", "The followed PR must appear once")
+        XCTAssertTrue(groups.first?.items.isEmpty == true, "Following alone must not create a reminder item")
+        XCTAssertEqual(groups.reduce(0) { $0 + PRActivityEngine.reminders(from: $1.items).count }, 0,
+                       "A followed PR without action items must not increase the reminder count")
+    }
+
 
     // MARK: - Store
 

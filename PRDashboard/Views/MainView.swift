@@ -131,6 +131,7 @@ struct MainView: View {
             openActivity: { viewModel.showActivity() },
             subscribeToPullRequest: viewModel.subscribeToPullRequest,
             unfollowPullRequest: { viewModel.setActivityTracking($0, tracked: false) },
+            loadFollowedPullRequest: viewModel.loadFollowedPullRequest,
             openSettings: { viewModel.showSettings() },
             rowActions: rowActions,
             toggleFacet: { field, key in
@@ -183,7 +184,7 @@ struct MainView: View {
     private func rowActions(_ id: Int) -> PRRowActions {
         let menuCapture = interaction.menuCapture
         let displayed = menuCapture.fact(for: id)
-            ?? PRPanelActionResolver.latestPR(id: id, in: viewModel.prList)
+            ?? viewModel.latestPR(id: id)
         let head = displayed?.headCommitOid
         let analysisAvailable = displayed.map {
             extensionPlatformController.latestAnalysis(repository: $0.repoFullName, number: $0.number) != nil

@@ -174,6 +174,7 @@ struct MonitorSourcePayload: Codable, Equatable {
     var reviewThreads: [MonitorReviewThread]?
     var reviewRequests: MonitorReviewRequestSnapshot?
     var ci: MonitorCISnapshot?
+    var followedRow: PullRequest?
 }
 
 struct MonitorHeaderSnapshot: Codable, Equatable {
@@ -437,6 +438,7 @@ struct MonitoredPR: Codable, Equatable {
     var lifecycle: PRState
     var title: String
     var url: URL?
+    var followedRow: PullRequest?
     var headOID: String?
     var discoveredAt: Date
     var lastObservedAt: Date
@@ -459,6 +461,7 @@ struct MonitoredPR: Codable, Equatable {
         title: String = "",
         url: URL? = nil,
         headOID: String? = nil,
+        followedRow: PullRequest? = nil,
         discoveredAt: Date,
         lastObservedAt: Date,
         lastCompleteObservationAt: Date? = nil,
@@ -475,6 +478,7 @@ struct MonitoredPR: Codable, Equatable {
         self.title = title
         self.url = url
         self.headOID = headOID
+        self.followedRow = followedRow
         self.discoveredAt = discoveredAt
         self.lastObservedAt = lastObservedAt
         self.lastCompleteObservationAt = lastCompleteObservationAt

@@ -4142,7 +4142,15 @@ final class GitHubAPIClient: ObservableObject {
         }
     }
 
-    /// Build a PullRequest from a search-shaped node. Used by both search-list and mention-batch fetches.
+    var followedPRFields: String {
+        buildPRFieldSelection(includeReviewMetadata: false, includeMentionBodies: false)
+    }
+
+    func makeFollowedPullRequest(from node: GraphQLResponse.PRNode) -> PullRequest? {
+        Self.makeSearchPullRequest(from: node, category: .mentioned, excludeFilter: Self.loadCIStatusExcludeFilter())
+    }
+
+    /// Build a PullRequest from a search-shaped node for list, mention, and Follow requests.
     private static func makeSearchPullRequest(
         from node: GraphQLResponse.PRNode,
         category: PRCategory,
@@ -6231,7 +6239,7 @@ struct IndexSearchResponse: Decodable {
     }
 }
 
-private struct GraphQLResponse: Decodable {
+struct GraphQLResponse: Decodable {
     let data: DataContainer
 
     struct DataContainer: Decodable {

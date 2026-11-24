@@ -310,6 +310,15 @@ private struct MonitorHeaderPayload: Decodable {
 
     struct Repository: Decodable {
         let pullRequest: PullRequest?
+        let row: GraphQLResponse.PRNode?
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            pullRequest = try container.decodeIfPresent(PullRequest.self, forKey: .pullRequest)
+            row = try? container.decode(GraphQLResponse.PRNode.self, forKey: .pullRequest)
+        }
+
+        private enum CodingKeys: String, CodingKey { case pullRequest }
     }
 
     let repository: Repository?
@@ -668,15 +677,23 @@ extension GitHubAPIClient: MonitorAcquisitionProviding {
         )
     }
 
-    func fetchSubscription(_ reference: PullRequestReference) async throws -> MonitorDiscoveryOutcome.DiscoveredReference {
+    func fetchSubscription(_ reference: PullRequestReference) async throws -> (
+        viewer: MonitorViewerIdentity, pr: MonitorDiscoveryOutcome.DiscoveredReference, row: PullRequest
+    ) {
         struct Response: Decodable {
-            let data: MonitorHeaderPayload
+            struct Payload: Decodable {
+                let viewer: MonitorViewerPayload.Viewer
+                struct Repository: Decodable { let pullRequest: GraphQLResponse.PRNode? }
+                let repository: Repository?
+            }
+            let data: Payload
         }
         let response = try await monitorExecuteGraphQL(
             query: """
                 query SubscriptionPR($owner: String!, $repo: String!, $number: Int!) {
+                    viewer { id login databaseId }
                     repository(owner: $owner, name: $repo) {
-                        pullRequest(number: $number) { \(Self.monitorHeaderFields) }
+                        pullRequest(number: $number) { \(followedPRFields) }
                     }
                 }
                 """,
@@ -684,12 +701,18 @@ extension GitHubAPIClient: MonitorAcquisitionProviding {
             variables: ["owner": reference.owner, "repo": reference.repo, "number": reference.number]
         )
         let payload = try JSONDecoder.githubDecoder.decode(Response.self, from: response)
-        guard let pr = payload.data.repository?.pullRequest else {
+        guard let node = payload.data.repository?.pullRequest, let nodeID = node.id,
+              let row = makeFollowedPullRequest(from: node) else {
             throw PRSubscriptionError.notFound
         }
-        return .init(prNodeID: pr.id, reference: reference, title: pr.title,
-                     url: pr.url, lifecycle: pr.state, headOID: pr.commits?.nodes.first?.commit.oid,
-                     updatedAt: pr.updatedAt, origins: [.explicit])
+        let viewer = payload.data.viewer
+        return (
+            MonitorViewerIdentity(nodeID: viewer.id, login: viewer.login, databaseID: viewer.databaseId),
+            .init(prNodeID: nodeID, reference: reference, title: row.title,
+                  url: row.url, lifecycle: row.state, headOID: row.headCommitOid,
+                  updatedAt: row.updatedAt, origins: [.explicit]),
+            row
+        )
     }
 
     // MARK: Discovery
@@ -1150,8 +1173,10 @@ extension GitHubAPIClient: MonitorAcquisitionProviding {
         prs: [MonitoredPR],
         context: MonitorObservationContext
     ) async -> [MonitorBatchOutcome] {
+        let followedFields = prs.contains(where: \.isExplicitlyTracked) ? followedPRFields : nil
         let aliases = await monitorAliasedFirstPage(prs: prs, payloadType: MonitorHeaderPayload.self) { indices in
-            Self.monitorBatchRequest(prs: prs, indices: indices, fieldSelection: Self.monitorHeaderFields)
+            Self.monitorBatchRequest(prs: prs, indices: indices, fieldSelection: Self.monitorHeaderFields,
+                                     followedFieldSelection: followedFields)
         }
 
         return prs.enumerated().map { index, pr in
@@ -1193,7 +1218,7 @@ extension GitHubAPIClient: MonitorAcquisitionProviding {
                         source: .header,
                         isComplete: true,
                         incompleteReason: nil,
-                        payload: MonitorSourcePayload(header: snapshot),
+                        payload: MonitorSourcePayload(header: snapshot, followedRow: payload.repository?.row.flatMap(makeFollowedPullRequest)),
                         observedAt: context.observedAt
                     )
                 )
@@ -2607,7 +2632,8 @@ extension GitHubAPIClient: MonitorAcquisitionProviding {
     private static func monitorBatchRequest(
         prs: [MonitoredPR],
         indices: Set<Int>,
-        fieldSelection: String
+        fieldSelection: String,
+        followedFieldSelection: String? = nil
     ) -> MonitorAliasedRequest {
         var declarations: [String] = []
         var variables: [String: Any] = [:]
@@ -2623,7 +2649,7 @@ extension GitHubAPIClient: MonitorAcquisitionProviding {
                 """
                   \(monitorAliasName(index)): repository(owner: $owner_\(index), name: $name_\(index)) {
                     pullRequest(number: $number_\(index)) {
-                \(fieldSelection)
+                \(pr.isExplicitlyTracked ? followedFieldSelection ?? fieldSelection : fieldSelection)
                     }
                   }
                 """

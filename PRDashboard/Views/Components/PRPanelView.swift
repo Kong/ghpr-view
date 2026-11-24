@@ -573,8 +573,9 @@ struct PRPanelView: View {
     }
 
     private var followedSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
+        let listedPRs = snapshot.prList.allPRs
+        return VStack(alignment: .leading, spacing: 0) {
+            headerChrome(HStack {
                 Text("Following").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 Spacer()
                 Button {
@@ -588,27 +589,34 @@ struct PRPanelView: View {
                 .help("Follow a pull request")
                 .accessibilityLabel("Follow")
                 .accessibilityIdentifier("panel-subscribe")
-            }
+            })
             if showSubscription {
                 PRSubscriptionForm(subscribe: actions.subscribeToPullRequest,
                                    close: { showSubscription = false }, keepResultVisible: true)
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                    .padding(.horizontal, 8)
             }
-            ForEach(snapshot.followedPRs, id: \.prNodeID) { pr in
-                HStack {
-                    if let url = pr.url {
-                        Link(pr.reference.identifier, destination: url)
-                    } else {
-                        Text(pr.reference.identifier)
+            ForEach(snapshot.followedPRs, id: \.prNodeID) { followed in
+                if let pr = listedPRs.first(where: { $0.graphqlNodeId == followed.prNodeID }) ?? followed.followedRow {
+                    makeRow(nil, pr: pr, followed: followed)
+                } else {
+                    HStack {
+                        if let url = followed.url {
+                            Link(followed.title.isEmpty ? followed.reference.identifier : followed.title, destination: url)
+                        } else {
+                            Text(followed.title.isEmpty ? followed.reference.identifier : followed.title)
+                        }
+                        Spacer()
+                        Button("Unfollow") { actions.unfollowPullRequest(followed) }
+                            .controlSize(.small)
                     }
-                    Spacer()
-                    Button("Unfollow") { actions.unfollowPullRequest(pr) }
-                        .controlSize(.small)
-                        .accessibilityIdentifier("panel-unfollow-\(pr.reference.identifier)")
+                    .padding(8)
+                    .task {
+                        await actions.loadFollowedPullRequest?(followed)
+                    }
                 }
             }
         }
-        .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -629,14 +637,15 @@ struct PRPanelView: View {
         }
     }
 
-    private func makeRow(_ id: PRPanelRowID, pr: PullRequest) -> PRRowView {
+    private func makeRow(_ id: PRPanelRowID?, pr: PullRequest, followed explicitFollow: MonitoredPR? = nil) -> PRRowView {
         let snapshot = layoutSnapshot
-        let row = interaction.rowActions(for: id, factory: actions.rowActions)
-        let extensions = snapshot.rowExtensions[id.prID] ?? PRRowExtensionState()
-        let latest = interaction.latestFacts[id.prID] ?? pr
+        let row = id.map { interaction.rowActions(for: $0, factory: actions.rowActions) } ?? actions.rowActions(pr.id)
+        let extensions = snapshot.rowExtensions[pr.id] ?? PRRowExtensionState()
+        let latest = interaction.latestFacts[pr.id] ?? pr
         let latestDescription = "\(latest.title), CI \(latest.ciStatus?.rawValue.lowercased() ?? "unavailable"), \(latest.unresolvedCount) unresolved threads, your review \(latest.myReviewStatus.map { String(describing: $0) } ?? "not requested")"
-        let canPin = id.section == .authored || id.section == .reviewRequests
-        let followed = self.snapshot.followedPRs.first {
+        let section = id?.section
+        let canPin = section == .authored || section == .reviewRequests
+        let followed = explicitFollow ?? self.snapshot.followedPRs.first {
             $0.reference.identifier.caseInsensitiveCompare(pr.pinIdentifier) == .orderedSame
         }
         return PRRowView(
@@ -644,11 +653,11 @@ struct PRPanelView: View {
             onOpen: row.onOpen,
             onOpenJira: row.onOpenJira,
             onCopyURL: row.onCopyURL,
-            onMarkReviewCommentsRead: id.section == .authored ? row.onMarkReviewCommentsRead : nil,
-            onMarkReviewCommentsUnread: id.section == .authored ? row.onMarkReviewCommentsUnread : nil,
+            onMarkReviewCommentsRead: section == .authored ? row.onMarkReviewCommentsRead : nil,
+            onMarkReviewCommentsUnread: section == .authored ? row.onMarkReviewCommentsUnread : nil,
             onRerunFailedCI: row.onRerunFailedCI,
             onUpdateBranchWithRebase: row.onUpdateBranchWithRebase,
-            onLoadHoverDetail: row.onLoadHoverDetail,
+            onLoadHoverDetail: id != nil || interaction.latestFacts[pr.id] != nil ? row.onLoadHoverDetail : nil,
             onTogglePin: canPin ? row.onTogglePin : nil,
             onAnalyzeCIFailure: row.onAnalyzeCIFailure,
             onOpenRawDiagnostics: row.onOpenRawDiagnostics,
@@ -666,8 +675,8 @@ struct PRPanelView: View {
             isOpening: snapshot.openingPRIDs.contains(pr.id),
             isUpdatingBranch: snapshot.updatingBranchPRIDs.contains(pr.id),
             isLoadingHoverDetail: snapshot.loadingHoverDetailPRIDs.contains(pr.id),
-            showCIStatus: id.section != .mergedToday,
-            showConflictStatus: id.section != .mergedToday,
+            showCIStatus: section != .mergedToday,
+            showConflictStatus: section != .mergedToday,
             showMyReviewStatus: snapshot.configuration.showMyReviewStatus,
             showCmuxStatus: snapshot.configuration.openAtCmuxFirst,
             jiraMetadataEnabled: snapshot.jiraConnectionState == .configured,

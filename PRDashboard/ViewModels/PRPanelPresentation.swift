@@ -281,11 +281,12 @@ enum PRPanelActionError: Error, Equatable {
 }
 
 enum PRPanelActionResolver {
-    static func latestPR(id: Int, in list: PRList) -> PullRequest? {
+    static func latestPR(id: Int, in list: PRList, followed: [MonitoredPR] = []) -> PullRequest? {
         list.pullRequests.first { $0.id == id }
             ?? list.mentionedPullRequests.first { $0.id == id }
             ?? list.directMentionPullRequests.first { $0.id == id }
             ?? list.mergedPullRequests.first { $0.id == id }
+            ?? followed.lazy.filter(\.isExplicitlyTracked).compactMap(\.followedRow).first { $0.id == id }
     }
 
     static func jiraIssueKey(requested: String, for pr: PullRequest) -> String? {
@@ -297,9 +298,10 @@ enum PRPanelActionResolver {
     }
 
     static func resolve(
-        id: Int, capturedHeadCommitOID: String?, requiresUnchangedHead: Bool, in list: PRList
+        id: Int, capturedHeadCommitOID: String?, requiresUnchangedHead: Bool, in list: PRList,
+        followed: [MonitoredPR] = []
     ) -> Result<PullRequest, PRPanelActionError> {
-        guard let pr = latestPR(id: id, in: list) else { return .failure(.unavailable) }
+        guard let pr = latestPR(id: id, in: list, followed: followed) else { return .failure(.unavailable) }
         guard !requiresUnchangedHead || pr.headCommitOid == capturedHeadCommitOID else {
             return .failure(.changedRevision)
         }
@@ -331,6 +333,7 @@ struct PRPanelActions {
     var openActivity: () -> Void
     var subscribeToPullRequest: (String) async throws -> Void
     var unfollowPullRequest: (MonitoredPR) -> Void = { _ in }
+    var loadFollowedPullRequest: ((MonitoredPR) async -> Void)?
     var openSettings: () -> Void
     var rowActions: (Int) -> PRRowActions
     var toggleFacet: (FacetFieldID, String) -> Void

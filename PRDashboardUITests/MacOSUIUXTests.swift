@@ -158,8 +158,12 @@ final class MacOSUIUXTests: XCTestCase {
         XCTAssertTrue(result.waitForExistence(timeout: 5))
         attachDemoFrame("06-subscription-confirmed", panel: element(app, "uiux-panel"))
         app.buttons["Done"].click()
-        let unfollow = element(app, "panel-unfollow-example/demo#42")
-        XCTAssertTrue(unfollow.waitForExistence(timeout: 5))
+        let followedRow = element(app, "pr-row-42")
+        XCTAssertTrue(followedRow.waitForExistence(timeout: 5), "Following must use the standard PR row")
+        XCTAssertTrue(followedRow.label.contains("Demo subscription"))
+        XCTAssertTrue(element(app, "pr-details-42").exists)
+        XCTAssertTrue(element(app, "pr-ci-42").exists)
+        XCTAssertTrue(app.staticTexts["octocat"].firstMatch.exists)
         element(app, "panel-activity").click()
         XCTAssertTrue(activity.waitForExistence(timeout: 5))
         let tracked = activity.staticTexts["example/demo#42"]
@@ -173,9 +177,12 @@ final class MacOSUIUXTests: XCTestCase {
         selectWindow(app, named: "UIUX Fixtures")
         open(app)
         element(app, "panel-category-mentions").click()
+        XCTAssertTrue(followedRow.waitForExistence(timeout: 5))
+        followedRow.rightClick()
+        let unfollow = app.menuItems["Unfollow"]
         XCTAssertTrue(unfollow.waitForExistence(timeout: 5))
         unfollow.click()
-        XCTAssertTrue(unfollow.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(followedRow.waitForNonExistence(timeout: 5))
         attachDemoFrame("08-inbox-unfollow", panel: element(app, "uiux-panel"))
     }
 
