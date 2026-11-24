@@ -577,9 +577,17 @@ struct PRPanelView: View {
             HStack {
                 Text("Following").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 Spacer()
-                Button("Follow") { showSubscription.toggle() }
-                    .controlSize(.small)
-                    .accessibilityIdentifier("panel-subscribe")
+                Button {
+                    showSubscription.toggle()
+                } label: {
+                    Label("Follow", systemImage: "dot.radiowaves.right")
+                        .labelStyle(.iconOnly)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Follow a pull request")
+                .accessibilityLabel("Follow")
+                .accessibilityIdentifier("panel-subscribe")
             }
             if showSubscription {
                 PRSubscriptionForm(subscribe: actions.subscribeToPullRequest,
