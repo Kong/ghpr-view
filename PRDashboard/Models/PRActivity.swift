@@ -51,6 +51,7 @@ struct MonitorAccountKey: Hashable, Codable {
 enum MonitorOrigin: String, Codable, CaseIterable {
     case authored
     case requested
+    case assigned
     case reviewed
     case commented
     /// Explicitly tracked by the user from the activity UI.
@@ -173,6 +174,7 @@ struct MonitorSourcePayload: Codable, Equatable {
     var reviewThreads: [MonitorReviewThread]?
     var reviewRequests: MonitorReviewRequestSnapshot?
     var ci: MonitorCISnapshot?
+    var followedRow: PullRequest?
 }
 
 struct MonitorHeaderSnapshot: Codable, Equatable {
@@ -436,6 +438,7 @@ struct MonitoredPR: Codable, Equatable {
     var lifecycle: PRState
     var title: String
     var url: URL?
+    var followedRow: PullRequest?
     var headOID: String?
     var discoveredAt: Date
     var lastObservedAt: Date
@@ -458,6 +461,7 @@ struct MonitoredPR: Codable, Equatable {
         title: String = "",
         url: URL? = nil,
         headOID: String? = nil,
+        followedRow: PullRequest? = nil,
         discoveredAt: Date,
         lastObservedAt: Date,
         lastCompleteObservationAt: Date? = nil,
@@ -474,6 +478,7 @@ struct MonitoredPR: Codable, Equatable {
         self.title = title
         self.url = url
         self.headOID = headOID
+        self.followedRow = followedRow
         self.discoveredAt = discoveredAt
         self.lastObservedAt = lastObservedAt
         self.lastCompleteObservationAt = lastCompleteObservationAt
@@ -622,6 +627,7 @@ enum PRActionReason: String, Codable, CaseIterable {
     case myReviewNeedsRereview
     case reviewRequestedDirectly
     case explicitlyTracked
+    case pullRequestMerged
 }
 
 /// Suggested manual action. Never executed automatically.
@@ -632,6 +638,7 @@ enum PRActionKind: String, Codable {
     case reReview
     case resolveThread
     case confirmCI
+    case acknowledgeMerge
     case review
 }
 

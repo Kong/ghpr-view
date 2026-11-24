@@ -81,6 +81,8 @@ struct PRRowView: View {
     var onInstallBrowserUserscript: (() -> Void)?
     var onOpenBrowserIntegrationSettings: (() -> Void)?
     var onNotifyRaft: (() -> Void)?
+    var onToggleFollow: (() -> Void)?
+    var isFollowed = false
     var runnableSkills: [SkillDefinition] = []
     var extensionRun: SkillRun?
     var extensionAnalysis: CIAnalysis?
@@ -332,6 +334,9 @@ struct PRRowView: View {
             Button("Details…") { detailRequest &+= 1 }
             Button("Copy URL") {
                 onCopyURL()
+            }
+            if let onToggleFollow {
+                Button(isFollowed ? "Unfollow" : "Follow", action: onToggleFollow)
             }
             if let onInstallBrowserUserscript {
                 Divider()

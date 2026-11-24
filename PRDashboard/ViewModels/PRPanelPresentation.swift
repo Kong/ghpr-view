@@ -36,7 +36,7 @@ enum PRPanelCategory: String, CaseIterable, Identifiable {
         case .all: return "All"
         case .myPRs: return "My PRs"
         case .reviews: return "Reviews"
-        case .mentions: return "Mentions"
+        case .mentions: return "Inbox"
         }
     }
 
@@ -139,12 +139,12 @@ struct PRPanelProjection {
         let reviews = filtered.filter { $0.category == .reviewRequest }
         let pinnedReviews = reviews.filter { pinnedIdentifiers.contains($0.pinIdentifier) }
         let unpinnedReviews = reviews.filter { !pinnedIdentifiers.contains($0.pinIdentifier) }
-        let mentioned = filter(prList.mentionedPullRequests)
+        let mentioned = filter(prList.mentionedPullRequests).filter { $0.state == .open }
         let directMentions = filter(prList.directMentionPullRequests)
         let cutoff = now.addingTimeInterval(-24 * 60 * 60)
         var mergedSeen = Set<Int>()
         var nextMergedExpiry: Date?
-        let merged = filter(prList.mergedPullRequests).filter { pr in
+        let merged = filter(prList.mergedPullRequests + prList.mentionedPullRequests.filter { $0.state == .merged }).filter { pr in
             guard let mergedAt = pr.mergedAt, mergedAt >= cutoff else { return false }
             let expiry = mergedAt.addingTimeInterval(24 * 60 * 60)
             nextMergedExpiry = min(nextMergedExpiry ?? expiry, expiry)
@@ -262,6 +262,7 @@ struct PRPanelSnapshot {
     var labelSuggestions: [FacetOption]
     var savedViews: [SavedView]
     var now: Date
+    var followedPRs: [MonitoredPR] = []
     var rowExtensions: [Int: PRRowExtensionState] = [:]
     var actionError: String?
     var presentationRevision: UInt64 = 0
@@ -280,11 +281,12 @@ enum PRPanelActionError: Error, Equatable {
 }
 
 enum PRPanelActionResolver {
-    static func latestPR(id: Int, in list: PRList) -> PullRequest? {
+    static func latestPR(id: Int, in list: PRList, followed: [MonitoredPR] = []) -> PullRequest? {
         list.pullRequests.first { $0.id == id }
             ?? list.mentionedPullRequests.first { $0.id == id }
             ?? list.directMentionPullRequests.first { $0.id == id }
             ?? list.mergedPullRequests.first { $0.id == id }
+            ?? followed.lazy.filter(\.isExplicitlyTracked).compactMap(\.followedRow).first { $0.id == id }
     }
 
     static func jiraIssueKey(requested: String, for pr: PullRequest) -> String? {
@@ -296,9 +298,10 @@ enum PRPanelActionResolver {
     }
 
     static func resolve(
-        id: Int, capturedHeadCommitOID: String?, requiresUnchangedHead: Bool, in list: PRList
+        id: Int, capturedHeadCommitOID: String?, requiresUnchangedHead: Bool, in list: PRList,
+        followed: [MonitoredPR] = []
     ) -> Result<PullRequest, PRPanelActionError> {
-        guard let pr = latestPR(id: id, in: list) else { return .failure(.unavailable) }
+        guard let pr = latestPR(id: id, in: list, followed: followed) else { return .failure(.unavailable) }
         guard !requiresUnchangedHead || pr.headCommitOid == capturedHeadCommitOID else {
             return .failure(.changedRevision)
         }
@@ -328,6 +331,9 @@ struct PRRowActions {
 struct PRPanelActions {
     var refresh: () -> Void
     var openActivity: () -> Void
+    var subscribeToPullRequest: (String) async throws -> Void
+    var unfollowPullRequest: (MonitoredPR) -> Void = { _ in }
+    var loadFollowedPullRequest: ((MonitoredPR) async -> Void)?
     var openSettings: () -> Void
     var rowActions: (Int) -> PRRowActions
     var toggleFacet: (FacetFieldID, String) -> Void

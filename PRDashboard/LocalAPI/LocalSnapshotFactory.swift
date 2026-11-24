@@ -20,7 +20,9 @@ enum LocalSnapshotFactory {
     ) -> LocalSnapshot {
         let myPRs = input.prList.pullRequests.filter { $0.category.isMyPR }
         let reviewRequestPRs = input.prList.reviewRequestPRs
-        let mergedLast24hPRs = mergedLast24h(from: input.prList.mergedPullRequests, now: now)
+        let mentionedPRs = input.prList.mentionedPullRequests.filter { $0.state == .open }
+        let mergedMentions = input.prList.mentionedPullRequests.filter { $0.state == .merged }
+        let mergedLast24hPRs = mergedLast24h(from: input.prList.mergedPullRequests + mergedMentions, now: now)
 
         let authoredSnapshots = sortPRs(
             myPRs,
@@ -47,7 +49,7 @@ enum LocalSnapshotFactory {
         }
 
         let mentionedSnapshots = sortPRs(
-            input.prList.mentionedPullRequests,
+            mentionedPRs,
             pinnedPRIdentifiers: input.pinnedPRIdentifiers
         ).map {
             makePRSnapshot(
@@ -107,7 +109,7 @@ enum LocalSnapshotFactory {
             summary: LocalSummarySnapshot(
                 authored: myPRs.count,
                 reviewRequests: reviewRequestPRs.count,
-                mentioned: input.prList.mentionedPullRequests.count,
+                mentioned: mentionedPRs.count,
                 directMentions: input.prList.directMentionPullRequests.count,
                 mergedLast24h: mergedLast24hPRs.count,
                 totalUnresolved: input.prList.totalUnresolvedCount,

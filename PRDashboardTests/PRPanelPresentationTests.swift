@@ -152,6 +152,16 @@ final class PRPanelPresentationTests: XCTestCase {
         XCTAssertEqual(later.mergedLast24hPRs.map(\.id), [1, 3])
     }
 
+    func testMergedMentionAppearsOnlyInMergedSection() {
+        var list = makeList([])
+        let recent = makePR(1, mergedAt: now.addingTimeInterval(-60))
+        let expired = makePR(2, mergedAt: now.addingTimeInterval(-86401))
+        list.mentionedPullRequests = [recent, expired, makePR(3)]
+        let projection = project(list)
+        XCTAssertEqual(projection.mergedLast24hPRs.map(\.id), [1])
+        XCTAssertEqual(projection.mentionedPRs.map(\.id), [3])
+    }
+
     func testCachedMergedRowsExpireWithoutSourcePublicationAndRevealLaterDuplicate() {
         let boundary = makePR(1, mergedAt: now.addingTimeInterval(-86400))
         let duplicate = makePR(1, mergedAt: now)

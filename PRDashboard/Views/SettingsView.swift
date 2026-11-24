@@ -1187,7 +1187,9 @@ struct SettingsContent: View {
     }
 
     private var visibleEventKinds: [PRActivityEventKind] {
-        showAllEventCategories ? PRActivityEventKind.allCases : Array(PRActivityEventKind.allCases.prefix(8))
+        showAllEventCategories
+            ? PRActivityEventKind.allCases
+            : Array(PRActivityEventKind.allCases.prefix(7)) + [.prMerged]
     }
 
     private func eventCategoryChip(_ kind: PRActivityEventKind) -> some View {
@@ -1220,6 +1222,7 @@ struct SettingsContent: View {
             }
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("settings-event-\(kind.rawValue)")
         .accessibilityValue(isSelected ? "Selected" : "Not selected")
     }
 

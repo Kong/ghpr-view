@@ -1,17 +1,19 @@
 import XCTest
+import AppKit
 import CoreGraphics
 
 /// Runs only the isolated DEBUG host. Intent log assertions never imply a remote action occurred.
 final class MacOSUIUXTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
-    private func launch(count: Int = 20, appearance: String? = nil, reduceMotion: Bool = false) -> XCUIApplication {
+    private func launch(count: Int = 20, appearance: String? = nil, reduceMotion: Bool = false, extraArguments: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing-uiux", "--uiux-count=\(count)"]
         if let appearance { app.launchArguments.append("--uiux-appearance=\(appearance)") }
         if reduceMotion { app.launchArguments.append("--uiux-reduce-motion") }
         // Pin the language so translated settings labels stay the strings these tests match.
         app.launchArguments.append(contentsOf: ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"])
+        app.launchArguments += extraArguments
         app.launch()
         XCTAssertTrue(app.windows["UIUX Fixtures"].waitForExistence(timeout: 8))
         return app
@@ -94,6 +96,94 @@ final class MacOSUIUXTests: XCTestCase {
         attachment.name = "ghpr-demo-\(stage)"
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    func testMergeNotificationsAndPRSubscriptionDemo() {
+        let app = launch(count: 3, extraArguments: ["--uiux-merge-demo"])
+        defer { app.terminate() }
+        let controls = app.windows["UIUX Fixtures"]
+        controls.buttons["uiux-open-settings"].click()
+        let settings = app.windows["Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        selectSettingsPage(app, rawValue: "alerts")
+        let merge = element(app, "settings-event-prMerged")
+        XCTAssertTrue(merge.waitForExistence(timeout: 5))
+        XCTAssertEqual(controlValue(merge), "Selected")
+        attachDemoFrame("01-merge-enabled", panel: settings)
+        merge.click()
+        XCTAssertEqual(controlValue(merge), "Not selected")
+        attachDemoFrame("02-merge-disabled", panel: settings)
+        settings.buttons["Cancel"].click()
+
+        selectWindow(app, named: "UIUX Fixtures")
+        controls.buttons["uiux-open-digest"].click()
+        let activity = app.windows["Activity"]
+        XCTAssertTrue(activity.staticTexts["example/project#101 · pull request merged"].waitForExistence(timeout: 5))
+        attachDemoFrame("03-merge-digest", panel: activity)
+        selectWindow(app, named: "UIUX Fixtures")
+        open(app)
+        element(app, "panel-category-mentions").click()
+        let subscribe = element(app, "panel-subscribe")
+        XCTAssertTrue(subscribe.waitForExistence(timeout: 5))
+        XCTAssertTrue(subscribe.isHittable)
+        attachDemoFrame("04-menu-subscribe", panel: element(app, "uiux-panel"))
+        subscribe.click()
+        let field = app.textFields["activity-subscription-url"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        let url = "https://github.com/example/demo/pull/42"
+        let pasteboard = NSPasteboard.general
+        var previousItems: [NSPasteboardItem] = []
+        for item in pasteboard.pasteboardItems ?? [] {
+            let copy = NSPasteboardItem()
+            for type in item.types {
+                if let data = item.data(forType: type) { copy.setData(data, forType: type) }
+            }
+            previousItems.append(copy)
+        }
+        let restoredItems: [any NSPasteboardWriting] = previousItems.map { $0 as any NSPasteboardWriting }
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.setString(url, forType: .string))
+        let testPasteboardChange = pasteboard.changeCount
+        defer {
+            if pasteboard.changeCount == testPasteboardChange {
+                pasteboard.clearContents()
+                if !restoredItems.isEmpty { _ = pasteboard.writeObjects(restoredItems) }
+            }
+        }
+        element(app, "subscription-paste").click()
+        XCTAssertEqual(controlValue(field), url)
+        attachDemoFrame("05-subscribe-by-url", panel: element(app, "uiux-panel"))
+        element(app, "subscription-form").buttons["Follow"].click()
+        let result = app.staticTexts["subscription-result"]
+        XCTAssertTrue(result.waitForExistence(timeout: 5))
+        attachDemoFrame("06-subscription-confirmed", panel: element(app, "uiux-panel"))
+        app.buttons["Done"].click()
+        let followedRow = element(app, "pr-row-42")
+        XCTAssertTrue(followedRow.waitForExistence(timeout: 5), "Following must use the standard PR row")
+        XCTAssertTrue(followedRow.label.contains("Demo subscription"))
+        XCTAssertTrue(element(app, "pr-details-42").exists)
+        XCTAssertTrue(element(app, "pr-ci-42").exists)
+        XCTAssertTrue(app.staticTexts["octocat"].firstMatch.exists)
+        element(app, "panel-activity").click()
+        XCTAssertTrue(activity.waitForExistence(timeout: 5))
+        let tracked = activity.staticTexts["example/demo#42"]
+        XCTAssertTrue(tracked.waitForExistence(timeout: 5), "Following from the menu must add the exact linked PR to Activity")
+        if !tracked.isHittable {
+            activity.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -350)
+        }
+        XCTAssertTrue(tracked.isHittable)
+        attachDemoFrame("07-subscription-tracked", panel: activity)
+
+        selectWindow(app, named: "UIUX Fixtures")
+        open(app)
+        element(app, "panel-category-mentions").click()
+        XCTAssertTrue(followedRow.waitForExistence(timeout: 5))
+        followedRow.rightClick()
+        let unfollow = app.menuItems["Unfollow"]
+        XCTAssertTrue(unfollow.waitForExistence(timeout: 5))
+        unfollow.click()
+        XCTAssertTrue(followedRow.waitForNonExistence(timeout: 5))
+        attachDemoFrame("08-inbox-unfollow", panel: element(app, "uiux-panel"))
     }
 
     func testCategorySwitchFiltersRowsAndAllRestoresGroups() {

@@ -14,7 +14,6 @@ struct PRActivityActions {
 struct PRActivityView: View {
     @ObservedObject var viewModel: PRListViewModel
     @ObservedObject var navigation: ActivityNavigation
-
     var body: some View {
         PRActivityContent(
             snapshot: viewModel.activity,
@@ -30,6 +29,160 @@ struct PRActivityView: View {
                 retry: { viewModel.retryActivityDigest($0) }
             ), navigation: navigation
         )
+        .modifier(PRSubscriptionControls(subscribe: viewModel.subscribeToPullRequest))
+    }
+}
+
+struct PRSubscriptionControls: ViewModifier {
+    var subscribe: (String) async throws -> Void
+    @State private var showingSubscription = false
+
+    func body(content: Content) -> some View {
+        content
+            .safeAreaInset(edge: .bottom) {
+                HStack {
+                    Button("Follow") { showingSubscription = true }
+                    Spacer()
+                }
+                .padding(12)
+            }
+            .sheet(isPresented: $showingSubscription) {
+                PRSubscriptionForm(subscribe: subscribe, close: { showingSubscription = false })
+                    .frame(width: 420)
+            }
+    }
+}
+
+struct PRSubscriptionForm: View {
+    var subscribe: (String) async throws -> Void
+    var close: () -> Void
+    var keepResultVisible = false
+    @State private var link = ""
+    @State private var subscriptionError: String?
+    @State private var result: String?
+    @State private var subscribing = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Follow a GitHub link").font(.headline)
+            if let result {
+                HStack {
+                    Image(systemName: "checkmark.circle").accessibilityHidden(true)
+                    Text(result).accessibilityIdentifier("subscription-result")
+                }
+                Button("Done", action: close).keyboardShortcut(.defaultAction)
+            } else {
+                Text("Paste a pull request URL.").foregroundStyle(.secondary)
+                if keepResultVisible {
+                    HStack {
+                        PanelSubscriptionURLField(text: $link)
+                            .frame(height: 24)
+                        Button("Paste") {
+                            if let clipboardText = NSPasteboard.general.string(forType: .string) {
+                                link = clipboardText.trimmingCharacters(in: .whitespacesAndNewlines)
+                                subscriptionError = nil
+                            }
+                        }
+                        .accessibilityIdentifier("subscription-paste")
+                    }
+                } else {
+                    TextField("https://github.com/owner/repo/pull/123", text: $link)
+                        .accessibilityIdentifier("activity-subscription-url")
+                }
+                if let subscriptionError {
+                    Text(subscriptionError).foregroundStyle(.red)
+                }
+                HStack {
+                    Spacer()
+                    Button("Cancel", action: close).keyboardShortcut(.cancelAction)
+                    Button("Follow") {
+                        subscribing = true
+                        subscriptionError = nil
+                        let submittedLink = link
+                        Task { @MainActor in
+                            defer { subscribing = false }
+                            do {
+                                try await subscribe(submittedLink)
+                                if keepResultVisible, let reference = PullRequestReference.parseGitHubPRLink(submittedLink) {
+                                    result = String(localized: "Following \(reference.identifier)")
+                                } else {
+                                    close()
+                                }
+                            } catch {
+                                subscriptionError = error.localizedDescription
+                            }
+                        }
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+        .padding(16)
+        .disabled(subscribing)
+        .interactiveDismissDisabled(subscribing)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("subscription-form")
+    }
+}
+
+/// The status-item popover has its own native focus coordinator.
+private struct PanelSubscriptionURLField: NSViewRepresentable {
+    @Binding var text: String
+
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
+
+    func makeNSView(context: Context) -> Field {
+        let field = Field()
+        field.placeholderString = "https://github.com/owner/repo/pull/123"
+        field.setAccessibilityIdentifier("activity-subscription-url")
+        field.setAccessibilityLabel(String(localized: "Pull request URL"))
+        field.isEditable = true
+        field.isSelectable = true
+        field.isBezeled = true
+        field.bezelStyle = .roundedBezel
+        field.delegate = context.coordinator
+        field.stringValue = text
+        return field
+    }
+
+    func updateNSView(_ field: Field, context: Context) {
+        context.coordinator.text = $text
+        let editor = field.currentEditor()
+        guard (editor?.string ?? field.stringValue) != text else { return }
+        if let editor { editor.string = text }
+        field.stringValue = text
+    }
+
+    final class Field: NSTextField {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let window = self.window, window.isVisible else { return }
+                if !NSApp.isActive { NSApp.activate(ignoringOtherApps: true) }
+                if !window.isKeyWindow { window.makeKey() }
+                window.makeFirstResponder(self)
+            }
+        }
+
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        override func mouseDown(with event: NSEvent) {
+            if !NSApp.isActive { NSApp.activate(ignoringOtherApps: true) }
+            if let window, !window.isKeyWindow { window.makeKey() }
+            super.mouseDown(with: event)
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var text: Binding<String>
+
+        init(text: Binding<String>) { self.text = text }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField else { return }
+            text.wrappedValue = field.stringValue
+        }
     }
 }
 
@@ -214,6 +367,7 @@ struct PRActivityContent: View {
         case .requested: return String(localized: "review requested")
         case .reviewed: return String(localized: "reviewed by you")
         case .commented: return String(localized: "you commented")
+        case .assigned: return String(localized: "assigned to you")
         case .explicit: return String(localized: "tracked")
         }
     }

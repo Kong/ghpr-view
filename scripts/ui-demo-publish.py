@@ -26,7 +26,8 @@ COMMENT_MARKER = "<!-- ghpr-ui-demo:category-switch -->"
 BOT_LOGIN = "github-actions[bot]"
 MAX_GIF_BYTES = 10 * 1024 * 1024
 GIF_MAGIC = (b"GIF87a", b"GIF89a")
-GIF_NAME = "category-switch.gif"
+GIF_NAME = "category-switch.gif"  # Keep existing published links stable.
+GIF_NAMES = {GIF_NAME, "ui-demo.gif"}
 
 
 class PublishError(RuntimeError):
@@ -107,11 +108,11 @@ def read_artifact_gif(repo, run_id, head_sha):
             with zipfile.ZipFile(archive) as bundle:
                 matches = [
                     info for info in bundle.infolist()
-                    if Path(info.filename).name == GIF_NAME and not info.is_dir()
+                    if Path(info.filename).name in GIF_NAMES and not info.is_dir()
                 ]
                 if len(matches) != 1:
                     raise PublishError(
-                        f"expected exactly one {GIF_NAME} in the artifact, found {len(matches)}"
+                        f"expected exactly one recognized demo GIF in the artifact, found {len(matches)}"
                     )
                 if matches[0].file_size > MAX_GIF_BYTES:
                     raise PublishError(
@@ -276,13 +277,9 @@ def main():
     confirm_head(options.repo, pr_number, run_sha)
     body = "\n".join([
         COMMENT_MARKER,
-        f"![UI demo: menu bar category switching]({url})",
+        f"![UI demo for this pull request]({url})",
         "",
         f"UI Demo for `{run_sha}` from run `{options.run_id}`.",
-        "",
-        "The GIF covers only the menu bar category switching flow "
-        "(All → Reviews → Mentions → My PRs → All restored). It does not show the "
-        "settings panes, so it does not cover the Raft template editor.",
     ])
     if options.note:
         body += "\n\n" + options.note

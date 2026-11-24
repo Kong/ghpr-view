@@ -12,6 +12,7 @@ struct MonitorViewerIdentity: Codable, Equatable {
 /// a PR from monitoring (removal is decided by lifecycle observations, not by search).
 struct MonitorDiscoveryScope: Equatable {
     var includeAuthored: Bool
+    var includeAssigned: Bool
     var includeRequested: Bool
     var includeReviewed: Bool
     var includeCommented: Bool
@@ -25,11 +26,13 @@ struct MonitorDiscoveryScope: Equatable {
 
     init(
         includeAuthored: Bool = true,
+        includeAssigned: Bool = true,
         includeRequested: Bool = true,
         includeReviewed: Bool = true,
         includeCommented: Bool = true
     ) {
         self.includeAuthored = includeAuthored
+        self.includeAssigned = includeAssigned
         self.includeRequested = includeRequested
         self.includeReviewed = includeReviewed
         self.includeCommented = includeCommented

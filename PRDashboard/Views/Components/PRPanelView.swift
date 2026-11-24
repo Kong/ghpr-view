@@ -18,6 +18,9 @@ struct PRPanelView: View {
     @State private var hoveredCategory: PRPanelCategory?
     @State private var pressedCategory: PRPanelCategory?
     @State private var showSyncDetails = false
+    @State private var showSubscription = false
+    @State private var followError: String?
+    @State private var pendingFollows: Set<String> = []
     @StateObject private var tooltipPresenter = HoverTooltipPresenter()
     @State private var firstVisibleApprovalPRID: Int?
     @State private var firstVisibleReviewStatusPRID: Int?
@@ -109,6 +112,7 @@ struct PRPanelView: View {
                 hoveredCategory = nil
                 pressedCategory = nil
                 showSyncDetails = false
+                showSubscription = false
                 resetRefreshFeedback()
             }
         }
@@ -156,7 +160,9 @@ struct PRPanelView: View {
             facetSection(facetHeight: facetHeight)
             Divider()
 
-            if snapshot.prList.isLoading && !snapshot.prList.hasUsableData {
+            if interaction.selectedCategory == .mentions {
+                prListView
+            } else if snapshot.prList.isLoading && !snapshot.prList.hasUsableData {
                 loadingView
             } else if !snapshot.prList.hasUsableData, let error = snapshot.prList.error {
                 errorView(error)
@@ -376,6 +382,13 @@ struct PRPanelView: View {
         return ScrollViewReader { reader in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
+                    if interaction.selectedCategory == .mentions { followedSection }
+                    if let followError {
+                        Label(followError, systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .padding(8)
+                    }
                     if let error = snapshot.prList.error { staleDataBanner(error).panelGeometry(.error) }
                     if interaction.selectedCategory == .all {
                         PRSummaryView(
@@ -391,7 +404,8 @@ struct PRPanelView: View {
                         .clipped()
                         .panelGeometry(.summary)
                     }
-                    if interaction.selectedCategory.sections.allSatisfy({ layoutProjection.displayedRowIDs(for: $0).isEmpty }) {
+                    if (interaction.selectedCategory != .mentions || self.snapshot.followedPRs.isEmpty),
+                       interaction.selectedCategory.sections.allSatisfy({ layoutProjection.displayedRowIDs(for: $0).isEmpty }) {
                         noMatchingPRs
                     }
                     ForEach(interaction.selectedCategory.sections, id: \.self) { section in
@@ -558,23 +572,92 @@ struct PRPanelView: View {
         }
     }
 
-    private func makeRow(_ id: PRPanelRowID, pr: PullRequest) -> PRRowView {
+    private var followedSection: some View {
+        let listedPRs = snapshot.prList.allPRs
+        return VStack(alignment: .leading, spacing: 0) {
+            headerChrome(HStack {
+                Text("Following").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    showSubscription.toggle()
+                } label: {
+                    Label("Follow", systemImage: "dot.radiowaves.right")
+                        .labelStyle(.iconOnly)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Follow a pull request")
+                .accessibilityLabel("Follow")
+                .accessibilityIdentifier("panel-subscribe")
+            })
+            if showSubscription {
+                PRSubscriptionForm(subscribe: actions.subscribeToPullRequest,
+                                   close: { showSubscription = false }, keepResultVisible: true)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                    .padding(.horizontal, 8)
+            }
+            ForEach(snapshot.followedPRs, id: \.prNodeID) { followed in
+                if let pr = listedPRs.first(where: { $0.graphqlNodeId == followed.prNodeID }) ?? followed.followedRow {
+                    makeRow(nil, pr: pr, followed: followed)
+                } else {
+                    HStack {
+                        if let url = followed.url {
+                            Link(followed.title.isEmpty ? followed.reference.identifier : followed.title, destination: url)
+                        } else {
+                            Text(followed.title.isEmpty ? followed.reference.identifier : followed.title)
+                        }
+                        Spacer()
+                        Button("Unfollow") { actions.unfollowPullRequest(followed) }
+                            .controlSize(.small)
+                    }
+                    .padding(8)
+                    .task {
+                        await actions.loadFollowedPullRequest?(followed)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func toggleFollow(_ pr: PullRequest, followed: MonitoredPR?) {
+        followError = nil
+        if let followed {
+            actions.unfollowPullRequest(followed)
+            return
+        }
+        guard pendingFollows.insert(pr.pinIdentifier).inserted else { return }
+        Task { @MainActor in
+            defer { pendingFollows.remove(pr.pinIdentifier) }
+            do {
+                try await actions.subscribeToPullRequest(pr.url.absoluteString)
+            } catch {
+                followError = error.localizedDescription
+            }
+        }
+    }
+
+    private func makeRow(_ id: PRPanelRowID?, pr: PullRequest, followed explicitFollow: MonitoredPR? = nil) -> PRRowView {
         let snapshot = layoutSnapshot
-        let row = interaction.rowActions(for: id, factory: actions.rowActions)
-        let extensions = snapshot.rowExtensions[id.prID] ?? PRRowExtensionState()
-        let latest = interaction.latestFacts[id.prID] ?? pr
+        let row = id.map { interaction.rowActions(for: $0, factory: actions.rowActions) } ?? actions.rowActions(pr.id)
+        let extensions = snapshot.rowExtensions[pr.id] ?? PRRowExtensionState()
+        let latest = interaction.latestFacts[pr.id] ?? pr
         let latestDescription = "\(latest.title), CI \(latest.ciStatus?.rawValue.lowercased() ?? "unavailable"), \(latest.unresolvedCount) unresolved threads, your review \(latest.myReviewStatus.map { String(describing: $0) } ?? "not requested")"
-        let canPin = id.section == .authored || id.section == .reviewRequests
+        let section = id?.section
+        let canPin = section == .authored || section == .reviewRequests
+        let followed = explicitFollow ?? self.snapshot.followedPRs.first {
+            $0.reference.identifier.caseInsensitiveCompare(pr.pinIdentifier) == .orderedSame
+        }
         return PRRowView(
             pr: pr,
             onOpen: row.onOpen,
             onOpenJira: row.onOpenJira,
             onCopyURL: row.onCopyURL,
-            onMarkReviewCommentsRead: id.section == .authored ? row.onMarkReviewCommentsRead : nil,
-            onMarkReviewCommentsUnread: id.section == .authored ? row.onMarkReviewCommentsUnread : nil,
+            onMarkReviewCommentsRead: section == .authored ? row.onMarkReviewCommentsRead : nil,
+            onMarkReviewCommentsUnread: section == .authored ? row.onMarkReviewCommentsUnread : nil,
             onRerunFailedCI: row.onRerunFailedCI,
             onUpdateBranchWithRebase: row.onUpdateBranchWithRebase,
-            onLoadHoverDetail: row.onLoadHoverDetail,
+            onLoadHoverDetail: id != nil || interaction.latestFacts[pr.id] != nil ? row.onLoadHoverDetail : nil,
             onTogglePin: canPin ? row.onTogglePin : nil,
             onAnalyzeCIFailure: row.onAnalyzeCIFailure,
             onOpenRawDiagnostics: row.onOpenRawDiagnostics,
@@ -582,6 +665,8 @@ struct PRPanelView: View {
             onInstallBrowserUserscript: row.onInstallBrowserUserscript,
             onOpenBrowserIntegrationSettings: row.onOpenBrowserIntegrationSettings,
             onNotifyRaft: row.onNotifyRaft,
+            onToggleFollow: { toggleFollow(pr, followed: followed) },
+            isFollowed: followed != nil,
             runnableSkills: extensions.runnableSkills,
             extensionRun: extensions.extensionRun,
             extensionAnalysis: extensions.extensionAnalysis,
@@ -590,8 +675,8 @@ struct PRPanelView: View {
             isOpening: snapshot.openingPRIDs.contains(pr.id),
             isUpdatingBranch: snapshot.updatingBranchPRIDs.contains(pr.id),
             isLoadingHoverDetail: snapshot.loadingHoverDetailPRIDs.contains(pr.id),
-            showCIStatus: id.section != .mergedToday,
-            showConflictStatus: id.section != .mergedToday,
+            showCIStatus: section != .mergedToday,
+            showConflictStatus: section != .mergedToday,
             showMyReviewStatus: snapshot.configuration.showMyReviewStatus,
             showCmuxStatus: snapshot.configuration.openAtCmuxFirst,
             jiraMetadataEnabled: snapshot.jiraConnectionState == .configured,

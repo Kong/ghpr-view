@@ -332,7 +332,7 @@ final class PRListViewModel: ObservableObject {
 
     /// Uses live manager facts even while menu tracking buffers visible publication.
     func latestPR(id: Int) -> PullRequest? {
-        PRPanelActionResolver.latestPR(id: id, in: prManager.prList)
+        PRPanelActionResolver.latestPR(id: id, in: prManager.prList, followed: prManager.activityMonitor.snapshot.monitoredPRs)
     }
 
     func resolvePRAction(
@@ -340,7 +340,8 @@ final class PRListViewModel: ObservableObject {
     ) -> Result<PullRequest, PRPanelActionError> {
         PRPanelActionResolver.resolve(
             id: id, capturedHeadCommitOID: capturedHeadCommitOID,
-            requiresUnchangedHead: requiresUnchangedHead, in: prManager.prList
+            requiresUnchangedHead: requiresUnchangedHead, in: prManager.prList,
+            followed: prManager.activityMonitor.snapshot.monitoredPRs
         )
     }
 
@@ -786,22 +787,67 @@ final class PRListViewModel: ObservableObject {
         prManager.activityMonitor.events(forPR: prNodeID, limit: limit)
     }
 
+    func subscribeToPullRequest(_ link: String) async throws {
+        guard let reference = PullRequestReference.parseGitHubPRLink(link) else { throw PRSubscriptionError.invalidLink }
+        let token = oauthManager.authState.accessToken
+        let endpoint = configuration.graphQLEndpoint
+        let subscription = try await prManager.apiClient.fetchSubscription(reference)
+        guard oauthManager.authState.accessToken == token, configuration.graphQLEndpoint == endpoint else {
+            throw PRSubscriptionError.unavailable
+        }
+        try prManager.activityMonitor.subscribe(subscription.pr, viewer: subscription.viewer, row: subscription.row)
+    }
+
+    func loadFollowedPullRequest(_ followed: MonitoredPR) async {
+        let monitor = prManager.activityMonitor
+        guard let account = monitor.snapshot.account,
+              let current = monitor.snapshot.pr(followed.prNodeID),
+              current.isExplicitlyTracked, current.followedRow == nil else { return }
+        let token = oauthManager.authState.accessToken
+        let endpoint = configuration.graphQLEndpoint
+        guard account.endpoint == MonitorAccountKey.normalize(endpoint) else { return }
+
+        do {
+            let subscription = try await prManager.apiClient.fetchSubscription(current.reference)
+            guard !Task.isCancelled, oauthManager.authState.accessToken == token,
+                  configuration.graphQLEndpoint == endpoint,
+                  subscription.viewer.nodeID == account.viewerNodeID,
+                  subscription.pr.prNodeID == current.prNodeID else { return }
+            monitor.updateFollowedRow(subscription.row, nodeID: current.prNodeID, account: account)
+        } catch {
+            if !Task.isCancelled {
+                logger.debug("Failed to load followed PR row: \(error.localizedDescription)")
+            }
+        }
+    }
+
     func refreshActivity() {
         prManager.activityMonitor.refreshNow()
     }
 
     /// Items grouped per monitored PR, newest activity first.
     var activityItemsByPR: [(pr: MonitoredPR, items: [PRActionItem])] {
-        let items = activity.actionItems.filter { $0.isActionable(now: Date()) }
+        Self.activityItemGroups(in: activity, configuration: configuration, now: Date())
+    }
+
+    static func activityItemGroups(
+        in snapshot: PRActivitySnapshot,
+        configuration: Configuration,
+        now: Date
+    ) -> [(pr: MonitoredPR, items: [PRActionItem])] {
+        let items = snapshot.actionItems.filter { $0.isActionable(now: now) }
         let grouped = Dictionary(grouping: items, by: \.prNodeID)
-        return grouped
-            .compactMap { nodeID, items -> (MonitoredPR, [PRActionItem])? in
-                guard let pr = activity.pr(nodeID) else { return nil }
-                guard configuration.collectsActivity(
+        return snapshot.monitoredPRs
+            .filter { pr in
+                pr.isExplicitlyTracked || configuration.collectsActivity(
                     for: pr.reference.repoFullName,
                     explicitlyTracked: pr.isExplicitlyTracked
-                ) else { return nil }
-                return (pr, items.sorted { $0.stateUpdatedAt > $1.stateUpdatedAt })
+                )
+            }
+            .compactMap { pr -> (MonitoredPR, [PRActionItem])? in
+                let prItems = grouped[pr.prNodeID] ?? []
+                guard pr.isExplicitlyTracked || !prItems.isEmpty else { return nil }
+                return (pr, prItems.sorted { $0.stateUpdatedAt > $1.stateUpdatedAt })
             }
             .sorted { lhs, rhs in
                 PullRequestReference.ordered(lhs.0.reference, rhs.0.reference, newestFirst: true)
