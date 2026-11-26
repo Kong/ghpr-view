@@ -947,6 +947,55 @@ final class PanelInteractionCoordinatorTests: XCTestCase {
         }
     }
 
+    func testRefreshResetsPartiallyClippedAnchorToListTop() {
+        let coordinator = PanelInteractionCoordinator()
+        let scroll = restorationScrollView()
+        coordinator.bind(scrollView: scroll)
+        scroll.contentView.scroll(to: CGPoint(x: 0, y: 300))
+        let viewport = CGRect(x: 0, y: 40, width: 400, height: 300)
+        coordinator.receive(snapshot: snapshot([pr(1), pr(2, age: 10)]))
+        coordinator.recordGeometry([
+            .list: viewport,
+            .row(rowID(1)): CGRect(x: 8, y: 10, width: 384, height: 90)
+        ])
+        XCTAssertEqual(coordinator.scrollAnchorOffset, -30)
+
+        var refreshed = snapshot([pr(1), pr(2, age: 10)])
+        refreshed.prList.lastUpdated = now.addingTimeInterval(1)
+        coordinator.receive(snapshot: refreshed)
+        coordinator.recordGeometry([
+            .list: viewport,
+            .row(rowID(1)): CGRect(x: 8, y: 10, width: 384, height: 90)
+        ])
+
+        XCTAssertEqual(scroll.contentView.bounds.minY, 0, accuracy: 0.5)
+    }
+
+    func testRefreshPreservesPartiallyClippedAnchorBelowFirstRow() {
+        let coordinator = PanelInteractionCoordinator()
+        let scroll = restorationScrollView()
+        coordinator.bind(scrollView: scroll)
+        scroll.contentView.scroll(to: CGPoint(x: 0, y: 300))
+        let viewport = CGRect(x: 0, y: 40, width: 400, height: 300)
+        coordinator.receive(snapshot: snapshot([pr(1), pr(2, age: 10)]))
+        coordinator.recordGeometry([
+            .list: viewport,
+            .row(rowID(2)): CGRect(x: 8, y: 10, width: 384, height: 90)
+        ])
+        XCTAssertEqual(coordinator.scrollAnchor, .row(rowID(2)))
+        XCTAssertEqual(coordinator.scrollAnchorOffset, -30)
+
+        var refreshed = snapshot([pr(1), pr(2, age: 10)])
+        refreshed.prList.lastUpdated = now.addingTimeInterval(1)
+        coordinator.receive(snapshot: refreshed)
+        coordinator.recordGeometry([
+            .list: viewport,
+            .row(rowID(2)): CGRect(x: 8, y: 10, width: 384, height: 90)
+        ])
+
+        XCTAssertEqual(scroll.contentView.bounds.minY, 300, accuracy: 0.5)
+    }
+
     func testOpenPanelReturnsToTopWhenTheCategoryRefreshedWhileAway() {
         let coordinator = PanelInteractionCoordinator()
         coordinator.setPresented(true)

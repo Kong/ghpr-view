@@ -251,6 +251,16 @@ final class PanelInteractionCoordinator: ObservableObject {
             let advance = snapshot.presentationRevision &- latestSnapshot.presentationRevision
             // Revisions wrap, while equal revisions remain valid for fixed-value hosts.
             guard advance == 0 || advance <= UInt64.max / 2 else { return }
+            if latestSnapshot.prList.lastUpdated != snapshot.prList.lastUpdated,
+               case let .row(anchor)? = scrollAnchor,
+               anchor == visibleRows(in: displayedStructure).first,
+               scrollAnchorOffset < 0 {
+                // A partially clipped first visible row cannot be kept at a negative offset
+                // after a refresh. Restore the list top instead of preserving a stale anchor.
+                pendingScrollRestore = (selectedCategory, .zero, latestSnapshot.prList.lastUpdated)
+                scrollAnchor = nil
+                pendingAnchorRestoration = nil
+            }
         }
         latestSnapshot = snapshot
         pendingSnapshot = snapshot
